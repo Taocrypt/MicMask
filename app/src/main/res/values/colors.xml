@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 启动页背景，与界面浅色背景一致，避免冷启动白屏/色块跳变 -->
+    <color name="splash_bg">#FFF7F7F7</color>
+</resources>

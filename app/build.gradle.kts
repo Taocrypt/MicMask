@@ -14,8 +14,8 @@ android {
         applicationId = "com.taocrypt.micmask"
         minSdk = 26
         targetSdk = 34
-        versionCode = 51
-        versionName = "2.0-alpha24"
+        versionCode = 52
+        versionName = "2.0-alpha25"
         ndk {
             // 目前只做离线文件转换，纯 Kotlin + ONNX Runtime（自带 x86_64/arm64 原生库）
             abiFilters += listOf("arm64-v8a")
@@ -89,6 +89,7 @@ dependencies {
 
     implementation(platform("androidx.compose:compose-bom:2026.03.01"))
     implementation("androidx.core:core-ktx:1.16.0")
+    implementation("androidx.core:core-splashscreen:1.0.1")
     implementation("androidx.activity:activity-compose:1.12.4")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.4")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.4")

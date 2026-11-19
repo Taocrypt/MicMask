@@ -40,7 +40,7 @@
             android:exported="true"
             android:label="@string/app_name"
             android:configChanges="orientation|screenSize|keyboardHidden|uiMode"
-            android:theme="@style/Theme.MicMask">
+            android:theme="@style/Theme.MicMask.Starting">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
