@@ -324,6 +324,7 @@ object MicInjector {
                     call(InjectorService.TX_LIVE_START, {
                         it.writeInt(uids.size); uids.forEach { u -> it.writeInt(u) }
                         it.writeFloat(semis); it.writeInt(source); it.writeInt(if (external) 1 else 0); it.writeInt(primeMs); it.writeInt(if (rvcInShell) 1 else 0)
+                        writeTune(it)
                     }) { r -> r.readString() }
                 }.getOrElse { it.message ?: "调用失败" }
                 if (err != null) { main.post { status("启动失败：$err") }; setPhase(Phase.ERROR, "实时变声启动失败：$err"); return@Thread }
@@ -377,7 +378,7 @@ object MicInjector {
     /** 性能测试：把模型交给 shell 后重新测速定档，返回摘要；阻塞调用，别在主线程 */
     fun liveBench(ctx: Context, names: List<String>): String {
         sendLiveModels(ctx, names)?.let { return "失败：$it" }
-        return runCatching { call(InjectorService.TX_LIVE_BENCH, {}) { r -> r.readString() } ?: "" }.getOrElse { "失败：${it.message}" }
+        return runCatching { call(InjectorService.TX_LIVE_BENCH, { d -> writeTune(d) }) { r -> r.readString() } ?: "" }.getOrElse { "失败：${it.message}" }
     }
 
     /** 外部模式：拉取真麦 PCM（48k mono），没有则返回空数组 */
@@ -409,6 +410,17 @@ object MicInjector {
     fun sysStat(): SysStat? = runCatching {
         call(InjectorService.TX_SYS_STAT) { r -> SysStat(r.readFloat(), r.readFloat(), r.readInt(), r.readLong()) }
     }.getOrNull()
+
+    /** 实时 AI 高级参数（由 MainViewModel 从 prefs 设置） */
+    @Volatile var tuneTier = 0
+    @Volatile var tuneGate = -50f
+    @Volatile var tuneFeat = 3
+    @Volatile var tuneSyn = 4
+    private fun writeTune(d: android.os.Parcel) { d.writeInt(tuneTier); d.writeFloat(tuneGate); d.writeInt(tuneFeat); d.writeInt(tuneSyn) }
+    fun pushTune() {
+        if (!liveOn) return
+        runCatching { call(InjectorService.TX_LIVE_TUNE, { d -> writeTune(d) }) { } }
+    }
 
     fun setFx(a: FloatArray) {
         if (!liveOn) return

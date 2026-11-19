@@ -189,6 +189,11 @@ data class UiState(
     /** 输出音量增益 dB（实时变声），AI / 普通各一份 */
     val aiGain: Float = 0f,
     val pitchGain: Float = 0f,
+    /** AI 实时高级：档位 0 自动/1 标准/2 省电、静音门限 dB、特征/合成线程 */
+    val aiTier: Int = 0,
+    val aiGate: Float = -50f,
+    val aiFeatTh: Int = 3,
+    val aiSynTh: Int = 4,
     val liveFloat: Boolean = false,
     val fxCard: List<Float> = com.taocrypt.micmask.inject.FxChain.neutral().toList(),
     val fxCardPreset: String = "原声",
@@ -625,10 +630,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     val x = SoundBoard.decode(null, r.file.absolutePath)
                     val y: ShortArray = if (mode == 0) {
                         val voice = ModelStore.currentVoice(ctx) ?: throw IllegalStateException("还没有音色，先在变声页下载")
+                        val tu = _state.value
+                        // 档位/线程变了要换新引擎（release 后执行器不可复用）
+                        clipEngine?.let { if (clipEngineVoice == voice && it.tune(tu.aiTier, tu.aiGate, tu.aiFeatTh, tu.aiSynTh)) { it.release(); clipEngine = null } }
                         val e = clipEngine?.takeIf { clipEngineVoice == voice } ?: run {
                             clipEngine?.release()
                             LiveRvc { canon -> ModelStore.locate(ctx, if (canon.startsWith(ModelStore.DEFAULT_VOICE + "_stream")) ModelStore.voiceFile(voice, canon) else canon) }
-                                .also { it.pickCache = File(ctx.filesDir, "pick_clip_$voice.txt"); clipEngine = it; clipEngineVoice = voice }
+                                .also { it.pickCache = File(ctx.filesDir, "pick_clip_$voice.txt"); it.tune(tu.aiTier, tu.aiGate, tu.aiFeatTh, tu.aiSynTh); clipEngine = it; clipEngineVoice = voice }
                         }
                         e.semis = prefs.getFloat("ai_semis", 0f).toInt()
                         _state.value = _state.value.copy(clipStage = "加载模型")
@@ -809,8 +817,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             fxCard = loadFx("fx_card"), fxCardPreset = prefs.getString("fx_card_preset", "原声") ?: "原声",
             userPresets = mapOf(1 to loadUserPresets(1), 2 to loadUserPresets(2)),
             pitchSemis = prefs.getFloat("pitch_semis", 0f), aiSemis = prefs.getFloat("ai_semis", 0f),
-            aiGain = prefs.getFloat("ai_gain", 0f), pitchGain = prefs.getFloat("pitch_gain", 0f), liveMonitor = prefs.getBoolean("monitor", false), liveMode = prefs.getInt("live_mode", 0))
+            aiGain = prefs.getFloat("ai_gain", 0f), pitchGain = prefs.getFloat("pitch_gain", 0f), liveMonitor = prefs.getBoolean("monitor", false), liveMode = prefs.getInt("live_mode", 0),
+            aiTier = prefs.getInt("ai_tier", 0), aiGate = prefs.getFloat("ai_gate", -50f),
+            aiFeatTh = prefs.getInt("ai_feat_th", 3), aiSynTh = prefs.getInt("ai_syn_th", 4))
+        syncTune()
     }
+    private fun syncTune() {
+        val st = _state.value; val inj = com.taocrypt.micmask.inject.MicInjector
+        inj.tuneTier = st.aiTier; inj.tuneGate = st.aiGate; inj.tuneFeat = st.aiFeatTh; inj.tuneSyn = st.aiSynTh
+    }
+    /** AI 实时高级参数；运行中会推给注入进程（档位/线程变了会重载模型，约停顿 1~3 秒） */
+    fun setAiTune(tier: Int = _state.value.aiTier, gate: Float = _state.value.aiGate, feat: Int = _state.value.aiFeatTh, syn: Int = _state.value.aiSynTh) {
+        val st = _state.value
+        if (tier == st.aiTier && gate == st.aiGate && feat == st.aiFeatTh && syn == st.aiSynTh) return
+        _state.value = st.copy(aiTier = tier, aiGate = gate, aiFeatTh = feat, aiSynTh = syn)
+        prefs.edit().putInt("ai_tier", tier).putFloat("ai_gate", gate).putInt("ai_feat_th", feat).putInt("ai_syn_th", syn).apply()
+        syncTune()
+        L.i("AI 高级参数：档位=$tier 门限=${gate}dB 线程=$feat/$syn")
+    }
+    /** 滑杆松手 / 选项点下后推给运行中的引擎 */
+    fun commitAiTune() {
+        if (_state.value.liveOn && _state.value.liveMode == 0) Thread { com.taocrypt.micmask.inject.MicInjector.pushTune() }.start()
+    }
+    fun resetAiTune() { setAiTune(0, -50f, 3, 4); commitAiTune() }
     /** 按模式开始/停止；运行中切到别的模式会先停再按新模式重启 */
     fun startMode(mode: Int) {
         if (mode == 2 && !com.taocrypt.micmask.inject.MicInjector.liveOn && speakerMode()) { _state.value = _state.value.copy(toast = "外放模式下声卡不可用（需要 Shizuku）"); return }

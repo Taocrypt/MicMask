@@ -605,7 +605,12 @@ private fun ModeSwitch(vm: MainViewModel, st: UiState) {
 @Composable
 private fun GainCard(vm: MainViewModel, mode: Int, db: Float) {
     Card(Modifier.fillMaxWidth().padding(PagePad)) {
-        Column(Modifier.padding(16.dp)) {
+        Column(Modifier.padding(16.dp)) { GainBody(vm, mode, db) }
+    }
+}
+
+@Composable
+private fun GainBody(vm: MainViewModel, mode: Int, db: Float) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("音量增益", Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
                 Text("${if (db > 0) "+" else ""}${db.roundToInt()} dB", color = Summary)
@@ -615,8 +620,51 @@ private fun GainCard(vm: MainViewModel, mode: Int, db: Float) {
             Slider(value = db, onValueChange = { vm.setGain(mode, it.roundToInt().toFloat()) },
                 valueRange = com.taocrypt.micmask.GAIN_MIN..com.taocrypt.micmask.GAIN_MAX, steps = 29)
             Text("对方听着太小声就调高；声音发炸、破音就调低。开着变声也能实时调。", fontSize = 12.sp, color = Summary)
+}
+
+/** AI 实时变声「高级」：默认折叠 */
+@Composable
+private fun AiAdvanced(vm: MainViewModel, st: UiState) {
+    var open by rememberSaveable { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().padding(top = 14.dp).clip(RoundedCornerShape(8.dp)).clickable { open = !open }.padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Text("高级", Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+        val custom = st.aiTier != 0 || st.aiGate != -50f || st.aiFeatTh != 3 || st.aiSynTh != 4
+        if (!open && custom) Text("已自定义  ", fontSize = 13.sp, color = MiuixTheme.colorScheme.primary)
+        Text(if (open) "收起 ▴" else "展开 ▾", fontSize = 13.sp, color = Summary)
+    }
+    if (!open) return
+    Text("档位", Modifier.padding(top = 8.dp), fontSize = 14.sp)
+    Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf("自动", "标准 0.3s", "省电 0.5s").forEachIndexed { i, t ->
+            val on = st.aiTier == i
+            Box(Modifier.weight(1f).height(34.dp).clip(RoundedCornerShape(10.dp))
+                .background(if (on) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.secondaryContainer)
+                .clickable { vm.setAiTune(tier = i); vm.commitAiTune() }, contentAlignment = Alignment.Center) {
+                Text(t, fontSize = 13.sp, maxLines = 1,
+                    color = if (on) MiuixTheme.colorScheme.onPrimary else MiuixTheme.colorScheme.onSecondaryContainer)
+            }
         }
     }
+    Text(when (st.aiTier) { 1 -> "延迟最低；手机跟不上会断音，且不会自动降档"; 2 -> "延迟多约 0.2 秒，算力省约 40%，发热少"; else -> "按测速选能跑稳的最低延迟档，频繁断音时自动降到省电" },
+        fontSize = 12.sp, color = Summary, modifier = Modifier.padding(top = 6.dp))
+
+    Row(Modifier.padding(top = 14.dp)) { Text("静音门限", Modifier.weight(1f), fontSize = 14.sp); Text("${st.aiGate.roundToInt()} dB", color = Summary) }
+    Slider(value = st.aiGate, onValueChange = { vm.setAiTune(gate = it.roundToInt().toFloat()) }, valueRange = -70f..-30f, steps = 39,
+        onValueChangeFinished = { vm.commitAiTune() })
+    Text("低于它的声音不送进模型（省电、去底噪）。开头字被吞就调低，环境吵、有杂音就调高。默认 -50", fontSize = 12.sp, color = Summary)
+
+    val cores = Runtime.getRuntime().availableProcessors()
+    Row(Modifier.padding(top = 14.dp)) { Text("特征线程", Modifier.weight(1f), fontSize = 14.sp); Text("${st.aiFeatTh}", color = Summary) }
+    Slider(value = st.aiFeatTh.toFloat(), onValueChange = { vm.setAiTune(feat = it.roundToInt()) }, valueRange = 1f..8f, steps = 6,
+        onValueChangeFinished = { vm.commitAiTune() })
+    Row(Modifier.padding(top = 8.dp)) { Text("合成线程", Modifier.weight(1f), fontSize = 14.sp); Text("${st.aiSynTh}", color = Summary) }
+    Slider(value = st.aiSynTh.toFloat(), onValueChange = { vm.setAiTune(syn = it.roundToInt()) }, valueRange = 1f..8f, steps = 6,
+        onValueChangeFinished = { vm.commitAiTune() })
+    Text("本机 $cores 核。两者同时在跑，加起来别超过大核数；默认 3 / 4。改档位或线程会重新测速加载，变声中会停顿几秒",
+        fontSize = 12.sp, color = Summary)
+    Text("恢复默认", Modifier.padding(top = 12.dp).clip(RoundedCornerShape(8.dp)).clickable { vm.resetAiTune() }.padding(vertical = 4.dp),
+        fontSize = 14.sp, color = MiuixTheme.colorScheme.primary)
 }
 
 // ------------------------------------------------------------------ AI 变声
@@ -649,10 +697,12 @@ private fun LazyListScope.aiPage(vm: MainViewModel, st: UiState, open: (String) 
                     n > -10 -> "略降调，适合偏高的男声或想要低沉一些的效果"
                     else -> "适合女声用男声音色"
                 }, fontSize = 12.sp, color = Summary, modifier = Modifier.padding(top = 8.dp))
+                Spacer(Modifier.height(18.dp))
+                GainBody(vm, 0, st.aiGain)
+                AiAdvanced(vm, st)
             }
         }
     }
-    item { GainCard(vm, 0, st.aiGain) }
     item { SmallTitle("本地音色") }
     if (st.liveVoices.isEmpty()) item {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {

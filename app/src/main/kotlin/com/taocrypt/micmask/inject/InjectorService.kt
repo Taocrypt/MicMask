@@ -90,6 +90,8 @@ class InjectorService : Binder {
         const val TX_SFX_STOP = 22
         /** 输出状态：距上次有人声输出的毫秒（-1=从未），输出缓冲毫秒 */
         const val TX_OUT_STATE = 23
+        /** 实时 AI 高级参数：tier(int) gateDb(float) featThreads(int) synThreads(int) */
+        const val TX_LIVE_TUNE = 24
         const val TX_DESTROY = 16777115
 
         const val SR = 48000
@@ -186,6 +188,7 @@ class InjectorService : Binder {
                     liveExternal = data.dataAvail() >= 4 && data.readInt() == 1
                     livePrimeMs = maxOf(if (data.dataAvail() >= 4) data.readInt().coerceIn(20, 1500) else 100, tierPrimeMs)
                     val rvcHere = data.dataAvail() >= 4 && data.readInt() == 1
+                    if (data.dataAvail() >= 16) readTune(data)
                     micRing.clear(); outRing.clear()
                     val err = arm(uids, auto = false, tmo = 0L, live = true)
                     if (err == null && liveExternal && rvcHere) startEngine()
@@ -244,6 +247,7 @@ class InjectorService : Binder {
                     return true
                 }
                 TX_LIVE_BENCH -> {
+                    if (data.dataAvail() >= 16) readTune(data)
                     val r = runCatching {
                         val e = ensureEngine()
                         e.load({ msg -> engineState = msg }, force = true)
@@ -287,6 +291,22 @@ class InjectorService : Binder {
                     val n = data.readInt().coerceIn(0, 64)
                     val a = FloatArray(n) { data.readFloat() }
                     fx.set(a); fxLast = a
+                    reply?.writeNoException()
+                    return true
+                }
+                TX_LIVE_TUNE -> {
+                    val reload = readTune(data)
+                    if (reload && engine != null) {
+                        slog('I', "高级参数变了，重新加载模型")
+                        val wasRunning = running && liveExternal
+                        val old = engine; engine = null
+                        Thread({
+                            runCatching { old?.stop() }
+                            runCatching { Thread.sleep(600) }   // 等在途推理结束再关会话
+                            runCatching { old?.release() }
+                            if (wasRunning) startEngine()
+                        }, "engine-retune").start()
+                    }
                     reply?.writeNoException()
                     return true
                 }
@@ -544,10 +564,22 @@ class InjectorService : Binder {
     @Volatile private var engine: com.taocrypt.micmask.LiveRvc? = null
     @Volatile private var engineState = ""
 
+    @Volatile private var tuneTier = 0
+    @Volatile private var tuneGate = com.taocrypt.micmask.LiveRvc.GATE_DB
+    @Volatile private var tuneFeat = com.taocrypt.micmask.LiveRvc.FEAT_THREADS
+    @Volatile private var tuneSyn = com.taocrypt.micmask.LiveRvc.SYN_THREADS
+    /** 读高级参数并套到现有引擎；返回是否需要重载 */
+    private fun readTune(d: android.os.Parcel): Boolean {
+        tuneTier = d.readInt(); tuneGate = d.readFloat(); tuneFeat = d.readInt(); tuneSyn = d.readInt()
+        slog('I', "高级参数：档位=${listOf("自动", "标准", "省电").getOrElse(tuneTier) { "?" }} 静音门限=${tuneGate}dB 线程=$tuneFeat/$tuneSyn")
+        return engine?.tune(tuneTier, tuneGate, tuneFeat, tuneSyn) ?: false
+    }
+
     @Synchronized private fun ensureEngine(): com.taocrypt.micmask.LiveRvc {
         com.taocrypt.micmask.L.sink = { lv, m -> slog(lv, m) }
         return engine ?: com.taocrypt.micmask.LiveRvc { n -> models[n]?.takeIf { it.exists() }?.also { synchronized(loadedNames) { loadedNames += n } } }.also {
             it.pickCache = java.io.File(MODEL_DIR, "pick.txt")
+            it.tune(tuneTier, tuneGate, tuneFeat, tuneSyn)
             it.onConfig = { blockMs -> tierPrimeMs = blockMs + 80; livePrimeMs = tierPrimeMs; slog('I', "预缓冲跟随档位 → ${livePrimeMs}ms") }
             engine = it
         }

@@ -71,6 +71,22 @@ class LiveRvc(private val open: (String) -> Any?) {
     private var netG: OrtSession? = null
 
     @Volatile var semis: Int = 0
+
+    // ---- 高级（实时变声页「高级」可调）
+    /** 0=自动（测速选）1=标准 2=省电 */
+    @Volatile var tier = 0
+    /** 静音门限 dBFS：块响度低于它跳过推理 */
+    @Volatile var gateDb = GATE_DB
+    @Volatile var featThreads = FEAT_THREADS
+    @Volatile var synThreads = SYN_THREADS
+    /** 应用调参；返回 true 表示要重新加载模型才生效（档位/线程变了） */
+    fun tune(t: Int, gate: Float, fth: Int, sth: Int): Boolean {
+        gateDb = gate.coerceIn(-80f, -20f)
+        val nt = t.coerceIn(0, 2); val nf = fth.coerceIn(1, 8); val ns = sth.coerceIn(1, 8)
+        val changed = nt != tier || nf != featThreads || ns != synThreads
+        tier = nt; featThreads = nf; synThreads = ns
+        return changed
+    }
     @Volatile private var running = false
     private var pump: Thread? = null
     private val featExec = Executors.newSingleThreadExecutor { r -> Thread({ boost(); r.run() }, "live-feat") }
@@ -133,7 +149,7 @@ class LiveRvc(private val open: (String) -> Any?) {
             setIntraOpNumThreads(th)
             setInterOpNumThreads(1)
         }
-        var o = opts(FEAT_THREADS)
+        var o = opts(featThreads)
         fun load(label: String, n: String): OrtSession {
             onLog("加载 $label …")
             val f = need(n); val t = System.nanoTime()
@@ -145,7 +161,7 @@ class LiveRvc(private val open: (String) -> Any?) {
             L.i("live 加载 $n ${mb}MB 用时 ${(System.nanoTime() - t) / 1_000_000}ms 输入=${sess.inputInfo.map { (k, v) -> k + (v.info as? TensorInfo)?.shape?.contentToString() }}")
             return sess
         }
-        L.i("live 配置：T=$T LEN=$LEN BLOCK=${BLOCK * 10}ms XF=${XF * 1000 / SR}ms WIN=${WIN48 * 1000 / SR}ms featThreads=$FEAT_THREADS synThreads=$SYN_THREADS gate=${GATE_DB}dB")
+        L.i("live 配置：T=$T LEN=$LEN BLOCK=${BLOCK * 10}ms XF=${XF * 1000 / SR}ms WIN=${WIN48 * 1000 / SR}ms featThreads=$featThreads synThreads=$synThreads gate=${gateDb}dB tier=$tier")
         if (hubert == null) hubert = load("HuBERT", ModelStore.HUBERT)
         if (rmvpe == null) rmvpe = load("RMVPE", ModelStore.RMVPE)
         var featMs = 0L
@@ -163,7 +179,7 @@ class LiveRvc(private val open: (String) -> Any?) {
             L.i("live 测速 hubert=${th / 3_000_000}ms rmvpe=${tr / 3_000_000}ms 抽取=${td / 1_000_000}ms 特征合计≈${featMs}ms")
         }.onFailure { L.e("live 特征预热失败", it) }
         // 流式合成器：有几个版本就都测一遍，用最快的
-        o = opts(SYN_THREADS)
+        o = opts(synThreads)
         val ph = FloatArray(T * 768) { (Math.random().toFloat() - 0.5f) }
         val pi = LongArray(T) { 120 }; val pf = FloatArray(T) { 300f }
         // 每个候选：测合成耗时 + 读出它的块长；选「特征和合成都在块长 80% 以内」里延迟最低的，都不行就选最从容的
@@ -171,7 +187,7 @@ class LiveRvc(private val open: (String) -> Any?) {
             val blockMs get() = (len - XF_FR) * 10
         }
         fun ratio(c: Cand) = maxOf(c.ms, featMs).toDouble() / c.blockMs
-        val key = NETG_FILES.joinToString(",") { n -> "$n:" + ((open(n) as? File)?.length() ?: -1) }
+        val key = NETG_FILES.joinToString(",") { n -> "$n:" + ((open(n) as? File)?.length() ?: -1) } + "|t$tier f$featThreads s$synThreads"
         var chosen: Cand? = null
         runCatching {
             val c = pickCache?.takeIf { it.exists() }?.readText()?.split("\n")
@@ -195,8 +211,14 @@ class LiveRvc(private val open: (String) -> Any?) {
                 }.onFailure { L.e("live 测速 $n 失败", it) }
                 s.close(); netG = null
             }
-            val ok = cands.filter { ratio(it) <= 0.8 }
-            chosen = (if (ok.isNotEmpty()) ok.minWith(compareBy<Cand> { it.blockMs }.thenBy { it.ms }) else cands.minByOrNull { ratio(it) })
+            // 手动档位：只在对应块长里选，没有就退回全部
+            val pool = when (tier) {
+                1 -> cands.filter { it.blockMs <= 30 }
+                2 -> cands.filter { it.blockMs > 30 }
+                else -> cands
+            }.ifEmpty { if (tier != 0) L.w("live 本音色没有${if (tier == 1) "标准" else "省电"}档模型，改为自动"); cands }
+            val ok = pool.filter { ratio(it) <= 0.8 }
+            chosen = (if (tier != 0) pool.minByOrNull { ratio(it) } else if (ok.isNotEmpty()) ok.minWith(compareBy<Cand> { it.blockMs }.thenBy { it.ms }) else pool.minByOrNull { ratio(it) })
                 ?: throw IllegalStateException("缺流式合成器模型，请导入实时变声模型包")
         }
         val pick = chosen!!
@@ -219,7 +241,7 @@ class LiveRvc(private val open: (String) -> Any?) {
 
     /** 丢块或 shell 输出断流时调用 */
     fun noteTrouble(src: String) {
-        if (!running || shifting || BLOCK > 30) return
+        if (!running || shifting || BLOCK > 30 || tier == 1) return  // 手动选了标准档就不自动降
         val now = System.nanoTime()
         if (now - startT < 5_000_000_000L) return           // 刚开始的预缓冲抖动不算
         val n = synchronized(trouble) {
@@ -240,7 +262,7 @@ class LiveRvc(private val open: (String) -> Any?) {
             try {
                 val o = OrtSession.SessionOptions().apply {
                     setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
-                    setIntraOpNumThreads(SYN_THREADS); setInterOpNumThreads(1)
+                    setIntraOpNumThreads(synThreads); setInterOpNumThreads(1)
                 }
                 val t = System.nanoTime()
                 val sess = when (f) { is File -> env.createSession(f.absolutePath, o); else -> env.createSession(f.toString(), o) }
@@ -367,9 +389,9 @@ class LiveRvc(private val open: (String) -> Any?) {
                 var e = 0.0
                 for (i in win48.size - BLOCK_S until win48.size) e += win48[i] * win48[i]
                 val db = (10 * log10(e / BLOCK_S + 1e-12)).toFloat()
-                if (db < GATE_DB) {
+                if (db < gateDb) {
                     gated++
-                    if (gated % 10 == 1L) L.m("live 块#$id 静音（${"%.0f".format(db)}dB < $GATE_DB）跳过推理")
+                    if (gated % 10 == 1L) L.m("live 块#$id 静音（${"%.0f".format(db)}dB < $gateDb）跳过推理")
                     synExec.execute { emit(FloatArray(LEN * UPP)); inflight.decrementAndGet() }
                     return@execute
                 }
