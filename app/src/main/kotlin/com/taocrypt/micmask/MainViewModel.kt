@@ -186,6 +186,9 @@ data class UiState(
     val liveMode: Int = 0,
     val pitchSemis: Float = 0f,
     val aiSemis: Float = 0f,
+    /** 输出音量增益 dB（实时变声），AI / 普通各一份 */
+    val aiGain: Float = 0f,
+    val pitchGain: Float = 0f,
     val liveFloat: Boolean = false,
     val fxCard: List<Float> = com.taocrypt.micmask.inject.FxChain.neutral().toList(),
     val fxCardPreset: String = "原声",
@@ -211,6 +214,10 @@ data class UiState(
     /** 预设/效果包 卡片网格（true）或列表 */
     val gridLayout: Boolean = true,
 )
+
+private typealias FxChain = com.taocrypt.micmask.inject.FxChain
+const val GAIN_MIN = -12f
+const val GAIN_MAX = 18f
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -762,7 +769,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
     /** 当前模式该用的效果参数：AI 不加效果，音调用音色参数，声卡用机架参数 */
     fun activeFx(st: UiState = _state.value): FloatArray = when (st.liveMode) {
-        1 -> st.fx.toFloatArray(); 2 -> st.fxCard.toFloatArray(); else -> com.taocrypt.micmask.inject.FxChain.neutral()
+        1 -> st.fx.toFloatArray().also { it[FxChain.P_OUT] += st.pitchGain }
+        2 -> st.fxCard.toFloatArray()
+        else -> FxChain.neutral().also { it[FxChain.P_OUT] = st.aiGain }
+    }
+    /** mode 0=AI 1=普通；dB */
+    fun setGain(mode: Int, db: Float) {
+        val v = db.coerceIn(GAIN_MIN, GAIN_MAX)
+        _state.value = if (mode == 0) _state.value.copy(aiGain = v) else _state.value.copy(pitchGain = v)
+        prefs.edit().putFloat(if (mode == 0) "ai_gain" else "pitch_gain", v).apply()
+        pushIfActive(mode)
     }
     private fun pushIfActive(mode: Int) {
         val st = _state.value
@@ -792,7 +808,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             sfxGain = prefs.getFloat("sfx_gain", 0.8f), sfxLoop = prefs.getBoolean("sfx_loop", false), fx = loadFx("fx"), fxPreset = prefs.getString("fx_preset", "原声") ?: "原声",
             fxCard = loadFx("fx_card"), fxCardPreset = prefs.getString("fx_card_preset", "原声") ?: "原声",
             userPresets = mapOf(1 to loadUserPresets(1), 2 to loadUserPresets(2)),
-            pitchSemis = prefs.getFloat("pitch_semis", 0f), aiSemis = prefs.getFloat("ai_semis", 0f), liveMonitor = prefs.getBoolean("monitor", false), liveMode = prefs.getInt("live_mode", 0))
+            pitchSemis = prefs.getFloat("pitch_semis", 0f), aiSemis = prefs.getFloat("ai_semis", 0f),
+            aiGain = prefs.getFloat("ai_gain", 0f), pitchGain = prefs.getFloat("pitch_gain", 0f), liveMonitor = prefs.getBoolean("monitor", false), liveMode = prefs.getInt("live_mode", 0))
     }
     /** 按模式开始/停止；运行中切到别的模式会先停再按新模式重启 */
     fun startMode(mode: Int) {

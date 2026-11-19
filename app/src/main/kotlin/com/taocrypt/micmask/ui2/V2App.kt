@@ -602,6 +602,23 @@ private fun ModeSwitch(vm: MainViewModel, st: UiState) {
     }
 }
 
+@Composable
+private fun GainCard(vm: MainViewModel, mode: Int, db: Float) {
+    Card(Modifier.fillMaxWidth().padding(PagePad)) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("音量增益", Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                Text("${if (db > 0) "+" else ""}${db.roundToInt()} dB", color = Summary)
+                if (db.roundToInt() != 0) Text("  重置", fontSize = 13.sp, color = MiuixTheme.colorScheme.primary,
+                    modifier = Modifier.clickable { vm.setGain(mode, 0f) })
+            }
+            Slider(value = db, onValueChange = { vm.setGain(mode, it.roundToInt().toFloat()) },
+                valueRange = com.taocrypt.micmask.GAIN_MIN..com.taocrypt.micmask.GAIN_MAX, steps = 29)
+            Text("对方听着太小声就调高；声音发炸、破音就调低。开着变声也能实时调。", fontSize = 12.sp, color = Summary)
+        }
+    }
+}
+
 // ------------------------------------------------------------------ AI 变声
 
 private fun LazyListScope.aiPage(vm: MainViewModel, st: UiState, open: (String) -> Unit) {
@@ -635,6 +652,7 @@ private fun LazyListScope.aiPage(vm: MainViewModel, st: UiState, open: (String) 
             }
         }
     }
+    item { GainCard(vm, 0, st.aiGain) }
     item { SmallTitle("本地音色") }
     if (st.liveVoices.isEmpty()) item {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
@@ -823,6 +841,7 @@ private fun LazyListScope.pitchPage(vm: MainViewModel, st: UiState) {
             }
         }
     }
+    item { GainCard(vm, 1, st.pitchGain) }
     item { SmallTitle("音色") }
     item {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {

@@ -22,7 +22,7 @@ class FxChain(private val sr: Int = 48000) {
         const val P_ECHO_FB = 10  // 回声反馈 0..0.85
         const val P_REVERB = 11   // 混响混合 0..1
         const val P_ROOM = 12     // 房间大小 0..1
-        const val P_OUT = 13      // 输出增益 dB -12..+12
+        const val P_OUT = 13      // 输出增益 dB -24..+24（预设 + 用户增益）
         const val P_DUCK = 14     // 低音炮/低频增强 0..1（club）
         const val P_CRUSH = 15    // 全损：降采样+降位深 0..1
         const val P_PREAMP = 16   // 爆音：前级增益 dB 0..36，之后硬削波
@@ -93,7 +93,7 @@ class FxChain(private val sr: Int = 48000) {
         drive = n[P_DRIVE].coerceIn(0f, 1f); comp = n[P_COMP].coerceIn(0f, 1f); chorus = n[P_CHORUS].coerceIn(0f, 1f)
         echo = n[P_ECHO].coerceIn(0f, 1f); ecLen = (n[P_ECHO_MS].coerceIn(60f, 600f) * sr / 1000).toInt().coerceAtMost(ecBuf.size - 1); ecFb = n[P_ECHO_FB].coerceIn(0f, 0.85f)
         rev = n[P_REVERB].coerceIn(0f, 1f); val room = n[P_ROOM].coerceIn(0f, 1f); fb = 0.70f + 0.28f * room; damp = 0.4f - 0.3f * room
-        outG = 10f.pow(n[P_OUT].coerceIn(-12f, 12f) / 20f); subAmt = n[P_DUCK].coerceIn(0f, 1f); setLp(sub, 110f)
+        outG = 10f.pow(n[P_OUT].coerceIn(-24f, 24f) / 20f); subAmt = n[P_DUCK].coerceIn(0f, 1f); setLp(sub, 110f)
         preG = 10f.pow(n[P_PREAMP].coerceIn(0f, 36f) / 20f)
         crush = n[P_CRUSH].coerceIn(0f, 1f)
         crStep = 1f + crush * 7f                       // 48k → 最低约 6k
