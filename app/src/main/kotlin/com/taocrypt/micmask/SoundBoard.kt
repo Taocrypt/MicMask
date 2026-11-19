@@ -23,7 +23,7 @@ object SoundBoard {
     const val PACK_LOCAL = "本地"
     /** 内置效果包版本：资源里 assets/sfx 里的 mp3 变了就加 1，会补装新增的 */
     private const val BUILTIN_VER = 2
-    private val ORDER = listOf("大笑", "鼓掌", "欢呼", "唏嘘", "哇哦", "叮", "失败", "冷笑话", "乌鸦", "答错", "胜利", "打鼓", "喇叭", "爆炸", "疑问", "惊讶", "叹气", "心跳", "巴掌", "吞口水", "口哨", "猫叫", "狗叫", "金币")
+    private val ORDER = listOf("大笑", "鼓掌", "欢呼", "唏嘘", "哇哦", "叮", "失败", "冷笑话", "乌鸦")
 
     fun isFx(s: Sound) = s.pack != PACK_LOCAL
 

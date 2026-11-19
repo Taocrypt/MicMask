@@ -936,9 +936,14 @@ private fun LazyListScope.soundBoardPage(vm: MainViewModel, st: UiState, open: (
         if (fx) item(key = "sfx_pack_$pack") {
             val info = remember(pack, list.size) { vm.packInfo(pack) }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                SmallTitle((if (pack == com.taocrypt.micmask.SoundBoard.PACK_FX) "常用音效" else pack) +
-                    (info?.author?.takeIf { it.isNotBlank() }?.let { " · by $it" } ?: ""), Modifier.weight(1f))
-                Text("导出 .mim3", Modifier.padding(end = 24.dp).clip(RoundedCornerShape(10.dp)).clickable(enabled = st.sfxBusy.isEmpty()) { vm.exportGroup(pack) }
+                // 二级标题：分组名用正文色加粗小字 + 左侧色条 + 数量，和上面的「音效包」大标题区分
+                Row(Modifier.weight(1f).padding(start = 28.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(width = 3.dp, height = 14.dp).clip(RoundedCornerShape(2.dp)).background(MiuixTheme.colorScheme.primary))
+                    Text((if (pack == com.taocrypt.micmask.SoundBoard.PACK_FX) "常用音效" else pack), Modifier.padding(start = 8.dp),
+                        fontSize = 14.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, color = MiuixTheme.colorScheme.onBackground)
+                    Text(" ${list.size} 个" + (info?.author?.takeIf { it.isNotBlank() }?.let { " · by $it" } ?: ""), fontSize = 12.sp, color = Summary, maxLines = 1)
+                }
+                Text("导出音效包", Modifier.padding(end = 24.dp).clip(RoundedCornerShape(10.dp)).clickable(enabled = st.sfxBusy.isEmpty()) { vm.exportGroup(pack) }
                     .padding(horizontal = 8.dp, vertical = 4.dp), fontSize = 13.sp, color = MiuixTheme.colorScheme.primary)
             }
             info?.description?.takeIf { it.isNotBlank() }?.let { Text(it, Modifier.padding(horizontal = 28.dp).padding(bottom = 4.dp), fontSize = 12.sp, color = Summary) }
@@ -1036,17 +1041,19 @@ private fun SfxHeader(vm: MainViewModel, st: UiState, open: (String) -> Unit) {
                 Text("送麦时循环", Modifier.weight(1f), fontSize = 14.sp)
                 top.yukonga.miuix.kmp.basic.Switch(checked = st.sfxLoop, onCheckedChange = { vm.setSfxLoop(it) })
             }
+            if (fx) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton("制作音效包", onClick = { open("mim3") }, enabled = st.sfxBusy.isEmpty(), modifier = Modifier.weight(1f))
+                TextButton(if (st.sfxBusy.isNotEmpty()) st.sfxBusy else "导入音效包", onClick = { fxPicker.launch(arrayOf("*/*")) },
+                    enabled = st.sfxBusy.isEmpty(), modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary())
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(if (st.sfxBusy.isNotEmpty()) st.sfxBusy else if (fx) "导入音效包 (.mim3)" else "导入本地音频",
-                    onClick = { if (fx) fxPicker.launch(arrayOf("*/*")) else localPicker.launch(arrayOf("audio/*")) },
+                if (fx) TextButton("添加音效", onClick = { addPicker.launch(arrayOf("audio/*")) }, enabled = st.sfxBusy.isEmpty(), modifier = Modifier.weight(1f))
+                else TextButton(if (st.sfxBusy.isNotEmpty()) st.sfxBusy else "导入本地音频", onClick = { localPicker.launch(arrayOf("audio/*")) },
                     enabled = st.sfxBusy.isEmpty(), modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary())
                 TextButton("全部停止", onClick = { vm.stopPreview(); vm.stopSound() }, enabled = st.sfxPlaying != null || st.sfxPreview != null, modifier = Modifier.weight(1f))
             }
-            if (fx) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton("添加音效 (mp3)", onClick = { addPicker.launch(arrayOf("audio/*")) }, enabled = st.sfxBusy.isEmpty(), modifier = Modifier.weight(1f))
-                TextButton("制作 .mim3", onClick = { open("mim3") }, enabled = st.sfxBusy.isEmpty(), modifier = Modifier.weight(1f))
-            }
-            if (fx) Text("添加的音效可自选分组；每个分组标题右侧「导出 .mim3」可打包分享。", fontSize = 12.sp, color = Summary)
+            Text(if (fx) "音效包为 .mim3 文件：「制作音效包」把手机里的音频打包成 .mim3，「导入音效包」导入别人分享的 .mim3；「添加音效」支持 mp3 等常见音频，可自选分组；每个分组标题右侧「导出音效包」可打包分享。"
+                else "支持 mp3、m4a、wav、ogg、flac 等常见音频。", fontSize = 12.sp, color = Summary)
         }
     }
 }
@@ -1093,9 +1100,9 @@ private fun SoundTiles(vm: MainViewModel, st: UiState, list: List<com.taocrypt.m
 private fun FloatLookSettings() {
     val ctx = LocalContext.current
     val sp = remember { com.taocrypt.micmask.Prefs.main(ctx) }
-    var ball by remember { mutableStateOf(sp.getInt("lf_ball_dp", 50).toFloat()) }
-    var ballA by remember { mutableStateOf(sp.getFloat("lf_ball_alpha", 1f)) }
-    var scale by remember { mutableStateOf(sp.getFloat("lf_panel_scale", 1f)) }
+    var ball by remember { mutableStateOf(sp.getInt("lf_ball_dp", 45).toFloat()) }
+    var ballA by remember { mutableStateOf(sp.getFloat("lf_ball_alpha", 0.9f)) }
+    var scale by remember { mutableStateOf(sp.getFloat("lf_panel_scale", 0.85f)) }
     var panelA by remember { mutableStateOf(sp.getFloat("lf_panel_alpha", 1f)) }
     Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
         @Composable fun row(t: String, v: String, value: Float, range: ClosedFloatingPointRange<Float>, on: (Float) -> Unit, done: () -> Unit) {
@@ -1416,7 +1423,7 @@ private fun Mim3Page(vm: MainViewModel, st: UiState) {
         }
         item {
             Column(Modifier.padding(PagePad).padding(vertical = 12.dp)) {
-                TextButton(if (st.sfxBusy.isNotEmpty()) st.sfxBusy else "打包为 .mim3",
+                TextButton(if (st.sfxBusy.isNotEmpty()) st.sfxBusy else "打包为音效包",
                     onClick = { vm.buildMim3(group, author, desc, items.toList(), alsoImport) },
                     enabled = st.sfxBusy.isEmpty() && items.isNotEmpty() && group.isNotBlank(), modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.textButtonColorsPrimary())
