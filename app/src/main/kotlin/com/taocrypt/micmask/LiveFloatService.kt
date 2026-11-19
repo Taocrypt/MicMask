@@ -133,7 +133,8 @@ class LiveFloatService : Service() {
         presetRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         sfxRow = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val bottom = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
+            // 不按文字基线对齐（否则右侧工具按钮会被基线拉低），整行垂直居中
+            orientation = LinearLayout.HORIZONTAL; isBaselineAligned = false; gravity = Gravity.CENTER_VERTICAL
             stopChip = chip("停止", 0xFFE5484D.toInt()) {
                 val v = vm(); val on = (v?.state?.value?.liveOn == true) || MicInjector.liveOn
                 if (on) v?.stopAll() ?: run { MicInjector.stopLive(); LiveService.stop(this@LiveFloatService) }
@@ -141,20 +142,24 @@ class LiveFloatService : Service() {
             }
             addView(stopChip)
             addView(chip("打开 App", 0x33FFFFFF) { openApp() })
-            addView(chip("收起", 0x33FFFFFF) { setExpanded(false) })
+            // 关闭：直接关掉悬浮窗（同设置里关开关；App 不在时直接停服务）
+            addView(chip("关闭", 0x33FFFFFF) { h.post { vm()?.setLiveFloat(false) ?: toggle(applicationContext, false) } })
         }
         // 右下角工具：内容缩放 A− / A+，窗口大小 ⤡（宽窗时与按钮同一行，窄窗自动换到下一行右对齐）
         val tools = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END or Gravity.CENTER_VERTICAL
+            orientation = LinearLayout.HORIZONTAL; isBaselineAligned = false; gravity = Gravity.END or Gravity.CENTER_VERTICAL
             addView(scaleBtn("A−", -0.1f)); addView(scaleBtn("A+", 0.1f)); addView(resizeHandle())
         }
         val bottomWrap = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(bottom) }
         fun layBottom(w: Int) {
+            // 拖动缩放中不挪工具条：移走正在接收触摸的「⤡」会打断手势（表现为一卡一卡）
+            if (resizing) return
             (tools.parent as? ViewGroup)?.removeView(tools)
             bottom.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED); tools.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED)
             if (bottom.measuredWidth + tools.measuredWidth <= w) bottom.addView(tools, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             else bottomWrap.addView(tools, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
         }
+        relayBottom = { bottomWrap.post { layBottom(bottomWrap.width.takeIf { it > 0 } ?: (panelW() - sdp(24))) } }
         bottomWrap.addOnLayoutChangeListener { _, l, _, r, _, ol, _, or_, _ -> if (r - l != or_ - ol && r > l) bottomWrap.post { layBottom(r - l) } }
         layBottom(panelW() - sdp(24))
         val pw = panelW(); val ph = panelH()
@@ -186,6 +191,9 @@ class LiveFloatService : Service() {
 
     private fun space(h: Int) = View(this).apply { layoutParams = LinearLayout.LayoutParams(1, sdp(h)) }
 
+    /** 正在拖「⤡」缩放：期间不重排底栏；松手后 relayBottom 重排一次 */
+    private var resizing = false
+    private var relayBottom: (() -> Unit)? = null
     /** 右下角缩放柄：长按后拖动缩放控制窗，松手保存 */
     private var bodyScroll: android.widget.ScrollView? = null
     /** 控制窗宽高（px）：宽默认 268dp，高 0 = 随内容 */
@@ -195,8 +203,9 @@ class LiveFloatService : Service() {
 
     /** 内容缩放：文字/按钮整体变大变小（0.7–1.5），写配置后自动重建并保持展开 */
     private fun scaleBtn(t: String, step: Float) = TextView(this).apply {
-        text = t; setTextColor(Color.WHITE); textSize = 14f; gravity = Gravity.CENTER
-        background = round(0x33FFFFFF, 10); minWidth = dp(36); minHeight = dp(36)
+        text = t; setTextColor(Color.WHITE); textSize = 13f * ps; gravity = Gravity.CENTER; includeFontPadding = false
+        background = round(0x33FFFFFF, 14); minWidth = sdp(34); minHeight = 0; minimumHeight = 0
+        setPadding(sdp(8), sdp(6), sdp(8), sdp(6))
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(4) }
         setOnClickListener {
             val n = (Math.round((ps + step) * 10) / 10f).coerceIn(0.7f, 1.5f)
@@ -206,8 +215,9 @@ class LiveFloatService : Service() {
 
     /** 「⤡」长按后拖动：横向改宽、纵向改高，宽高比例自由；双击恢复默认 */
     private fun resizeHandle() = TextView(this).apply {
-        text = "⤡"; setTextColor(0xDDFFFFFF.toInt()); textSize = 22f; gravity = Gravity.CENTER
-        background = round(0x33FFFFFF, 10); minWidth = dp(40); minHeight = dp(36)
+        text = "⤡"; setTextColor(0xDDFFFFFF.toInt()); textSize = 15f * ps; gravity = Gravity.CENTER; includeFontPadding = false
+        background = round(0x33FFFFFF, 14); minWidth = sdp(34); minHeight = 0; minimumHeight = 0
+        setPadding(sdp(8), sdp(5), sdp(8), sdp(5))
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(4) }
         var armed = false; var sx = 0f; var sy = 0f; var w0 = 0; var h0 = 0; var lastTap = 0L
         setOnClickListener {
@@ -215,7 +225,8 @@ class LiveFloatService : Service() {
             if (now - lastTap < 350) Prefs.main(applicationContext).edit().remove("lf_panel_w").remove("lf_panel_h").apply()
             lastTap = now
         }
-        setOnLongClickListener { armed = true; w0 = panel.width; h0 = panel.height
+        setOnLongClickListener { armed = true; resizing = true; w0 = panel.width; h0 = panel.height
+            parent?.requestDisallowInterceptTouchEvent(true)
             performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS); true }
         setOnTouchListener { _, e ->
             when (e.action) {
@@ -232,7 +243,7 @@ class LiveFloatService : Service() {
                     }
                     true } else false
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> if (armed) {
-                    armed = false
+                    armed = false; resizing = false; relayBottom?.invoke()
                     val d = resources.displayMetrics.density
                     Prefs.main(applicationContext).edit().putInt("lf_panel_w", (panel.layoutParams.width / d).toInt())
                         .putInt("lf_panel_h", (panel.layoutParams.height / d).toInt()).apply()
