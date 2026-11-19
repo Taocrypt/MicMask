@@ -1,4 +1,4 @@
-// Adapted from Miuzarte/ScrcpyForAndroid (Apache-2.0), which ports the miuix example and Kyant0/AndroidLiquidGlass.
+// Based on the compose-miuix-ui/miuix example (Apache-2.0), itself adapted from Kyant0/AndroidLiquidGlass (Apache-2.0); ported via Miuzarte/ScrcpyForAndroid (Apache-2.0).
 // Ported from miuix example: component/liquid/CombinedBackdrop.kt (Apache 2.0).
 package com.taocrypt.micmask.ui2.glass
 

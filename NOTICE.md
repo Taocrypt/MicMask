@@ -17,13 +17,15 @@ MicMask 由 atri-vc 改造而来，保留其版权与许可声明：
 
 ## 第三方组件
 
+Apache-2.0 全文见 notices/Apache-2.0.txt。ui2/glass 下的组件经 Miuzarte/ScrcpyForAndroid（Apache-2.0）移植而来，源文件头部保留了出处。
+
 | 组件 | 许可 |
 |---|---|
 | AndroidX / Jetpack Compose | Apache-2.0 |
-| Miuix (compose-miuix-ui) | Apache-2.0 |
+| Miuix (compose-miuix-ui)：界面组件库；ui2/glass 液态玻璃组件基于其示例工程 | Apache-2.0 |
+| Kyant0/AndroidLiquidGlass（miuix 示例中液态玻璃效果的来源） | Apache-2.0 |
 | Shizuku API / Provider | Apache-2.0 |
 | ONNX Runtime | MIT |
-| ScrcpyForAndroid 代码片段 | Apache-2.0（见 notices/ScrcpyForAndroid-LICENSE） |
 | TTS 前端数据表（GPT-SoVITS / pypinyin / g2pW / chinese-roberta 词表） | MIT / MIT / Apache-2.0 / Apache-2.0 |
 | 内置音效 app/src/main/assets/sfx | CC0 1.0 / 公有领域（见 sfx/LICENSES.md） |
 
