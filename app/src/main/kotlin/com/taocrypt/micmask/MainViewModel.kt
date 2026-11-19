@@ -938,6 +938,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun packInfo(group: String) = SoundBoard.packInfo(ctx, group)
     fun fxGroups() = SoundBoard.fxGroups(ctx)
+    /** 文件变声结果加进音效包分组 */
+    fun addFileToGroup(f: File, group: String, name: String) {
+        val g = SoundBoard.safe(group.ifBlank { "我的音效" })
+        if (g == SoundBoard.PACK_LOCAL) { _state.value = _state.value.copy(toast = "分组名不能叫「本地」"); return }
+        viewModelScope.launch {
+            val r = kotlinx.coroutines.withContext(Dispatchers.IO) { runCatching { SoundBoard.importFile(ctx, f, g, SoundBoard.safe(name.ifBlank { f.nameWithoutExtension }.take(40))) } }
+            _state.value = _state.value.copy(sounds = SoundBoard.list(ctx),
+                toast = r.fold({ "已加入「${if (g == SoundBoard.PACK_FX) "常用音效" else g}」" }, { L.e("加入音效包失败", it); "加入失败：${it.message}" }))
+        }
+    }
+    /** 文件变声结果：有 Shizuku 送麦，没有就设为待发送（交给变声页的悬浮球外放） */
+    fun sendOrArm(f: File) {
+        if (speakerMode()) { armQqPending(f); _state.value = _state.value.copy(toast = "已设为待发送，到 QQ 按住说话前点悬浮球") }
+        else sendFileToMic(f, f.nameWithoutExtension)
+    }
+
     /** 把单独的 mp3 等音频直接加进音效包的某个分组（新分组会自动创建） */
     fun importToGroup(uris: List<Uri>, group: String) {
         val g = SoundBoard.safe(group.ifBlank { "我的音效" })
@@ -1907,8 +1923,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val saved = AudioIo.saveWav(ctx, out, 40000, base)
                 val srcSec = audio.size / 16000f
                 L.i("完成：输出 ${out.size} 点 @40k，文件 ${saved.file.absolutePath}，耗时 ${ms}ms，RTF=${"%.3f".format(ms / 1000.0 / srcSec)}")
-                // 变声结果同样装载为「待发送」，这样「转换好的音频」也能直接代发给 QQ
-                armQqPending(saved.file)
                 _state.value = _state.value.copy(
                     busy = false, stage = "", progress = 1f,
                     resultFile = saved.file,

@@ -215,7 +215,7 @@ fun V2App(vm: MainViewModel) {
         ) { page ->
             Box(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)) {
                 when (page) {
-                    "tts" -> SubPage("文本转语音", { sub = null }) { TtsPage(vm, st) }
+                    "tts" -> SubPage("文字转语音", { sub = null }) { TtsPage(vm, st) }
                     "file" -> SubPage("文件变声", { sub = null }) { FilePage(vm, st) }
                     "whitelist" -> SubPage("目标应用白名单", { sub = null }) { WhitelistPage(vm) }
                     "theme" -> SubPage("外观", { sub = null }) { ThemePage(ui) }
@@ -726,7 +726,8 @@ private fun LazyListScope.aiPage(vm: MainViewModel, st: UiState, open: (String) 
     item { SmallTitle("更多") }
     item {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
-            ArrowPreference(title = "文本转语音（TTS）", summary = "输入文字合成语音，基于 GPT-SoVITS 合成", onClick = { open("tts") })
+            ArrowPreference(title = "文件变声", summary = "导入或录制音频整段转换，基于 RVC 合成", onClick = { open("file") })
+            ArrowPreference(title = "文字转语音", summary = "输入文字合成语音，基于 GPT-SoVITS 合成", onClick = { open("tts") })
         }
     }
 }
@@ -1201,7 +1202,6 @@ private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (St
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
             ArrowPreference(title = "日志", summary = "实时查看、筛选、复制，导出到 下载/MicMask", onClick = { open("logs") })
             ArrowPreference(title = "音频还原", summary = "某个应用突然没声音时点这里：停止变声、还原麦克风，并恢复被禁止播放声音的应用", onClick = { vm.repairAudio() })
-            ArrowPreference(title = "文件变声", summary = "整段转换、音色检索、无声段保护、悬浮球录播发送", onClick = { open("file") })
             ArrowPreference(title = "关于 MicMask", summary = "v${com.taocrypt.micmask.BuildConfig.VERSION_NAME} · 检查更新、交流群、致谢", onClick = { open("about") })
         }
     }

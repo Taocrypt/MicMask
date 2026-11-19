@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -157,6 +158,7 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
         }
 
         // ---- 结果 ----
+        var addOpen by remember { mutableStateOf(false) }
         st.resultFile?.let { rf ->
             SmallTitle("结果")
             Card(Modifier.fillMaxWidth().padding(Pad2)) {
@@ -166,25 +168,39 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
                     Spacer(Modifier.height(10.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton(if (clip.isPlaying("res")) "停止" else "试听", onClick = { clip.toggle(ctx, "res", rf) }, modifier = Modifier.weight(1f))
-                        TextButton("送麦", onClick = { clip.stop(); vm.sendFileToMic(rf, rf.nameWithoutExtension) }, modifier = Modifier.weight(1f),
+                        TextButton("加入音效包", onClick = { addOpen = true }, modifier = Modifier.weight(1f))
+                        TextButton(if (st.speakerMode) "设为待发送" else "送麦", onClick = { clip.stop(); vm.sendOrArm(rf) }, modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.textButtonColorsPrimary())
+                    }
+                    if (st.speakerMode) Text("未授权 Shizuku：设为待发送后，在变声页用悬浮球外放", fontSize = 11.sp, color = Dim, modifier = Modifier.padding(top = 6.dp))
+                    if (addOpen) {
+                        val groups = remember { vm.fxGroups() }
+                        var g by remember { mutableStateOf(groups.firstOrNull { it != com.taocrypt.micmask.SoundBoard.PACK_FX } ?: "我的音效") }
+                        var nm by remember(rf) { mutableStateOf(rf.nameWithoutExtension.substringBefore("_micmask_").take(40)) }
+                        WindowDialog(show = true, title = "加入音效包", onDismissRequest = { addOpen = false }) {
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                if (groups.isNotEmpty()) Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    groups.forEach { x ->
+                                        val label = if (x == com.taocrypt.micmask.SoundBoard.PACK_FX) "常用音效" else x
+                                        TextButton(label, onClick = { g = x }, colors = if (g == x) ButtonDefaults.textButtonColorsPrimary() else ButtonDefaults.textButtonColors())
+                                    }
+                                }
+                                top.yukonga.miuix.kmp.basic.TextField(value = if (g == com.taocrypt.micmask.SoundBoard.PACK_FX) "常用音效" else g,
+                                    onValueChange = { g = it.take(40) }, label = "分组名（填新名字即新建分组）", singleLine = true)
+                                top.yukonga.miuix.kmp.basic.TextField(value = nm, onValueChange = { nm = it.take(40) }, label = "音效名", singleLine = true)
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    TextButton("取消", onClick = { addOpen = false }, modifier = Modifier.weight(1f))
+                                    TextButton("加入", onClick = {
+                                        vm.addFileToGroup(rf, if (g == "常用音效") com.taocrypt.micmask.SoundBoard.PACK_FX else g, nm); addOpen = false
+                                    }, enabled = g.isNotBlank(), modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary())
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
 
-        // ---- 待发送 / 悬浮球（录播外放） ----
-        SmallTitle("录播发送")
-        Card(Modifier.fillMaxWidth().padding(Pad2)) {
-            ArrowPreference(title = "待发送", summary = st.qqPendingName ?: "还没有（转换或合成后自动设置）",
-                onClick = { if (st.qqPlaying) vm.stopQqLoop() else if (st.qqPendingName != null) vm.playPendingNow() })
-            SwitchPreference(checked = st.qqFloating, onCheckedChange = { vm.setFloating(it) }, title = "悬浮球",
-                summary = "到 QQ 按住说话前点一下，从扬声器外放待发送语音；建议小窗让 QQ 保持前台")
-            SwitchPreference(checked = st.qqAutoSend, onCheckedChange = { vm.setQqAutoSend(it) }, title = "检测到录音时自动播",
-                summary = if (st.qqWatchEnabled) "无障碍服务已开启" else "需在系统无障碍里开启，部分 QQ 版本检测不到")
-            if (st.qqBlockedByHeadset) Text("上次没能外放：耳机（${st.qqHeadsetName}）还连着，QQ 会录成静音。先断开耳机再试。",
-                Modifier.padding(16.dp), fontSize = 12.sp, color = Color(0xFFE5A100))
-        }
     }
 
     recList?.let { list ->
