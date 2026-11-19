@@ -996,14 +996,16 @@ private fun LazyListScope.soundBoardPage(vm: MainViewModel, st: UiState, open: (
                 // 二级标题：分组名用正文色加粗小字 + 左侧色条 + 数量，和上面的「音效包」大标题区分
                 Row(Modifier.weight(1f).padding(start = 28.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(width = 3.dp, height = 14.dp).clip(RoundedCornerShape(2.dp)).background(MiuixTheme.colorScheme.primary))
-                    Text((if (pack == com.taocrypt.micmask.SoundBoard.PACK_FX) "常用音效" else pack), Modifier.padding(start = 8.dp),
+                    Text((if (pack == com.taocrypt.micmask.SoundBoard.PACK_FX) "预设音效" else pack), Modifier.padding(start = 8.dp),
                         fontSize = 14.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, color = MiuixTheme.colorScheme.onBackground)
                     Text(" ${list.size} 个" + (info?.author?.takeIf { it.isNotBlank() }?.let { " · by $it" } ?: ""), fontSize = 12.sp, color = Summary, maxLines = 1)
                 }
                 var askDel by remember(pack) { mutableStateOf(false) }
-                Text("删除", Modifier.clip(RoundedCornerShape(10.dp)).clickable(enabled = st.sfxBusy.isEmpty()) { askDel = true }
+                // 预设音效分组：只有用户自己加进来的才可删，全是预设时不显示「删除」
+                val delCount = list.count { !com.taocrypt.micmask.SoundBoard.isPreset(it) }
+                if (delCount > 0) Text("删除", Modifier.clip(RoundedCornerShape(10.dp)).clickable(enabled = st.sfxBusy.isEmpty()) { askDel = true }
                     .padding(horizontal = 8.dp, vertical = 4.dp), fontSize = 13.sp, color = Color(0xFFE5484D))
-                if (askDel) WindowDialog(show = true, title = "删除分组", summary = "「${if (pack == com.taocrypt.micmask.SoundBoard.PACK_FX) "常用音效" else pack}」里的 ${list.size} 个音效会全部删除，不能恢复。",
+                if (askDel) WindowDialog(show = true, title = "删除分组", summary = "「${if (pack == com.taocrypt.micmask.SoundBoard.PACK_FX) "预设音效" else pack}」里的 ${delCount} 个音效会全部删除，不能恢复。" + if (delCount < list.size) "预设音效保留。" else "",
                     onDismissRequest = { askDel = false }) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton("取消", onClick = { askDel = false }, modifier = Modifier.weight(1f))
@@ -1076,16 +1078,16 @@ private fun SfxHeader(vm: MainViewModel, st: UiState, open: (String) -> Unit) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (groups.isNotEmpty()) Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     groups.forEach { x ->
-                        val label = if (x == com.taocrypt.micmask.SoundBoard.PACK_FX) "常用音效" else x
+                        val label = if (x == com.taocrypt.micmask.SoundBoard.PACK_FX) "预设音效" else x
                         TextButton(label, onClick = { g = x }, colors = if (g == x) ButtonDefaults.textButtonColorsPrimary() else ButtonDefaults.textButtonColors())
                     }
                 }
-                TextField(value = if (g == com.taocrypt.micmask.SoundBoard.PACK_FX) "常用音效" else g,
+                TextField(value = if (g == com.taocrypt.micmask.SoundBoard.PACK_FX) "预设音效" else g,
                     onValueChange = { g = it.take(40) }, label = "分组名（填新名字即新建分组）", singleLine = true)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton("取消", onClick = { pendingAdd = emptyList() }, modifier = Modifier.weight(1f))
                     TextButton("添加", onClick = {
-                        val target = if (g == "常用音效") com.taocrypt.micmask.SoundBoard.PACK_FX else g
+                        val target = if (g == "预设音效") com.taocrypt.micmask.SoundBoard.PACK_FX else g
                         vm.importToGroup(pendingAdd, target); pendingAdd = emptyList()
                     }, enabled = g.isNotBlank(), modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary())
                 }
@@ -1129,7 +1131,7 @@ private fun SfxHeader(vm: MainViewModel, st: UiState, open: (String) -> Unit) {
 @Composable
 private fun SfxSelBar(vm: MainViewModel, st: UiState, sel: Set<String>, all: List<com.taocrypt.micmask.SoundBoard.Sound>) {
     var ask by remember { mutableStateOf(false) }
-    val ids = all.map { it.id }.toSet()
+    val ids = all.filterNot { com.taocrypt.micmask.SoundBoard.isPreset(it) }.map { it.id }.toSet()
     Card(Modifier.fillMaxWidth().padding(PagePad).padding(bottom = 8.dp)) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("已选 ${sel.size} 个", fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 4.dp))
@@ -1219,6 +1221,12 @@ private fun FloatLookSettings() {
             Switch(checked = ah, onCheckedChange = { ah = it; sp.edit().putBoolean("lf_autohide", it).apply() })
         }
         Text("控制窗右下角「⤡」长按后拖动，可自由调宽和高；双击「⤡」恢复默认大小。", fontSize = 12.sp, color = Summary, modifier = Modifier.padding(vertical = 6.dp))
+        Text("恢复默认", Modifier.clip(RoundedCornerShape(8.dp)).clickable {
+            // 一次性写入，悬浮窗只重建一次；窗口宽高也一并恢复
+            sp.edit().remove("lf_ball_dp").remove("lf_ball_alpha").remove("lf_panel_scale").remove("lf_panel_alpha")
+                .remove("lf_autohide").remove("lf_panel_w").remove("lf_panel_h").apply()
+            ball = 45f; ballA = 0.9f; scale = 0.85f; panelA = 1f; ah = true
+        }.padding(vertical = 4.dp), fontSize = 14.sp, color = MiuixTheme.colorScheme.primary)
     }
 }
 

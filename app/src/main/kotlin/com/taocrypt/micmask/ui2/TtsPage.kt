@@ -203,6 +203,9 @@ internal fun TtsPage(vm: MainViewModel, st: UiState) {
                 LabeledSlider("重复惩罚", "%.2f".format(st.ttsRepetition), "越大越不容易拖音、重复吐字", st.ttsRepetition, 1f..2f, 19) { vm.setTtsRepetition(it) }
             }
         }
+        Text("恢复默认参数", Modifier.padding(horizontal = 16.dp).clip(RoundedCornerShape(10.dp))
+            .clickable { vm.resetTtsParams() }.padding(vertical = 6.dp, horizontal = 4.dp),
+            fontSize = 14.sp, color = MiuixTheme.colorScheme.primary)
 
         // ---- 合成 ----
         Spacer(Modifier.height(16.dp))

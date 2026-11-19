@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
@@ -92,6 +93,11 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
                     }
                 }
             }
+            ArrowPreference(title = when { st.loadingEngine -> "加载中…"; st.engineLoaded -> "重新加载模型"; else -> "加载模型" },
+                summary = if (st.engineLoaded) "已在内存里" else if (st.modelsReady) "加载一次会一直留在内存" else "缺模型，先导入",
+                onClick = { if (st.modelsReady && !st.loadingEngine) vm.loadEngine() })
+            ArrowPreference(title = if (st.importing) "导入中 ${st.importDone}/${st.importTotal}" else "从手机导入模型",
+                summary = "zip 或 .onnx / .bin", onClick = { if (!st.importing) modelPicker.launch(arrayOf("*/*")) })
             val idxMissing = st.modelItems.any { it.name == ModelStore.INDEX && !it.present }
             if (!st.modelsReady || idxMissing || st.dlId == "file") {
                 val dl = st.dlId == "file"
@@ -99,11 +105,6 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
                     summary = if (dl) st.dlName.ifBlank { "准备中…" } else "约 75 MB（合成器 + 检索索引），基础文件缺了一起下",
                     onClick = { if (st.dlId == null) vm.downloadFileModel() })
             }
-            ArrowPreference(title = when { st.loadingEngine -> "加载中…"; st.engineLoaded -> "重新加载模型"; else -> "加载模型" },
-                summary = if (st.engineLoaded) "已在内存里" else if (st.modelsReady) "加载一次会一直留在内存" else "缺模型，先导入",
-                onClick = { if (st.modelsReady && !st.loadingEngine) vm.loadEngine() })
-            ArrowPreference(title = if (st.importing) "导入中 ${st.importDone}/${st.importTotal}" else "从手机导入模型",
-                summary = "zip 或 .onnx / .bin", onClick = { if (!st.importing) modelPicker.launch(arrayOf("*/*")) })
             if (st.engineLog.isNotBlank()) Text(st.engineLog, Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontSize = 11.sp, color = Dim)
         }
 
@@ -155,6 +156,9 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
             LabeledSlider("推理线程", if (st.threads == 0) "自动" else "${st.threads}", "本机 ${Runtime.getRuntime().availableProcessors()} 核，0 = 自动；改后需重新加载",
                 st.threads.toFloat(), 0f..8f, 7) { vm.setThreads(it.roundToInt()) }
         }
+        Text("恢复默认参数", Modifier.padding(horizontal = 16.dp).clip(RoundedCornerShape(8.dp))
+            .clickable { vm.resetFileParams() }.padding(vertical = 6.dp, horizontal = 4.dp),
+            fontSize = 14.sp, color = MiuixTheme.colorScheme.primary)
 
         // ---- 转换 ----
         Spacer(Modifier.height(16.dp))
@@ -195,17 +199,17 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
                             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                 if (groups.isNotEmpty()) Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     groups.forEach { x ->
-                                        val label = if (x == com.taocrypt.micmask.SoundBoard.PACK_FX) "常用音效" else x
+                                        val label = if (x == com.taocrypt.micmask.SoundBoard.PACK_FX) "预设音效" else x
                                         TextButton(label, onClick = { g = x }, colors = if (g == x) ButtonDefaults.textButtonColorsPrimary() else ButtonDefaults.textButtonColors())
                                     }
                                 }
-                                top.yukonga.miuix.kmp.basic.TextField(value = if (g == com.taocrypt.micmask.SoundBoard.PACK_FX) "常用音效" else g,
+                                top.yukonga.miuix.kmp.basic.TextField(value = if (g == com.taocrypt.micmask.SoundBoard.PACK_FX) "预设音效" else g,
                                     onValueChange = { g = it.take(40) }, label = "分组名（填新名字即新建分组）", singleLine = true)
                                 top.yukonga.miuix.kmp.basic.TextField(value = nm, onValueChange = { nm = it.take(40) }, label = "音效名", singleLine = true)
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     TextButton("取消", onClick = { addOpen = false }, modifier = Modifier.weight(1f))
                                     TextButton("加入", onClick = {
-                                        vm.addFileToGroup(rf, if (g == "常用音效") com.taocrypt.micmask.SoundBoard.PACK_FX else g, nm); addOpen = false
+                                        vm.addFileToGroup(rf, if (g == "预设音效") com.taocrypt.micmask.SoundBoard.PACK_FX else g, nm); addOpen = false
                                     }, enabled = g.isNotBlank(), modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary())
                                 }
                             }

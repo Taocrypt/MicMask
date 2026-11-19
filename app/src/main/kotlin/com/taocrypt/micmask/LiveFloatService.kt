@@ -215,11 +215,29 @@ class LiveFloatService : Service() {
     }
 
     /** 「⤡」长按后拖动：横向改宽、纵向改高，宽高比例自由；双击恢复默认 */
-    private fun resizeHandle() = TextView(this).apply {
-        text = "⤡"; setTextColor(0xCCFFFFFF.toInt()); textSize = 15f * ps; gravity = Gravity.CENTER; includeFontPadding = false
-        minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0
-        setPadding(sdp(6), sdp(5), 0, sdp(5))
-        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+    private fun resizeHandle() = object : View(this) {
+        // 自绘双向斜箭头：字体里的「⤡」基线/大小和 A−/A+ 不一致，永远对不齐；这里按 A 的字高居中画
+        val tp = android.graphics.Paint().apply { textSize = android.util.TypedValue.applyDimension(android.util.TypedValue.COMPLEX_UNIT_SP, 13f * ps, resources.displayMetrics) }
+        val fm = tp.fontMetrics
+        val capH = android.graphics.Rect().also { tp.getTextBounds("A", 0, 1, it) }.height().toFloat()
+        val padV = sdp(6); val padH = sdp(5)
+        val pen = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xCCFFFFFF.toInt(); style = android.graphics.Paint.Style.STROKE
+            strokeWidth = capH * 0.13f; strokeCap = android.graphics.Paint.Cap.ROUND; strokeJoin = android.graphics.Paint.Join.ROUND
+        }
+        override fun onMeasure(wms: Int, hms: Int) {
+            setMeasuredDimension((capH + padH * 2).toInt(), (fm.descent - fm.ascent + padV * 2).toInt())
+        }
+        override fun onDraw(c: android.graphics.Canvas) {
+            val cy = padV - fm.ascent - capH / 2; val cx = width / 2f; val r = capH / 2
+            val a = r * 0.55f
+            c.drawLine(cx - r, cy - r, cx + r, cy + r, pen)
+            c.drawLine(cx - r, cy - r, cx - r + a, cy - r, pen); c.drawLine(cx - r, cy - r, cx - r, cy - r + a, pen)
+            c.drawLine(cx + r, cy + r, cx + r - a, cy + r, pen); c.drawLine(cx + r, cy + r, cx + r, cy + r - a, pen)
+        }
+    }.apply {
+        contentDescription = "调整窗口大小"
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = sdp(2) }
         var armed = false; var sx = 0f; var sy = 0f; var w0 = 0; var h0 = 0; var lastTap = 0L
         setOnClickListener {
             val now = SystemClock.uptimeMillis()
@@ -428,7 +446,7 @@ class LiveFloatService : Service() {
                 if (st.sfxPlaying != null) sfxRow.addView(LinearLayout(this).apply { setPadding(0, sdp(2), 0, sdp(2)); addView(chip("■ 停止音效", 0xFFE5484D.toInt()) { vm.stopSound() }) })
                 // 按分组展示：每组一个小标题 + 一行横向滚动
                 st.sounds.groupBy { it.pack }.forEach { (pack, list) ->
-                    val title = when (pack) { SoundBoard.PACK_FX -> "常用音效"; SoundBoard.PACK_LOCAL -> "本地音频"; else -> pack }
+                    val title = when (pack) { SoundBoard.PACK_FX -> "预设音效"; SoundBoard.PACK_LOCAL -> "本地音频"; else -> pack }
                     sfxRow.addView(TextView(this).apply { text = "▍$title"; setTextColor(0xFFBBBBBB.toInt()); textSize = 10.5f * ps; setPadding(0, sdp(4), 0, sdp(3)) })
                     val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
                     list.forEach { so -> row.addView(chip((if (so.id == st.sfxPlaying) "▶ " else "") + so.name,

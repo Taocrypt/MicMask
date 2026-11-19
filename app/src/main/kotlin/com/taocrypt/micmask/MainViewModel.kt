@@ -517,6 +517,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setSid(v: Int) { prefs.edit().putInt("sid", v).apply(); _state.value = _state.value.copy(sid = v) }
     fun setOverlap(v: Int) { prefs.edit().putInt("overlap", v).apply(); _state.value = _state.value.copy(overlap = v) }
     fun setUseIndex(v: Boolean) { prefs.edit().putBoolean("useIndex", v).apply(); _state.value = _state.value.copy(useIndex = v) }
+    /** 文件变声参数恢复默认（变调/检索/保护/说话人/重叠/线程） */
+    fun resetFileParams() {
+        prefs.edit().remove("pitch").remove("indexRate").remove("protect").remove("sid").remove("overlap").remove("useIndex").remove("threads").apply()
+        _state.value = _state.value.copy(pitchShift = 0, indexRate = 0.3f, protect = 0.33f, sid = 0, overlap = 64, useIndex = true, threads = 0)
+    }
     fun setThreads(v: Int) { prefs.edit().putInt("threads", v).apply(); _state.value = _state.value.copy(threads = v) }
 
     // ------------------------------------------------ QQ 语音代发
@@ -949,7 +954,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val r = kotlinx.coroutines.withContext(Dispatchers.IO) { runCatching { SoundBoard.importFile(ctx, f, g, SoundBoard.safe(name.ifBlank { f.nameWithoutExtension }.take(40))) } }
             _state.value = _state.value.copy(sounds = SoundBoard.list(ctx),
-                toast = r.fold({ "已加入「${if (g == SoundBoard.PACK_FX) "常用音效" else g}」" }, { L.e("加入音效包失败", it); "加入失败：${it.message}" }))
+                toast = r.fold({ "已加入「${if (g == SoundBoard.PACK_FX) "预设音效" else g}」" }, { L.e("加入音效包失败", it); "加入失败：${it.message}" }))
         }
     }
     /** 文件变声结果：有 Shizuku 送麦，没有就设为待发送（交给变声页的悬浮球外放） */
@@ -971,7 +976,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     .onSuccess { ok++ }.onFailure { fail = it.message ?: "解码失败"; L.e("添加音效失败", it) }
             }
             _state.value = _state.value.copy(sfxBusy = "", sounds = SoundBoard.list(ctx),
-                toast = "已添加 $ok 个到「${if (g == SoundBoard.PACK_FX) "常用音效" else g}」" + if (fail.isNotEmpty()) "，${uris.size - ok} 个失败：$fail" else "")
+                toast = "已添加 $ok 个到「${if (g == SoundBoard.PACK_FX) "预设音效" else g}」" + if (fail.isNotEmpty()) "，${uris.size - ok} 个失败：$fail" else "")
         }
     }
     /** 把音效包里一个分组导出成 .mim3 */
@@ -994,16 +999,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
     fun soundInstalled(r: com.taocrypt.micmask.repo.ModelRepo.RSound) = _state.value.sounds.any { it.id == r.id }
-    fun sfxSelStart(id: String) { _state.value = _state.value.copy(sfxSel = (_state.value.sfxSel ?: emptySet()) + id) }
-    fun sfxSelToggle(id: String) { val c = _state.value.sfxSel ?: emptySet(); _state.value = _state.value.copy(sfxSel = if (id in c) c - id else c + id) }
-    fun sfxSelSet(ids: Set<String>) { _state.value = _state.value.copy(sfxSel = ids) }
+    private fun presetId(id: String) = _state.value.sounds.firstOrNull { it.id == id }?.let { SoundBoard.isPreset(it) } == true
+    fun sfxSelStart(id: String) {
+        if (presetId(id)) { _state.value = _state.value.copy(toast = "预设音效不能删除或改名"); return }
+        _state.value = _state.value.copy(sfxSel = (_state.value.sfxSel ?: emptySet()) + id)
+    }
+    fun sfxSelToggle(id: String) {
+        if (presetId(id)) { _state.value = _state.value.copy(toast = "预设音效不能删除或改名"); return }
+        val c = _state.value.sfxSel ?: emptySet(); _state.value = _state.value.copy(sfxSel = if (id in c) c - id else c + id)
+    }
+    fun sfxSelSet(ids: Set<String>) { _state.value = _state.value.copy(sfxSel = ids.filterNot { presetId(it) }.toSet()) }
     fun sfxRename(id: String) { _state.value = _state.value.copy(sfxRename = id, sfxSel = null) }
     fun sfxRenameDone() { _state.value = _state.value.copy(sfxRename = null) }
     fun sfxSelEnd() { _state.value = _state.value.copy(sfxSel = null) }
     /** 删除多选的素材 */
     fun deleteSelectedSounds() {
         val ids = _state.value.sfxSel ?: return
-        val del = _state.value.sounds.filter { it.id in ids }
+        val del = _state.value.sounds.filter { it.id in ids && !SoundBoard.isPreset(it) }
         if (del.any { it.id == _state.value.sfxPlaying }) stopSound()
         if (del.any { it.id == _state.value.sfxPreview }) stopPreview()
         del.forEach { SoundBoard.delete(it) }
@@ -1013,11 +1025,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
     /** 整组删除 */
     fun deleteGroup(pack: String) {
-        val del = _state.value.sounds.filter { it.pack == pack }
+        val del = _state.value.sounds.filter { it.pack == pack && !SoundBoard.isPreset(it) }
         if (del.any { it.id == _state.value.sfxPlaying }) stopSound()
         if (del.any { it.id == _state.value.sfxPreview }) stopPreview()
         del.forEach { SoundBoard.delete(it) }
-        File(SoundBoard.dir(ctx), pack).takeIf { it.isDirectory }?.deleteRecursively()
+        if (pack != SoundBoard.PACK_FX) File(SoundBoard.dir(ctx), pack).takeIf { it.isDirectory }?.deleteRecursively()
         _state.value = _state.value.copy(sfxSel = null, toast = "已删除分组（${del.size} 个）")
         L.i("删除分组 $pack ${del.size} 个")
         refreshSounds()
@@ -1654,6 +1666,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setTtsRepetition(v: Float) {
         prefs.edit().putFloat("ttsRepetition", v).apply()
         _state.value = _state.value.copy(ttsRepetition = v)
+    }
+
+    /** 文字转语音：语速和高级采样参数恢复默认（语气不动） */
+    fun resetTtsParams() {
+        prefs.edit().remove("ttsSpeed").remove("ttsTemperature").remove("ttsTopK").remove("ttsTopP").remove("ttsRepetition").apply()
+        _state.value = _state.value.copy(ttsSpeed = 1.0f, ttsTemperature = 1.0f, ttsTopK = 15, ttsTopP = 1.0f, ttsRepetition = 1.35f)
     }
 
     /** 用录音目录里最新的一条当参考音频 */

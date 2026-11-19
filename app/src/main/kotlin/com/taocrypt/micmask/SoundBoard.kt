@@ -22,10 +22,12 @@ object SoundBoard {
     const val PACK_FX = "效果包"
     const val PACK_LOCAL = "本地"
     /** 内置效果包版本：资源里 assets/sfx 里的 mp3 变了就加 1，会补装新增的 */
-    private const val BUILTIN_VER = 2
+    private const val BUILTIN_VER = 3
     private val ORDER = listOf("大笑", "鼓掌", "欢呼", "唏嘘", "哇哦", "叮", "失败", "冷笑话", "乌鸦")
 
     fun isFx(s: Sound) = s.pack != PACK_LOCAL
+    /** 预设音效：App 自带的 9 个，不能删除/改名（用户加进「预设音效」分组的其它音效照常可删） */
+    fun isPreset(s: Sound) = s.pack == PACK_FX && s.name in ORDER
 
     /** 首次启动把 assets/sfx 里的主播常用音效解码进「效果包」；已删除的不再补回 */
     fun installBuiltins(ctx: Context) {
@@ -36,7 +38,8 @@ object SoundBoard {
         val done = sp.getStringSet("sfx_builtin_done", emptySet())!!.toMutableSet()
         for (a in names) {
             val n = a.substringBeforeLast('.')
-            if (n in done) continue
+            // 预设音效不可删：以前删掉的也补回来（文件已在就跳过）
+            if (File(File(dir(ctx), PACK_FX), "$n.pcm").exists()) { done += n; continue }
             runCatching {
                 val tmp = File(ctx.cacheDir, "sfx_tmp.mp3")
                 ctx.assets.open("sfx/$a").use { i -> tmp.outputStream().use { i.copyTo(it) } }
@@ -195,7 +198,7 @@ object SoundBoard {
                 z.write(hd.array()); so.file.inputStream().use { it.copyTo(z) }; Unit
             }
         }
-        val g = if (group == PACK_FX) "常用音效" else group
+        val g = if (group == PACK_FX) "预设音效" else group
         val m = org.json.JSONObject().put("format", "mim3").put("version", 1).put("group", g)
             .put("author", author.ifBlank { info?.author.orEmpty() }).put("description", desc.ifBlank { info?.description.orEmpty() })
             .put("created", java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date()))
@@ -260,9 +263,10 @@ object SoundBoard {
         return Sound(d.name, f.name.removeSuffix(".pcm"), f)
     }
 
-    fun delete(s: Sound) { s.file.delete(); s.file.parentFile?.let { d -> if (d.list()?.none { it.endsWith(".pcm") } == true) d.deleteRecursively() } }
+    fun delete(s: Sound) { if (isPreset(s)) return; s.file.delete(); s.file.parentFile?.let { d -> if (d.list()?.none { it.endsWith(".pcm") } == true) d.deleteRecursively() } }
 
     fun rename(s: Sound, newName: String): Boolean {
+        if (isPreset(s)) return false
         val dst = File(s.file.parentFile, safe(newName) + ".pcm")
         return !dst.exists() && s.file.renameTo(dst)
     }
