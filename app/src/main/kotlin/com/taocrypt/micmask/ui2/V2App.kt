@@ -60,6 +60,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -192,6 +193,8 @@ fun V2App(vm: MainViewModel) {
         LaunchedEffect(st.error) { st.error?.let { Toast.makeText(ctx, it, Toast.LENGTH_LONG).show(); vm.clearError() } }
 
         var sub by rememberSaveable { mutableStateOf<String?>(null) }
+        // 主页当前 tab 提到外层：进二级页再返回时 MainTabs 会重建，靠它回到原来的 tab
+        var mainPage by rememberSaveable { mutableStateOf(0) }
         LaunchedEffect(sub) { com.taocrypt.micmask.L.i("打开页面：${sub ?: "主页"}") }
         BackHandler(enabled = sub != null) { sub = null }
 
@@ -223,7 +226,7 @@ fun V2App(vm: MainViewModel) {
                     "mirrors" -> SubPage("下载镜像", { sub = "about" }) { com.taocrypt.micmask.update.MirrorPage() }
                     "logs" -> SubPage("日志", { sub = null }) { LogPage(vm) }
                     "mim3" -> SubPage("制作音效包", { sub = null }) { Mim3Page(vm, st) }
-                    else -> MainTabs(vm, st, ui) { sub = it }
+                    else -> MainTabs(vm, st, ui, mainPage, { mainPage = it }) { sub = it }
                 }
             }
         }
@@ -243,8 +246,9 @@ private val Tabs = listOf(Tab("变声", MiuixIcons.Mic), Tab("效果", MiuixIcon
 private val TabTitles = listOf("变声", "效果", "语音", "设置")
 
 @Composable
-private fun MainTabs(vm: MainViewModel, st: UiState, ui: UiPrefs, open: (String) -> Unit) {
-    val pager = rememberPagerState { Tabs.size }
+private fun MainTabs(vm: MainViewModel, st: UiState, ui: UiPrefs, page0: Int, onPage: (Int) -> Unit, open: (String) -> Unit) {
+    val pager = rememberPagerState(initialPage = page0.coerceIn(0, Tabs.size - 1)) { Tabs.size }
+    LaunchedEffect(pager) { snapshotFlow { pager.currentPage }.collect { onPage(it) } }
     val scope = rememberCoroutineScope()
     val floating = Build.VERSION.SDK_INT >= 33
     val surface = MiuixTheme.colorScheme.surface
@@ -288,8 +292,9 @@ private fun MainTabs(vm: MainViewModel, st: UiState, ui: UiPrefs, open: (String)
                 FloatingBottomBar(
                     modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 12.dp)
                         .clickable(remember { MutableInteractionSource() }, null) {},
-                    selectedIndex = { pager.currentPage },
-                    onSelected = { i -> scope.launch { pager.animateScrollToPage(i, animationSpec = tabSpring) } },
+                    // 用 targetPage：跨两页切换时 currentPage 会经过中间页，玻璃条拿到中间页会回调 onSelected 把翻页截停在中间
+                    selectedIndex = { pager.targetPage },
+                    onSelected = { i -> if (i != pager.targetPage) scope.launch { pager.animateScrollToPage(i, animationSpec = tabSpring) } },
                     backdrop = backdrop,
                     tabsCount = Tabs.size,
                     isBlurEnabled = ui.glass,
@@ -978,6 +983,7 @@ private fun LazyListScope.soundBoardPage(vm: MainViewModel, st: UiState, open: (
     val fx = st.sfxTab == 0
     val mine = st.sounds.filter { com.taocrypt.micmask.SoundBoard.isFx(it) == fx }
     item(key = "sfx_title_$fx") { SectionHead(if (fx) "音效包" else "本地音频", vm, st) }
+    st.sfxSel?.let { sel -> item(key = "sfx_selbar") { SfxSelBar(vm, st, sel, mine) } }
     if (mine.isEmpty()) item(key = "sfx_empty") {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
             Text(if (fx) "音效包是空的。添加 mp3 音效、导入 .mim3 音效包，或从下方仓库下载。" else "还没有本地音频。导入手机里的音乐或录音。", Modifier.padding(16.dp), color = Summary)
@@ -993,6 +999,16 @@ private fun LazyListScope.soundBoardPage(vm: MainViewModel, st: UiState, open: (
                     Text((if (pack == com.taocrypt.micmask.SoundBoard.PACK_FX) "常用音效" else pack), Modifier.padding(start = 8.dp),
                         fontSize = 14.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, color = MiuixTheme.colorScheme.onBackground)
                     Text(" ${list.size} 个" + (info?.author?.takeIf { it.isNotBlank() }?.let { " · by $it" } ?: ""), fontSize = 12.sp, color = Summary, maxLines = 1)
+                }
+                var askDel by remember(pack) { mutableStateOf(false) }
+                Text("删除", Modifier.clip(RoundedCornerShape(10.dp)).clickable(enabled = st.sfxBusy.isEmpty()) { askDel = true }
+                    .padding(horizontal = 8.dp, vertical = 4.dp), fontSize = 13.sp, color = Color(0xFFE5484D))
+                if (askDel) WindowDialog(show = true, title = "删除分组", summary = "「${if (pack == com.taocrypt.micmask.SoundBoard.PACK_FX) "常用音效" else pack}」里的 ${list.size} 个音效会全部删除，不能恢复。",
+                    onDismissRequest = { askDel = false }) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton("取消", onClick = { askDel = false }, modifier = Modifier.weight(1f))
+                        TextButton("删除", onClick = { vm.deleteGroup(pack); askDel = false }, modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary())
+                    }
                 }
                 Text("导出音效包", Modifier.padding(end = 24.dp).clip(RoundedCornerShape(10.dp)).clickable(enabled = st.sfxBusy.isEmpty()) { vm.exportGroup(pack) }
                     .padding(horizontal = 8.dp, vertical = 4.dp), fontSize = 13.sp, color = MiuixTheme.colorScheme.primary)
@@ -1109,15 +1125,48 @@ private fun SfxHeader(vm: MainViewModel, st: UiState, open: (String) -> Unit) {
     }
 }
 
+/** 多选操作条：已选数 / 全选 / 重命名（选 1 个时）/ 删除 / 完成 */
+@Composable
+private fun SfxSelBar(vm: MainViewModel, st: UiState, sel: Set<String>, all: List<com.taocrypt.micmask.SoundBoard.Sound>) {
+    var ask by remember { mutableStateOf(false) }
+    val ids = all.map { it.id }.toSet()
+    Card(Modifier.fillMaxWidth().padding(PagePad).padding(bottom = 8.dp)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("已选 ${sel.size} 个", fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 4.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(if (sel.containsAll(ids) && ids.isNotEmpty()) "全不选" else "全选",
+                    onClick = { vm.sfxSelSet(if (sel.containsAll(ids)) emptySet() else ids) }, modifier = Modifier.weight(1f))
+                TextButton("重命名", enabled = sel.size == 1, onClick = { vm.sfxRename(sel.first()) }, modifier = Modifier.weight(1f))
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton("完成", onClick = { vm.sfxSelEnd() }, modifier = Modifier.weight(1f))
+                TextButton("删除 ${sel.size}", enabled = sel.isNotEmpty(), onClick = { ask = true }, modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.textButtonColorsPrimary())
+            }
+        }
+    }
+    if (ask) WindowDialog(show = true, title = "删除 ${sel.size} 个音效", summary = "删除后不能恢复。", onDismissRequest = { ask = false }) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton("取消", onClick = { ask = false }, modifier = Modifier.weight(1f))
+            TextButton("删除", onClick = { vm.deleteSelectedSounds(); ask = false }, modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary())
+        }
+    }
+}
+
 @Composable
 private fun SoundTiles(vm: MainViewModel, st: UiState, list: List<com.taocrypt.micmask.SoundBoard.Sound>) {
     var edit by remember { mutableStateOf<com.taocrypt.micmask.SoundBoard.Sound?>(null) }
     val primary = MiuixTheme.colorScheme.primary
+    val sel = st.sfxSel
     val tiles = list.map { s ->
         val d = s.durMs / 1000
         val prev = st.sfxPreview == s.id
         val send = st.sfxPlaying == s.id
-        Tile((if (prev) "▶ " else "") + s.name, prev, sub = if (send) "送麦中" else "%d:%02d".format(d / 60, d % 60), onLong = { edit = s },
+        if (sel != null) {
+            val on = s.id in sel
+            Tile((if (on) "✓ " else "") + s.name, on, sub = "%d:%02d".format(d / 60, d % 60), onLong = { vm.sfxSelToggle(s.id) }) { vm.sfxSelToggle(s.id) }
+        } else
+        Tile((if (prev) "▶ " else "") + s.name, prev, sub = if (send) "送麦中" else "%d:%02d".format(d / 60, d % 60), onLong = { vm.sfxSelStart(s.id) },
             action = {
                 Text(if (send) "■ 停止" else "送麦", Modifier.clip(RoundedCornerShape(10.dp))
                     .background(if (send) Color(0xFFE5484D) else primary.copy(alpha = 0.15f))
@@ -1126,7 +1175,8 @@ private fun SoundTiles(vm: MainViewModel, st: UiState, list: List<com.taocrypt.m
             }) { vm.previewSound(s.id) }
     }
     TileGroup(tiles, st.gridLayout)
-    if (st.gridLayout || list.isNotEmpty()) Text("长按可重命名或删除", Modifier.padding(horizontal = 24.dp), fontSize = 11.sp, color = Summary)
+    if (sel == null && (st.gridLayout || list.isNotEmpty())) Text("长按进入多选（删除、重命名）", Modifier.padding(horizontal = 24.dp), fontSize = 11.sp, color = Summary)
+    LaunchedEffect(st.sfxRename) { st.sfxRename?.let { id -> list.firstOrNull { it.id == id }?.let { edit = it; vm.sfxRenameDone() } } }
     edit?.let { s ->
         var text by remember(s.id) { mutableStateOf(s.name) }
         WindowDialog(show = true, title = "编辑素材", onDismissRequest = { edit = null }) {
@@ -1134,7 +1184,6 @@ private fun SoundTiles(vm: MainViewModel, st: UiState, list: List<com.taocrypt.m
                 TextField(value = text, onValueChange = { text = it.take(40) }, label = "名称", singleLine = true)
                 Spacer(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton("删除", onClick = { vm.deleteSound(s); edit = null }, modifier = Modifier.weight(1f))
                     TextButton("取消", onClick = { edit = null }, modifier = Modifier.weight(1f))
                     TextButton("保存", onClick = { vm.renameSound(s, text); edit = null }, modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.textButtonColorsPrimary())
@@ -1451,7 +1500,7 @@ private fun Mim3Page(vm: MainViewModel, st: UiState) {
             }
         }
         item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.padding(top = 16.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 SmallTitle("音效 ${items.size} 个", Modifier.weight(1f))
                 TextButton("添加音频", onClick = { picker.launch(arrayOf("audio/*")) }, modifier = Modifier.padding(end = 12.dp))
             }
@@ -1477,7 +1526,7 @@ private fun Mim3Page(vm: MainViewModel, st: UiState) {
                     onClick = { vm.buildMim3(group, author, desc, items.toList(), alsoImport) },
                     enabled = st.sfxBusy.isEmpty() && items.isNotEmpty() && group.isNotBlank(), modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.textButtonColorsPrimary())
-                Text("保存到 下载/MicMask/<分组名>.mim3，可直接发给别人导入。格式：zip，内含 manifest.json（分组、创作者、简介、文件清单）和音频本身。",
+                Text("保存到 Download/MicMask/<分组名>.mim3，可直接发给别人导入。",
                     Modifier.padding(horizontal = 12.dp, vertical = 8.dp), fontSize = 12.sp, color = Summary)
             }
         }

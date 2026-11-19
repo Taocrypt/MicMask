@@ -214,6 +214,10 @@ data class UiState(
     val sfxBusy: String = "",
     /** 语音页分类 0=效果包 1=本地音频 */
     val sfxTab: Int = 0,
+    /** 音效多选：null = 未在多选 */
+    val sfxSel: Set<String>? = null,
+    /** 多选条点「重命名」→ 对应分组的卡片弹编辑框 */
+    val sfxRename: String? = null,
     /** 页面内试听中的素材 id（走扬声器） */
     val sfxPreview: String? = null,
     /** 预设/效果包 卡片网格（true）或列表 */
@@ -872,7 +876,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _state.value = _state.value.copy(sounds = l)
         }
     }
-    fun setSfxTab(t: Int) { _state.value = _state.value.copy(sfxTab = t); prefs.edit().putInt("sfx_tab", t).apply() }
+    fun setSfxTab(t: Int) { _state.value = _state.value.copy(sfxTab = t, sfxSel = null); prefs.edit().putInt("sfx_tab", t).apply() }
     fun setGridLayout(v: Boolean) { _state.value = _state.value.copy(gridLayout = v); prefs.edit().putBoolean("grid_layout", v).apply() }
     /** fx=true 导入效果包（只认 .mim3）；false 导入本地音频 */
     fun importSounds(uris: List<Uri>, fx: Boolean = false) {
@@ -990,6 +994,34 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
     fun soundInstalled(r: com.taocrypt.micmask.repo.ModelRepo.RSound) = _state.value.sounds.any { it.id == r.id }
+    fun sfxSelStart(id: String) { _state.value = _state.value.copy(sfxSel = (_state.value.sfxSel ?: emptySet()) + id) }
+    fun sfxSelToggle(id: String) { val c = _state.value.sfxSel ?: emptySet(); _state.value = _state.value.copy(sfxSel = if (id in c) c - id else c + id) }
+    fun sfxSelSet(ids: Set<String>) { _state.value = _state.value.copy(sfxSel = ids) }
+    fun sfxRename(id: String) { _state.value = _state.value.copy(sfxRename = id, sfxSel = null) }
+    fun sfxRenameDone() { _state.value = _state.value.copy(sfxRename = null) }
+    fun sfxSelEnd() { _state.value = _state.value.copy(sfxSel = null) }
+    /** 删除多选的素材 */
+    fun deleteSelectedSounds() {
+        val ids = _state.value.sfxSel ?: return
+        val del = _state.value.sounds.filter { it.id in ids }
+        if (del.any { it.id == _state.value.sfxPlaying }) stopSound()
+        if (del.any { it.id == _state.value.sfxPreview }) stopPreview()
+        del.forEach { SoundBoard.delete(it) }
+        _state.value = _state.value.copy(sfxSel = null, toast = "已删除 ${del.size} 个")
+        L.i("多选删除素材 ${del.size} 个")
+        refreshSounds()
+    }
+    /** 整组删除 */
+    fun deleteGroup(pack: String) {
+        val del = _state.value.sounds.filter { it.pack == pack }
+        if (del.any { it.id == _state.value.sfxPlaying }) stopSound()
+        if (del.any { it.id == _state.value.sfxPreview }) stopPreview()
+        del.forEach { SoundBoard.delete(it) }
+        File(SoundBoard.dir(ctx), pack).takeIf { it.isDirectory }?.deleteRecursively()
+        _state.value = _state.value.copy(sfxSel = null, toast = "已删除分组（${del.size} 个）")
+        L.i("删除分组 $pack ${del.size} 个")
+        refreshSounds()
+    }
     fun deleteSound(s: SoundBoard.Sound) { if (_state.value.sfxPlaying == s.id) stopSound(); SoundBoard.delete(s); refreshSounds() }
     fun renameSound(s: SoundBoard.Sound, n: String) { if (!SoundBoard.rename(s, n)) _state.value = _state.value.copy(toast = "重名或无法改名"); refreshSounds() }
     fun setSfxGain(v: Float) { _state.value = _state.value.copy(sfxGain = v); prefs.edit().putFloat("sfx_gain", v).apply() }
@@ -1117,6 +1149,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _state.value = _state.value.copy(dlId = null, dlName = "",
                 toast = r.fold({ "已下载：${m.name}" }, { L.e("模型下载失败", it); "下载失败：${it.message}" }))
             if (r.isSuccess && m.name.isNotBlank()) ModelStore.voices(ctx).firstOrNull { it == m.id }?.let { ModelStore.setVoiceAlias(ctx, it, m.name) }
+            refreshModels()
+        }
+    }
+
+    /** 从模型仓库下载文件变声（句级）模型，只下缺的 */
+    fun downloadFileModel() {
+        if (_state.value.dlId != null) return
+        val man = repoManifest
+        if (man == null) { refreshRepo(); _state.value = _state.value.copy(toast = "正在获取仓库清单，稍后再点一次"); return }
+        _state.value = _state.value.copy(dlId = "file", dlProgress = 0f, dlName = "")
+        viewModelScope.launch {
+            val r = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                runCatching { com.taocrypt.micmask.repo.ModelRepo.downloadFileModel(ctx, man) { p, n -> _state.value = _state.value.copy(dlProgress = p, dlName = n) } }
+            }
+            _state.value = _state.value.copy(dlId = null, dlName = "",
+                toast = r.fold({ "句级模型已就绪" }, { L.e("句级模型下载失败", it); "下载失败：${it.message}" }))
             refreshModels()
         }
     }
@@ -1510,6 +1558,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun listRecordings(): List<File> = AudioIo.listWavs(ctx, "recordings")
+
+    /** 删除历史录音（多选）；删到当前录音时回落到最新一条 */
+    fun deleteRecordings(files: Collection<File>): Int {
+        val n = files.count { it.delete() }
+        val all = AudioIo.listWavs(ctx, "recordings")
+        val s = _state.value
+        _state.value = s.copy(recCount = all.size,
+            recFile = s.recFile?.takeIf { it.exists() },
+            ttsRefFile = s.ttsRefFile?.takeIf { it.exists() },
+            ttsRefName = if (s.ttsRefFile?.exists() == false) null else s.ttsRefName,
+            toast = "已删除 $n 条录音")
+        if (_state.value.recFile == null) restoreLastRecording()
+        L.i("删除录音 $n 条，剩 ${all.size}")
+        return n
+    }
 
     private fun restoreLastRecording() {
         val all = AudioIo.listWavs(ctx, "recordings")

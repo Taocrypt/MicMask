@@ -1,5 +1,11 @@
 package com.taocrypt.micmask.ui2
 
+import com.taocrypt.micmask.ModelStore
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.state.ToggleableState
+import top.yukonga.miuix.kmp.basic.Checkbox
 import android.content.Intent
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -54,12 +60,13 @@ import kotlin.math.roundToInt
  * 文件变声（句级，原版功能迁移）：选音频或录音 → 整段 RVC 转换（支持音色检索、无声段保护）→ 试听 / 设为待发送。
  * 用的是句级三件套（hubert + rmvpe + net_g），不是实时流式模型。
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun FilePage(vm: MainViewModel, st: UiState) {
     val ctx = LocalContext.current
     val clip = remember { ClipPlayer() }
     DisposableEffect(Unit) { onDispose { clip.stop() } }
-    LaunchedEffect(Unit) { vm.refreshModels() }
+    LaunchedEffect(Unit) { vm.refreshModels(); if (!vm.state.value.modelsReady) vm.refreshRepo() }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             runCatching { ctx.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
@@ -76,7 +83,7 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
         // ---- 模型 ----
         SmallTitle("句级模型")
         Card(Modifier.fillMaxWidth().padding(Pad2)) {
-            st.modelItems.forEach { m ->
+            st.modelItems.filterNot { it.name in ModelStore.LIVE_NETG_ALL }.forEach { m ->
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(m.name + if (m.required) "" else "（可选）", fontSize = 14.sp)
@@ -84,6 +91,13 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
                             color = if (m.present) Dim else Color(0xFFE5484D))
                     }
                 }
+            }
+            val idxMissing = st.modelItems.any { it.name == ModelStore.INDEX && !it.present }
+            if (!st.modelsReady || idxMissing || st.dlId == "file") {
+                val dl = st.dlId == "file"
+                ArrowPreference(title = if (dl) "下载中 ${(st.dlProgress * 100).toInt()}%" else "在线下载句级模型",
+                    summary = if (dl) st.dlName.ifBlank { "准备中…" } else "约 75 MB（合成器 + 检索索引），基础文件缺了一起下",
+                    onClick = { if (st.dlId == null) vm.downloadFileModel() })
             }
             ArrowPreference(title = when { st.loadingEngine -> "加载中…"; st.engineLoaded -> "重新加载模型"; else -> "加载模型" },
                 summary = if (st.engineLoaded) "已在内存里" else if (st.modelsReady) "加载一次会一直留在内存" else "缺模型，先导入",
@@ -204,14 +218,68 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
     }
 
     recList?.let { list ->
-        WindowDialog(show = true, title = "历史录音", onDismissRequest = { recList = null }) {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                if (list.isEmpty()) Text("还没有录音", color = Dim)
-                list.forEach { f -> TextButton(f.name, onClick = { vm.useRecordingAsInput(f); recList = null }, modifier = Modifier.fillMaxWidth()) }
-                TextButton("关闭", onClick = { recList = null }, modifier = Modifier.fillMaxWidth())
+        var sel by remember(list) { mutableStateOf(setOf<File>()) }
+        var picking by remember(list) { mutableStateOf(false) }
+        WindowDialog(show = true, title = "历史录音", summary = if (picking) "已选 ${sel.size} 条" else "点一条用作输入，长按多选",
+            onDismissRequest = { recList = null }) {
+            Column {
+                Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                    if (list.isEmpty()) Text("还没有录音", color = Dim, modifier = Modifier.padding(vertical = 16.dp))
+                    list.forEach { f ->
+                        val on = f in sel
+                        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(14.dp))
+                            .background(if (on) MiuixTheme.colorScheme.primary.copy(alpha = 0.12f) else MiuixTheme.colorScheme.secondaryContainer)
+                            .combinedClickable(
+                                onClick = { if (picking) sel = if (on) sel - f else sel + f else { vm.useRecordingAsInput(f); recList = null } },
+                                onLongClick = { picking = true; sel = sel + f })
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(recTitle(f), fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                                Text(recInfo(f), fontSize = 12.sp, color = Dim)
+                            }
+                            if (picking) Checkbox(state = ToggleableState(on), onClick = { sel = if (on) sel - f else sel + f })
+                        }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                if (picking) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(if (sel.size == list.size) "全不选" else "全选", onClick = { sel = if (sel.size == list.size) emptySet() else list.toSet() },
+                            modifier = Modifier.weight(1f))
+                        TextButton("删除 ${sel.size}", enabled = sel.isNotEmpty(), colors = ButtonDefaults.textButtonColorsPrimary(),
+                            onClick = { vm.deleteRecordings(sel); val left = vm.listRecordings(); sel = emptySet(); picking = false
+                                recList = if (left.isEmpty()) null else left },
+                            modifier = Modifier.weight(1f))
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    TextButton("取消多选", onClick = { picking = false; sel = emptySet() }, modifier = Modifier.fillMaxWidth())
+                } else Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton("多选删除", enabled = list.isNotEmpty(), onClick = { picking = true }, modifier = Modifier.weight(1f))
+                    TextButton("关闭", onClick = { recList = null }, modifier = Modifier.weight(1f))
+                }
             }
         }
     }
+}
+
+/** rec_1120_004419.wav → 11-20 00:44:19 */
+private fun recTitle(f: File): String =
+    Regex("^rec_(\\d{2})(\\d{2})_(\\d{2})(\\d{2})(\\d{2})").find(f.name)?.groupValues?.let { g -> "${g[1]}-${g[2]} ${g[3]}:${g[4]}:${g[5]}" } ?: f.nameWithoutExtension
+
+/** 时长（读 wav 头）+ 大小 */
+private fun recInfo(f: File): String {
+    val sec = runCatching {
+        java.io.RandomAccessFile(f, "r").use { r ->
+            val h = ByteArray(44); r.readFully(h)
+            val bb = java.nio.ByteBuffer.wrap(h).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+            val byteRate = bb.getInt(28)
+            if (byteRate > 0) (f.length() - 44).toFloat() / byteRate else null
+        }
+    }.getOrNull()
+    val kb = f.length() / 1024f
+    val size = if (kb >= 1024) "%.1f MB".format(kb / 1024) else "%.0f KB".format(kb)
+    return (if (sec != null) "%.1f 秒 · ".format(sec) else "") + size
 }
 
 @Composable

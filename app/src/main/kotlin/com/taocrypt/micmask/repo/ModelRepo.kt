@@ -41,7 +41,9 @@ object ModelRepo {
     }
     /** TTS（GPT-SoVITS）文件：清单 "tts":[{"name":"bert.onnx","path":"bert.onnx"|"ref/ref_joy.refbin","url":"tts/…","sha256":"…","size":1}] */
     data class RTts(val path: String, val url: String, val sha256: String, val size: Long, val parts: List<String> = emptyList())
-    data class Manifest(val base: List<RFile>, val models: List<RModel>, val sounds: List<RSound> = emptyList(), val tts: List<RTts> = emptyList()) {
+    data class Manifest(val base: List<RFile>, val models: List<RModel>, val sounds: List<RSound> = emptyList(), val tts: List<RTts> = emptyList(),
+                        /** 文件变声（句级）：完整合成器 + 检索索引，清单 "file":[…] */
+                        val file: List<RFile> = emptyList()) {
         val ttsSize: Long get() = tts.sumOf { it.size }
     }
 
@@ -131,7 +133,7 @@ object ModelRepo {
                 o.optString("sha256", ""), o.optLong("size", 0L), parts(o))
         }
         L.i("模型仓库 $mu：${models.size} 个音色，基础文件 ${root.optJSONArray("base")?.length() ?: 0} 个，素材 ${sounds.size} 个，TTS ${tts.size} 个")
-        return Manifest(files(root.optJSONArray("base")), models, sounds, tts)
+        return Manifest(files(root.optJSONArray("base")), models, sounds, tts, files(root.optJSONArray("file")))
     }
 
     /** 本地是否已装该音色（至少一个合成器文件在） */
@@ -176,6 +178,12 @@ object ModelRepo {
             L.i("仓库下载完成 ${f.name} ${dst.length() / 1048576}MB")
         }
         progress(1f, "")
+    }
+
+    /** 下载文件变声（句级）模型：合成器 + 索引 + 缺失的基础文件 */
+    fun downloadFileModel(ctx: Context, man: Manifest, progress: (Float, String) -> Unit) {
+        require(man.file.isNotEmpty()) { "仓库里没有句级模型" }
+        download(ctx, man, RModel("file", "句级模型", "", "", "", man.file), progress)
     }
 
     /** TTS 文件名白名单（含 ref/ 子目录），防止清单写出奇怪路径 */
