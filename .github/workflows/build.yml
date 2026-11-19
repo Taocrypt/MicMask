@@ -158,7 +158,7 @@ jobs:
           json.dump(data, open("artifacts/update.json", "w", encoding="utf-8"), ensure_ascii=False, indent=2)
           PY
           cat artifacts/update.json
-      # 不标 prerelease：App 走 releases/latest，预发布版不会出现在 latest 里
+      # 不标 prerelease：旧版 App 走 releases/latest；新版按通道读 update-feed 里的 stable.json / beta.json
       - name: Publish
         shell: bash
         env:
@@ -172,3 +172,22 @@ jobs:
           else
             gh release create "$TAG" artifacts/* --title "$TAG" --notes-file notes.md --verify-tag
           fi
+      # 更新通道清单：滚动发布 update-feed（标为 prerelease，不影响 latest）
+      #   beta.json   每次发版都更新
+      #   stable.json 只在版本号不含 alpha/beta/rc 时更新
+      - name: Update channel feed
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          mkdir -p feed
+          cp artifacts/update.json feed/beta.json
+          FILES="feed/beta.json"
+          if ! echo "$VER" | grep -qiE 'alpha|beta|rc'; then cp artifacts/update.json feed/stable.json; FILES="$FILES feed/stable.json"; fi
+          if ! gh release view update-feed >/dev/null 2>&1; then
+            gh release create update-feed --target "$GITHUB_SHA" --prerelease --title "update-feed" \
+              --notes "App 内更新通道清单（自动维护，勿删）：stable.json = 稳定版，beta.json = 测试版。"
+          fi
+          gh release upload update-feed $FILES --clobber
+          echo "通道清单已更新：$FILES"

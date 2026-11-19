@@ -26,19 +26,21 @@ class MainActivity : ComponentActivity() {
         // 首帧就绪或最多 1.5 秒后放行
         splash.setKeepOnScreenCondition { !firstFrame && SystemClock.uptimeMillis() - t0 < 1500 }
         splash.setOnExitAnimationListener { p ->
-            // 退场：系统圆形遮罩从屏幕收拢到图标中心（原生 circular reveal），图标同时淡出
+            // 退场：先背景渐隐露出界面，再图标渐隐
             val v = p.view
             val icon: View? = runCatching { p.iconView }.getOrNull()
-            val cx = icon?.let { (it.left + it.right) / 2 } ?: (v.width / 2)
-            val cy = icon?.let { (it.top + it.bottom) / 2 } ?: (v.height / 2)
-            val r = Math.hypot(maxOf(cx, v.width - cx).toDouble(), maxOf(cy, v.height - cy).toDouble()).toFloat()
-            val reveal = runCatching { android.view.ViewAnimationUtils.createCircularReveal(v, cx, cy, r, 0f) }.getOrNull()
-            if (reveal == null || !v.isAttachedToWindow) { p.remove(); return@setOnExitAnimationListener }
-            reveal.duration = 420
-            reveal.interpolator = android.view.animation.PathInterpolator(0.4f, 0f, 0.2f, 1f)
-            reveal.doOnEnd { p.remove() }
-            icon?.animate()?.alpha(0f)?.setDuration(220)?.start()
-            reveal.start()
+            val bg = v.background?.mutate()
+            if (bg == null) { icon?.animate()?.alpha(0f)?.setDuration(220)?.withEndAction { p.remove() }?.start() ?: p.remove(); return@setOnExitAnimationListener }
+            android.animation.ValueAnimator.ofInt(255, 0).apply {
+                duration = 260
+                interpolator = android.view.animation.DecelerateInterpolator()
+                addUpdateListener { bg.alpha = it.animatedValue as Int }
+                doOnEnd {
+                    if (icon == null) p.remove()
+                    else icon.animate().alpha(0f).setDuration(220).withEndAction { p.remove() }.start()
+                }
+                start()
+            }
         }
         enableEdgeToEdge()
         L.init(applicationContext)

@@ -15,6 +15,21 @@ Original downloads kept in `raw/`.
 | 叮.mp3 | Quiz/game-show "correct" ping | https://freesound.org/people/craigscottuk/sounds/644963/ | craigscottuk | CC0 1.0 |
 | 哇哦.mp3 | Group "wow" | https://freesound.org/people/CHallSmith/sounds/870654/ | CHallSmith | CC0 1.0 |
 | 乌鸦.mp3 | American crow caws (first 6.5 s) | https://commons.wikimedia.org/wiki/File:Corvus_brachyrhynchos_call.ogg | United States Geological Survey (US federal work) | Public domain |
+| 答错.mp3 | Wrong-answer / error buzzer, double buzz (first two buzzes of a multi-buzzer file) | https://freesound.org/people/Breviceps/sounds/493163/ | Breviceps | CC0 1.0 |
+| 心跳.mp3 | Heartbeat, 97 BPM (first 6.5 s) | https://freesound.org/people/Cloud-10/sounds/688735/ | Cloud-10 | CC0 1.0 |
+| 巴掌.mp3 | Slap on the face/body | https://freesound.org/people/khenshom/sounds/539163/ | khenshom | CC0 1.0 |
+| 吞口水.mp3 | Gulp, hard swallow | https://freesound.org/people/magnuswaker/sounds/531755/ | magnuswaker | CC0 1.0 |
+| 叹气.mp3 | Sigh | https://freesound.org/people/nikki_bass/sounds/403936/ | nikki_bass | CC0 1.0 |
+| 口哨.mp3 | Wolf whistle | https://freesound.org/people/OwlStorm/sounds/320150/ | OwlStorm | CC0 1.0 |
+| 爆炸.mp3 | Large explosion | https://freesound.org/people/V-ktor/sounds/482993/ | V-ktor | CC0 1.0 |
+| 喇叭.mp3 | DJ air horn (synthesized) | https://freesound.org/people/neopolitansixth/sounds/547020/ | neopolitansixth | CC0 1.0 |
+| 打鼓.mp3 | "Drum roll please" snare/timpani roll ending in cymbal crash | https://freesound.org/people/Scheffler/sounds/201211/ | Scheffler | CC0 1.0 |
+| 疑问.mp3 | Cartoon single boing (puzzled / "huh?") | https://freesound.org/people/sdroliasnick/sounds/731262/ | sdroliasnick | CC0 1.0 |
+| 猫叫.mp3 | Cat meow | https://freesound.org/people/tuberatanka/sounds/110011/ | tuberatanka | CC0 1.0 |
+| 胜利.mp3 | Victory fanfare, carnival "Tusch" (ta-daa) | https://freesound.org/people/Audeption/sounds/418526/ | Audeption | CC0 1.0 |
+| 狗叫.mp3 | Dog bark | https://freesound.org/people/aunrea/sounds/495658/ | aunrea | CC0 1.0 |
+| 金币.mp3 | RPG coin pickup | https://freesound.org/people/colorsCrimsonTears/sounds/566201/ | colorsCrimsonTears | CC0 1.0 |
+| 惊讶.mp3 | Small crowd gasp (shock/surprise) | https://freesound.org/people/HowardV/sounds/264376/ | HowardV | CC0 1.0 |
 
 Notes
 - Freesound files: licence verified on each sound page (links to creativecommons.org/publicdomain/zero/1.0/); audio taken from Freesound's public HQ preview MP3 (128 kbps), not the original upload.

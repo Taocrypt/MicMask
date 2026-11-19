@@ -850,7 +850,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (uris.isEmpty() || _state.value.sfxBusy.isNotEmpty()) return
         val ok0 = if (fx) uris.filter { SoundBoard.isMim3(ctx, it) } else uris
         val skipped = uris.size - ok0.size
-        if (ok0.isEmpty()) { _state.value = _state.value.copy(toast = "效果包只支持 .mim3 文件"); return }
+        if (ok0.isEmpty()) { _state.value = _state.value.copy(toast = "音效包只支持 .mim3 文件"); return }
         viewModelScope.launch {
             var ok = 0; var fail = ""
             ok0.forEachIndexed { i, u ->
@@ -908,6 +908,32 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
     fun packInfo(group: String) = SoundBoard.packInfo(ctx, group)
+    fun fxGroups() = SoundBoard.fxGroups(ctx)
+    /** 把单独的 mp3 等音频直接加进音效包的某个分组（新分组会自动创建） */
+    fun importToGroup(uris: List<Uri>, group: String) {
+        val g = SoundBoard.safe(group.ifBlank { "我的音效" })
+        if (uris.isEmpty() || _state.value.sfxBusy.isNotEmpty()) return
+        if (g == SoundBoard.PACK_LOCAL) { _state.value = _state.value.copy(toast = "分组名不能叫「本地」"); return }
+        viewModelScope.launch {
+            var ok = 0; var fail = ""
+            uris.forEachIndexed { i, u ->
+                _state.value = _state.value.copy(sfxBusy = "正在添加 ${i + 1}/${uris.size}…")
+                kotlinx.coroutines.withContext(Dispatchers.IO) { runCatching { SoundBoard.importUri(ctx, u, g) } }
+                    .onSuccess { ok++ }.onFailure { fail = it.message ?: "解码失败"; L.e("添加音效失败", it) }
+            }
+            _state.value = _state.value.copy(sfxBusy = "", sounds = SoundBoard.list(ctx),
+                toast = "已添加 $ok 个到「${if (g == SoundBoard.PACK_FX) "常用音效" else g}」" + if (fail.isNotEmpty()) "，${uris.size - ok} 个失败：$fail" else "")
+        }
+    }
+    /** 把音效包里一个分组导出成 .mim3 */
+    fun exportGroup(group: String) {
+        if (_state.value.sfxBusy.isNotEmpty()) return
+        _state.value = _state.value.copy(sfxBusy = "正在导出…")
+        viewModelScope.launch {
+            val r = kotlinx.coroutines.withContext(Dispatchers.IO) { runCatching { SoundBoard.exportGroup(ctx, group) } }
+            _state.value = _state.value.copy(sfxBusy = "", toast = r.fold({ "已导出到 $it" }, { L.e("mim3 导出失败", it); "导出失败：${it.message}" }))
+        }
+    }
     /** 一键还原：把被设成 ignore/deny 的 PLAY_AUDIO 改回 allow，并清掉残留注入进程 */
     fun repairAudio() {
         if (_state.value.sfxBusy.isNotEmpty()) return

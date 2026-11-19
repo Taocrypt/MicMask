@@ -48,6 +48,7 @@ class LiveFloatService : Service() {
         private val MODES = listOf("AI", "普通", "声卡")
         private const val ACCENT = 0xFF3482FF.toInt()
         private const val RING_OFF = 0x66FFFFFF
+        val LOOK_KEYS = setOf("lf_ball_dp", "lf_ball_alpha", "lf_panel_scale", "lf_panel_alpha", "lf_autohide")
         private const val RING_BUSY = 0xFFFF9F0A.toInt()
     }
 
@@ -60,6 +61,12 @@ class LiveFloatService : Service() {
     private lateinit var ring: GradientDrawable
     private var dockRight = false
     private var homeY = 0
+    /** 外观（设置页可调）：悬浮球直径 dp、悬浮球透明度、控制窗缩放、控制窗透明度 */
+    private var ballDp = 50; private var ballAlpha = 1f; private var ps = 1f; private var panelAlpha = 1f
+    private fun sdp(v: Int) = (v * ps * resources.displayMetrics.density).toInt()
+    private val prefL = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, k ->
+        if (k != null && k in LOOK_KEYS) h.post { if (root != null) { val ex = expanded; remove(); add(); running = true; if (ex) setExpanded(true) } }
+    }
     private lateinit var panel: LinearLayout
     private lateinit var stat: TextView
     private lateinit var modeRow: LinearLayout
@@ -82,7 +89,7 @@ class LiveFloatService : Service() {
         return START_STICKY
     }
 
-    override fun onDestroy() { remove(); running = false; super.onDestroy() }
+    override fun onDestroy() { Prefs.main(applicationContext).unregisterOnSharedPreferenceChangeListener(prefL); remove(); running = false; super.onDestroy() }
 
     private fun foreground() {
         val nm = getSystemService(NotificationManager::class.java)
@@ -107,16 +114,20 @@ class LiveFloatService : Service() {
             PixelFormat.TRANSLUCENT).apply { gravity = Gravity.TOP or Gravity.START; x = p.getInt("lf_x", dp(8)); y = p.getInt("lf_y", dp(200)) }
 
         dockRight = p.getBoolean("lf_right", false); homeY = lp.y
+        ballDp = p.getInt("lf_ball_dp", 50).coerceIn(32, 80); ballAlpha = p.getFloat("lf_ball_alpha", 1f).coerceIn(0.2f, 1f)
+        ps = p.getFloat("lf_panel_scale", 1f).coerceIn(0.7f, 1.5f); panelAlpha = p.getFloat("lf_panel_alpha", 1f).coerceIn(0.3f, 1f)
+        lastSfxKey = ""; lastPresetKey = ""; lastStopOn = null
+        p.unregisterOnSharedPreferenceChangeListener(prefL); p.registerOnSharedPreferenceChangeListener(prefL)
         // 悬浮球 = App 图标 + 状态色环（灰=未开启，蓝=变声中，橙=AI 还在输出）
         ring = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0x00000000); setStroke(dp(3), RING_OFF) }
         ball = android.widget.FrameLayout(this).apply {
-            layoutParams = LinearLayout.LayoutParams(dp(50), dp(50))
+            layoutParams = LinearLayout.LayoutParams(dp(ballDp), dp(ballDp)); alpha = ballAlpha
             background = ring; setPadding(dp(3), dp(3), dp(3), dp(3)); elevation = dp(6).toFloat()
             addView(android.widget.ImageView(this@LiveFloatService).apply {
                 setImageResource(R.drawable.float_logo); scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
             }, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         }
-        stat = TextView(this).apply { setTextColor(0xFFDDDDDD.toInt()); textSize = 11f; typeface = Typeface.MONOSPACE; text = "读取中…" }
+        stat = TextView(this).apply { setTextColor(0xFFDDDDDD.toInt()); textSize = 11f * ps; typeface = Typeface.MONOSPACE; text = "读取中…" }
         modeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         presetRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         sfxRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -130,15 +141,17 @@ class LiveFloatService : Service() {
             addView(stopChip)
             addView(chip("打开 App", 0x33FFFFFF) { openApp() })
             addView(chip("收起", 0x33FFFFFF) { setExpanded(false) })
+            addView(View(this@LiveFloatService), LinearLayout.LayoutParams(0, 1, 1f))
+            addView(resizeHandle())
         }
         panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; visibility = View.GONE
-            background = round(0xE61C1C1E.toInt(), 18); setPadding(dp(12), dp(10), dp(12), dp(10))
-            layoutParams = LinearLayout.LayoutParams(dp(268), ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) }
+            background = round(0xE61C1C1E.toInt(), 18); setPadding(sdp(12), sdp(10), sdp(12), sdp(10)); alpha = panelAlpha
+            layoutParams = LinearLayout.LayoutParams(minOf(sdp(268), screen().first - dp(8)), ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) }
             addView(stat)
             addView(space(8)); addView(modeRow)
             addView(space(8)); addView(HorizontalScrollView(this@LiveFloatService).apply { isHorizontalScrollBarEnabled = false; addView(presetRow) })
-            addView(space(8)); addView(TextView(this@LiveFloatService).apply { text = "语音包"; setTextColor(0xFF999999.toInt()); textSize = 11f })
+            addView(space(8)); addView(TextView(this@LiveFloatService).apply { text = "语音包"; setTextColor(0xFF999999.toInt()); textSize = 11f * ps })
             addView(space(4)); addView(HorizontalScrollView(this@LiveFloatService).apply { isHorizontalScrollBarEnabled = false; addView(sfxRow) })
             addView(space(8)); addView(bottom)
         }
@@ -147,16 +160,40 @@ class LiveFloatService : Service() {
         }
         attachDrag(ball)
         wm.addView(root, lp)
+        peeked = false
         root?.post { place(false) }
-        tick()
+        tick(); scheduleHide()
     }
 
-    private fun space(h: Int) = View(this).apply { layoutParams = LinearLayout.LayoutParams(1, dp(h)) }
+    private fun space(h: Int) = View(this).apply { layoutParams = LinearLayout.LayoutParams(1, sdp(h)) }
+
+    /** 右下角缩放柄：长按后拖动缩放控制窗，松手保存 */
+    private fun resizeHandle() = TextView(this).apply {
+        text = "⤡"; setTextColor(0xAAFFFFFF.toInt()); textSize = 16f * ps; gravity = Gravity.CENTER
+        setPadding(sdp(8), sdp(2), sdp(4), sdp(2))
+        var armed = false; var sx = 0f; var s0 = ps; var cur = ps
+        setOnLongClickListener { armed = true; s0 = ps; cur = ps; performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+            panel.pivotX = if (dockRight) panel.width.toFloat() else 0f; panel.pivotY = 0f; true }
+        setOnTouchListener { _, e ->
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> { sx = e.rawX; false }
+                MotionEvent.ACTION_MOVE -> if (armed) {
+                    val dx = (e.rawX - sx) * (if (dockRight) -1 else 1)
+                    cur = (s0 + dx / (268 * resources.displayMetrics.density)).coerceIn(0.7f, 1.5f)
+                    panel.scaleX = cur / s0; panel.scaleY = cur / s0; true } else false
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> if (armed) {
+                    armed = false; panel.scaleX = 1f; panel.scaleY = 1f
+                    Prefs.main(applicationContext).edit().putFloat("lf_panel_scale", (cur * 20).toInt() / 20f).apply()  // 触发重建
+                    true } else false
+                else -> false
+            }
+        }
+    }
 
     private fun chip(text: String, bg: Int, onClick: () -> Unit) = TextView(this).apply {
-        this.text = text; setTextColor(Color.WHITE); textSize = 13f; gravity = Gravity.CENTER
-        background = round(bg, 14); setPadding(dp(12), dp(6), dp(12), dp(6))
-        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6) }
+        this.text = text; setTextColor(Color.WHITE); textSize = 13f * ps; gravity = Gravity.CENTER
+        background = round(bg, 14); setPadding(sdp(12), sdp(6), sdp(12), sdp(6))
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = sdp(6) }
         setOnClickListener { onClick(); h.postDelayed({ refresh(true) }, 150) }
     }
 
@@ -164,30 +201,33 @@ class LiveFloatService : Service() {
         var sx = 0f; var sy = 0f; var ox = 0; var oy = 0; var moved = false
         v.setOnTouchListener { _, e ->
             when (e.action) {
-                MotionEvent.ACTION_DOWN -> { sx = e.rawX; sy = e.rawY; ox = lp.x; oy = lp.y; moved = false; true }
+                MotionEvent.ACTION_DOWN -> { cancelHide(); if (peeked) unpeek(); dockAnim?.cancel(); sx = e.rawX; sy = e.rawY; ox = lp.x; oy = lp.y; moved = false; true }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = e.rawX - sx; val dy = e.rawY - sy
-                    if (abs(dx) + abs(dy) > dp(6)) moved = true
+                    if (!moved && abs(dx) + abs(dy) > dp(6)) moved = true
                     if (moved) {
-                        if (expanded) setExpanded(false)
-                        val (w, hh) = screen()
-                        lp.x = (ox + dx.toInt()).coerceIn(0, maxOf(0, w - ball.width))
-                        lp.y = (oy + dy.toInt()).coerceIn(0, maxOf(0, hh - ball.height))
-                        root?.let { wm.updateViewLayout(it, lp) }
+                        // 展开时整个窗口一起移动，不收起；按整个窗口尺寸夹在屏内
+                        val (w, hh) = screen(); val r = root
+                        val rw = r?.width?.takeIf { it > 0 } ?: ball.width; val rh = r?.height?.takeIf { it > 0 } ?: ball.height
+                        val nx = (ox + dx.toInt()).coerceIn(0, maxOf(0, w - rw)); val ny = (oy + dy.toInt()).coerceIn(0, maxOf(0, hh - rh))
+                        if (nx != lp.x || ny != lp.y) { lp.x = nx; lp.y = ny; r?.let { runCatching { wm.updateViewLayout(it, lp) } } }
                     }
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     if (!moved) { if (e.action == MotionEvent.ACTION_UP) setExpanded(!expanded) }
                     else {
-                        // 贴边：松手后吸到最近的左/右边
+                        // 贴边：按悬浮球中心吸到最近的左/右边
                         val (w, _) = screen()
-                        dockRight = lp.x + ball.width / 2 > w / 2
+                        val rw = root?.width?.takeIf { it > 0 } ?: ball.width
+                        val cx = lp.x + if (dockRight) rw - ball.width / 2 else ball.width / 2
+                        dockRight = cx > w / 2
                         homeY = lp.y
                         root?.gravity = if (dockRight) Gravity.END else Gravity.START
                         Prefs.main(applicationContext).edit().putBoolean("lf_right", dockRight).putInt("lf_y", homeY).apply()
-                        place(true)
+                        root?.post { place(true) }
                     }
+                    scheduleHide()
                     true
                 }
                 else -> false
@@ -195,12 +235,42 @@ class LiveFloatService : Service() {
         }
     }
 
+    // 收起几秒后半隐藏到屏幕边缘，碰一下恢复
+    private var peeked = false
+    private val hideRun = Runnable { peek() }
+    private fun autoHide() = Prefs.main(applicationContext).getBoolean("lf_autohide", true)
+    private fun cancelHide() = h.removeCallbacks(hideRun)
+    private fun scheduleHide() { cancelHide(); if (!expanded && autoHide()) h.postDelayed(hideRun, 3000) }
+    private fun peek() {
+        val r = root ?: return
+        if (expanded || peeked) return
+        peeked = true
+        val (w, _) = screen()
+        val bw = ball.width
+        val tx = if (dockRight) w - bw / 2 else -bw / 2
+        dockAnim?.cancel()
+        val x0 = lp.x
+        dockAnim = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 240; interpolator = android.view.animation.DecelerateInterpolator()
+            addUpdateListener { a -> lp.x = (x0 + (tx - x0) * (a.animatedValue as Float)).toInt(); if (root != null) runCatching { wm.updateViewLayout(r, lp) } }
+            start()
+        }
+        ball.animate().alpha(ballAlpha * 0.55f).setDuration(240).start()
+    }
+    private fun unpeek() {
+        peeked = false
+        ball.animate().alpha(ballAlpha).setDuration(150).start()
+        place(true)
+    }
+
     private fun setExpanded(on: Boolean) {
         expanded = on
+        cancelHide(); if (peeked) { peeked = false; ball.alpha = ballAlpha }
         panel.visibility = if (on) View.VISIBLE else View.GONE
         panel.alpha = 0f; if (on) panel.animate().alpha(1f).setDuration(160).start()
         refresh(true)
         root?.post { place(false) }
+        scheduleHide()
     }
 
     /** 屏幕可用尺寸（像素） */
@@ -322,9 +392,10 @@ class LiveFloatService : Service() {
         val cpu = ss?.cpu?.takeIf { it >= 0 }?.let { "%.0f%%".format(it) } ?: "—"
         val temp = ss?.temp?.takeIf { it > 0 }?.let { "%.0f℃".format(it) } ?: if (bat > 0) "电池%.0f℃".format(bat / 10f) else "—"
         val rss = ss?.rssMb?.takeIf { it > 0 }?.let { "${it}M" } ?: "—"
-        val lowMem = if (mi.lowMemory) " ⚠低内存" else ""
-        return "CPU $cpu  温度 $temp\n内存 ${avail}/${total}M 可用$lowMem\n变声进程 $rss  断流 ${ss?.underruns ?: 0}" +
-            if (ss == null) "\n（开始变声后显示 CPU 与进程数据）" else ""
+        // 一行显示：段内不断行（不换行空格），宽度不够时才在段与段之间换行
+        val segs = mutableListOf("CPU $cpu", temp, "内存 %.1f/%.1fG".format(avail / 1024f, total / 1024f) + if (mi.lowMemory) " ⚠" else "")
+        if (ss != null) { segs += "进程 $rss"; segs += "断流 ${ss.underruns}" } else segs += "未开始变声"
+        return segs.joinToString("  ") { it.replace(' ', '\u00A0') }
     }
 
     private fun remove() {

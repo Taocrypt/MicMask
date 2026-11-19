@@ -22,8 +22,8 @@ object SoundBoard {
     const val PACK_FX = "效果包"
     const val PACK_LOCAL = "本地"
     /** 内置效果包版本：资源里 assets/sfx 里的 mp3 变了就加 1，会补装新增的 */
-    private const val BUILTIN_VER = 1
-    private val ORDER = listOf("大笑", "鼓掌", "欢呼", "唏嘘", "哇哦", "叮", "失败", "冷笑话", "乌鸦")
+    private const val BUILTIN_VER = 2
+    private val ORDER = listOf("大笑", "鼓掌", "欢呼", "唏嘘", "哇哦", "叮", "失败", "冷笑话", "乌鸦", "答错", "胜利", "打鼓", "喇叭", "爆炸", "疑问", "惊讶", "叹气", "心跳", "巴掌", "吞口水", "口哨", "猫叫", "狗叫", "金币")
 
     fun isFx(s: Sound) = s.pack != PACK_LOCAL
 
@@ -86,14 +86,14 @@ object SoundBoard {
                     } else if (AUDIO_EXT.containsMatchIn(base)) {
                         val f = File(work, "${files.size}_" + safe(base))
                         f.outputStream().use { o -> val b = ByteArray(1 shl 16); while (true) { val n = z.read(b); if (n < 0) break; total += n
-                            if (total > 300L shl 20) throw java.io.IOException("效果包过大"); o.write(b, 0, n) } }
+                            if (total > 300L shl 20) throw java.io.IOException("音效包过大"); o.write(b, 0, n) } }
                         files[base] = f
                     }
                 }
             }
-            val m = manifest ?: throw IllegalArgumentException("效果包缺少 manifest.json")
+            val m = manifest ?: throw IllegalArgumentException("音效包缺少 manifest.json")
             if (m.optString("format", "mim3") != "mim3") throw IllegalArgumentException("不是 mim3 声明文件")
-            if (m.optInt("version", 1) > 1) throw IllegalArgumentException("效果包版本过新，请更新 MicMask")
+            if (m.optInt("version", 1) > 1) throw IllegalArgumentException("音效包版本过新，请更新 MicMask")
             val group = safe(m.optString("group").ifBlank { m.optString("name").ifBlank { fallbackName } })
             require(group != PACK_LOCAL) { "分组名不能叫「本地」" }
             val list = m.optJSONArray("sounds")
@@ -105,9 +105,9 @@ object SoundBoard {
                     pairs += f to o.optString("name").ifBlank { fn.substringBeforeLast('.') }
                 }
             } else files.forEach { (k, f) -> pairs += f to k.substringBeforeLast('.') }
-            require(pairs.isNotEmpty()) { "效果包里没有音频" }
+            require(pairs.isNotEmpty()) { "音效包里没有音频" }
             val out = pairs.mapNotNull { (f, n) -> runCatching { importFile(ctx, f, group, n) }.onFailure { L.e("mim3 解码 $n 失败", it) }.getOrNull() }
-            require(out.isNotEmpty()) { "效果包里的音频都无法解码" }
+            require(out.isNotEmpty()) { "音效包里的音频都无法解码" }
             runCatching {
                 val meta = org.json.JSONObject().put("group", group).put("author", m.optString("author")).put("description", m.optString("description"))
                     .put("created", m.optString("created")).put("version", m.optInt("version", 1))
@@ -150,6 +150,13 @@ object SoundBoard {
         val m = org.json.JSONObject().put("format", "mim3").put("version", 1).put("group", g).put("author", author.trim())
             .put("description", desc.trim()).put("created", java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date()))
             .put("app", "MicMask " + BuildConfig.VERSION_NAME).put("sounds", arr)
+        val name = writeMim3(ctx, g, m, entries.map { (fn, u) -> fn to { z: java.io.OutputStream -> ctx.contentResolver.openInputStream(u)!!.use { it.copyTo(z) }; Unit } })
+        L.i("mim3 打包 分组=$g 作者=$author 共 ${entries.size} 个 → 下载/MicMask/$name")
+        return "下载/MicMask/$name"
+    }
+
+    /** 写 .mim3（zip）到 下载/MicMask/，返回实际文件名 */
+    private fun writeMim3(ctx: Context, g: String, m: org.json.JSONObject, entries: List<Pair<String, (java.io.OutputStream) -> Unit>>): String {
         var name = "$g.mim3"
         val cv = android.content.ContentValues().apply {
             put(android.provider.MediaStore.Downloads.DISPLAY_NAME, name)
@@ -161,18 +168,45 @@ object SoundBoard {
             ctx.contentResolver.openOutputStream(out)!!.use { os ->
                 java.util.zip.ZipOutputStream(os).use { z ->
                     z.putNextEntry(java.util.zip.ZipEntry("manifest.json")); z.write(m.toString(1).toByteArray()); z.closeEntry()
-                    for ((fn, u) in entries) {
-                        z.putNextEntry(java.util.zip.ZipEntry(fn))
-                        ctx.contentResolver.openInputStream(u)!!.use { it.copyTo(z) }
-                        z.closeEntry()
-                    }
+                    for ((fn, w) in entries) { z.putNextEntry(java.util.zip.ZipEntry(fn)); w(z); z.closeEntry() }
                 }
             }
         } catch (t: Throwable) { runCatching { ctx.contentResolver.delete(out, null, null) }; throw t }
         runCatching { ctx.contentResolver.query(out, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) name = c.getString(0) } }
-        L.i("mim3 打包 分组=$g 作者=$author 共 ${entries.size} 个 → 下载/MicMask/$name")
+        return name
+    }
+
+    /** 把已导入的一个分组导出成 .mim3（音频以 48k 单声道 WAV 存放），返回路径 */
+    fun exportGroup(ctx: Context, group: String, author: String = "", desc: String = ""): String {
+        val list = list(ctx).filter { it.pack == group }
+        require(list.isNotEmpty()) { "这个分组是空的" }
+        val info = packInfo(ctx, group)
+        val arr = org.json.JSONArray()
+        val used = HashSet<String>()
+        val entries = list.map { so ->
+            var fn = safe(so.name) + ".wav"; var k = 2
+            while (!used.add(fn.lowercase())) fn = safe(so.name) + " ($k).wav".also { k++ }
+            arr.put(org.json.JSONObject().put("file", fn).put("name", so.name))
+            fn to { z: java.io.OutputStream ->
+                val n = so.file.length().toInt()
+                val hd = java.nio.ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
+                hd.put("RIFF".toByteArray()).putInt(36 + n).put("WAVE".toByteArray()).put("fmt ".toByteArray()).putInt(16)
+                    .putShort(1).putShort(1).putInt(SR).putInt(SR * 2).putShort(2).putShort(16).put("data".toByteArray()).putInt(n)
+                z.write(hd.array()); so.file.inputStream().use { it.copyTo(z) }; Unit
+            }
+        }
+        val g = if (group == PACK_FX) "常用音效" else group
+        val m = org.json.JSONObject().put("format", "mim3").put("version", 1).put("group", g)
+            .put("author", author.ifBlank { info?.author.orEmpty() }).put("description", desc.ifBlank { info?.description.orEmpty() })
+            .put("created", java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date()))
+            .put("app", "MicMask " + BuildConfig.VERSION_NAME).put("sounds", arr)
+        val name = writeMim3(ctx, safe(g), m, entries)
+        L.i("mim3 导出 分组=$group 共 ${entries.size} 个 → 下载/MicMask/$name")
         return "下载/MicMask/$name"
     }
+
+    /** 音效包里已有的分组（用于「添加音效」选择分组） */
+    fun fxGroups(ctx: Context): List<String> = list(ctx).map { it.pack }.filter { it != PACK_LOCAL }.distinct()
 
     fun audioExt(ctx: Context, uri: Uri): String {
         val n = runCatching { ctx.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0) else null } }.getOrNull().orEmpty()

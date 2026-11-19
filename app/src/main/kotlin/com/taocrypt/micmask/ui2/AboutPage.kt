@@ -141,6 +141,9 @@ fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit =
                     else -> Updater.check(ctx)
                 }
             })
+            var beta by remember { mutableStateOf(Updater.betaChannel(ctx)) }
+            SwitchPreference(checked = beta, onCheckedChange = { beta = it; Updater.setBetaChannel(ctx, it); Updater.check(ctx) }, title = "接收测试版",
+                summary = if (beta) "测试版通道：alpha / beta / rc 和正式版都会推送，新功能先到，可能不稳定" else "稳定版通道：只推送正式版")
             SwitchPreference(checked = auto, onCheckedChange = { auto = it; Updater.setAutoCheck(ctx, it) }, title = "启动时检查更新",
                 summary = "关闭后仍会检查强制更新")
             ArrowPreference(title = "下载镜像", summary = "GitHub 不通时自动测速选择镜像", onClick = openMirrors)

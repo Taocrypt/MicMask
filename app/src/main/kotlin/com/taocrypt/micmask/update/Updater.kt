@@ -46,7 +46,10 @@ import kotlin.coroutines.coroutineContext
 object Updater {
     const val REPO = "https://github.com/Taocrypt/MicMask"
     const val RELEASES = "$REPO/releases"
-    private const val API = "https://api.github.com/repos/Taocrypt/MicMask/releases/latest"
+    private const val API_LIST = "https://api.github.com/repos/Taocrypt/MicMask/releases?per_page=20"
+    /** 滚动发布 update-feed 里的通道清单：stable.json（只含正式版）/ beta.json（含测试版） */
+    const val FEED_TAG = "update-feed"
+    private fun feedJson(beta: Boolean) = "$RELEASES/download/$FEED_TAG/${if (beta) "beta" else "stable"}.json"
     private const val UPDATE_JSON = "$RELEASES/latest/download/update.json"
     private const val MIRROR_LIST_API = "https://git.mxg.pub/api/github/list"
     val BUILTIN_MIRRORS = listOf(
@@ -89,6 +92,14 @@ object Updater {
     fun userMirrors(ctx: Context): List<String> =
         Prefs.main(ctx).getString("upd_mirrors", "")!!.lines().map { it.trim() }.filter { it.isNotEmpty() }
     fun setUserMirrors(ctx: Context, l: List<String>) = Prefs.main(ctx).edit().putString("upd_mirrors", l.joinToString("\n")).apply()
+    /** 测试版 = 带 alpha/beta/rc 的版本 */
+    fun isPre(v: String) = Regex("(?i)(alpha|beta|rc)").containsMatchIn(v)
+    /** 更新通道：true=测试版（收到所有版本）false=稳定版；默认跟随当前安装的版本 */
+    fun betaChannel(ctx: Context) = Prefs.main(ctx).getBoolean("upd_beta", isPre(BuildConfig.VERSION_NAME))
+    fun setBetaChannel(ctx: Context, on: Boolean) {
+        Prefs.main(ctx).edit().putBoolean("upd_beta", on).apply()
+        if (_state.value !is State.Downloading) _state.value = State.Idle
+    }
     fun autoCheck(ctx: Context) = Prefs.main(ctx).getBoolean("upd_auto", true)
     fun setAutoCheck(ctx: Context, on: Boolean) = Prefs.main(ctx).edit().putBoolean("upd_auto", on).apply()
     private fun skipped(ctx: Context) = Prefs.main(ctx).getString("upd_skip", "")
@@ -200,23 +211,36 @@ object Updater {
     }
 
     private suspend fun fetchRelease(ctx: Context): Release {
+        val beta = betaChannel(ctx)
+        val noStable = Exception("还没有发布稳定版，可在设置里切到测试版")
         var last: Exception = Exception("网络不通")
         try {
-            val r = fromApi(JSONObject(getText(API, 8000, "application/vnd.github+json")))
-            if (r.tag.isNotEmpty()) return r
+            val arr = JSONArray(getText(API_LIST, 8000, "application/vnd.github+json"))
+            val rs = (0 until arr.length()).map { arr.getJSONObject(it) }
+                .filter { !it.optBoolean("draft") && it.optString("tag_name") != FEED_TAG }
+                .map { fromApi(it) }.filter { it.tag.isNotEmpty() && (beta || !isPre(it.tag)) }
+            val best = rs.maxWithOrNull { a, b -> if (isNewer(a.tag, b.tag)) 1 else if (isNewer(b.tag, a.tag)) -1 else 0 }
+            if (best != null) return best
+            if (arr.length() > 0) throw if (beta) Exception("暂无公开发布版本") else noStable
+            throw Exception("暂无公开发布版本")
         } catch (e: HttpFail) {
-            if (e.code == 404) throw Exception("暂无公开发布版本")
             last = if (e.code == 403 || e.code == 429) Exception("GitHub 请求太频繁") else e
-        } catch (e: Exception) { last = e }
-        L.i("更新：GitHub API 不通（${last.message}），改走 update.json")
+        } catch (e: org.json.JSONException) { last = e
+        } catch (e: java.io.IOException) { last = e }
+        L.i("更新：GitHub API 不通（${last.message}），改走通道清单（${if (beta) "测试版" else "稳定版"}）")
+        // 测试版：先读通道清单，旧发布没有清单时退回 latest 的 update.json
+        val urls = listOf(feedJson(beta)) + if (beta) listOf(UPDATE_JSON) else emptyList()
+        fun parse(t: String) = fromUpdateJson(JSONObject(t)).also { if (it.tag.isEmpty()) throw Exception("清单为空") }
         val users = userMirrors(ctx)
-        for (m in users + listOf<String?>(null)) {
-            runCatching { return fromUpdateJson(JSONObject(getText(mirrorUrl(m, UPDATE_JSON), 6000))) }.onFailure { last = it as? Exception ?: last }
+        for (u in urls) for (m in users + listOf<String?>(null)) {
+            try { return parse(getText(mirrorUrl(m, u), 6000)) }
+            catch (e: HttpFail) { if (e.code == 404 && !beta) last = noStable else last = e }
+            catch (e: Exception) { last = e }
         }
         if (mode(ctx) == 1) throw last
         val ms = mirrorCandidates(ctx)
-        return firstOf(ms.map { m -> suspend { fromUpdateJson(JSONObject(getText(mirrorUrl(m, UPDATE_JSON), 8000))) } })
-            ?: throw Exception("GitHub 和镜像都连不上")
+        for (u in urls) firstOf(ms.map { m -> suspend { parse(getText(mirrorUrl(m, u), 8000)) } })?.let { return it }
+        throw if (last === noStable) noStable else Exception("GitHub 和镜像都连不上")
     }
 
     /** 检查更新；[silent]=启动时自动检查：只在有新版且没被跳过（或强制）时弹框 */

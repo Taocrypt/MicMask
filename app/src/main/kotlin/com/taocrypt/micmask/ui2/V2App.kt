@@ -222,7 +222,7 @@ fun V2App(vm: MainViewModel) {
                     "about" -> SubPage("关于", { sub = null }) { AboutPage(vm, { sub = "logs" }, { sub = "mirrors" }) }
                     "mirrors" -> SubPage("下载镜像", { sub = "about" }) { com.taocrypt.micmask.update.MirrorPage() }
                     "logs" -> SubPage("日志", { sub = null }) { LogPage(vm) }
-                    "mim3" -> SubPage("制作效果包", { sub = null }) { Mim3Page(vm, st) }
+                    "mim3" -> SubPage("制作音效包", { sub = null }) { Mim3Page(vm, st) }
                     else -> MainTabs(vm, st, ui) { sub = it }
                 }
             }
@@ -676,7 +676,7 @@ private fun LazyListScope.aiPage(vm: MainViewModel, st: UiState, open: (String) 
     item { SmallTitle("更多") }
     item {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
-            ArrowPreference(title = "文本转语音（TTS）", summary = "输入文字合成语音，可发到 QQ", onClick = { open("tts") })
+            ArrowPreference(title = "文本转语音（TTS）", summary = "输入文字合成语音，基于 GPT-SoVITS 合成", onClick = { open("tts") })
         }
     }
 }
@@ -926,16 +926,21 @@ private fun LazyListScope.soundBoardPage(vm: MainViewModel, st: UiState, open: (
     item(key = "sfx_head") { SfxHeader(vm, st, open) }
     val fx = st.sfxTab == 0
     val mine = st.sounds.filter { com.taocrypt.micmask.SoundBoard.isFx(it) == fx }
-    item(key = "sfx_title_$fx") { SectionHead(if (fx) "效果包" else "本地音频", vm, st) }
+    item(key = "sfx_title_$fx") { SectionHead(if (fx) "音效包" else "本地音频", vm, st) }
     if (mine.isEmpty()) item(key = "sfx_empty") {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
-            Text(if (fx) "效果包是空的。导入 .mim3 效果包、自己制作一个，或从下方仓库下载。" else "还没有本地音频。导入手机里的音乐或录音。", Modifier.padding(16.dp), color = Summary)
+            Text(if (fx) "音效包是空的。添加 mp3 音效、导入 .mim3 音效包，或从下方仓库下载。" else "还没有本地音频。导入手机里的音乐或录音。", Modifier.padding(16.dp), color = Summary)
         }
     }
     mine.groupBy { it.pack }.forEach { (pack, list) ->
-        if (fx && pack != com.taocrypt.micmask.SoundBoard.PACK_FX) item(key = "sfx_pack_$pack") {
+        if (fx) item(key = "sfx_pack_$pack") {
             val info = remember(pack, list.size) { vm.packInfo(pack) }
-            SmallTitle(pack + (info?.author?.takeIf { it.isNotBlank() }?.let { " · by $it" } ?: ""))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SmallTitle((if (pack == com.taocrypt.micmask.SoundBoard.PACK_FX) "常用音效" else pack) +
+                    (info?.author?.takeIf { it.isNotBlank() }?.let { " · by $it" } ?: ""), Modifier.weight(1f))
+                Text("导出 .mim3", Modifier.padding(end = 24.dp).clip(RoundedCornerShape(10.dp)).clickable(enabled = st.sfxBusy.isEmpty()) { vm.exportGroup(pack) }
+                    .padding(horizontal = 8.dp, vertical = 4.dp), fontSize = 13.sp, color = MiuixTheme.colorScheme.primary)
+            }
             info?.description?.takeIf { it.isNotBlank() }?.let { Text(it, Modifier.padding(horizontal = 28.dp).padding(bottom = 4.dp), fontSize = 12.sp, color = Summary) }
         }
         item(key = "sfx_grid_${pack}_${st.gridLayout}") { SoundTiles(vm, st, list) }
@@ -973,7 +978,7 @@ private fun SfxTabs(vm: MainViewModel, st: UiState) {
     val primary = MiuixTheme.colorScheme.primary
     Row(Modifier.fillMaxWidth().padding(PagePad).padding(top = 4.dp, bottom = 4.dp)
         .clip(RoundedCornerShape(16.dp)).background(MiuixTheme.colorScheme.secondaryContainer).padding(4.dp)) {
-        listOf("效果包", "本地音频").forEachIndexed { i, n ->
+        listOf("音效包", "本地音频").forEachIndexed { i, n ->
             val sel = st.sfxTab == i
             val bg by animateColorAsState(if (sel) primary else Color.Transparent, tween(260), label = "sfxseg$i")
             Box(Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).background(bg).clickable { vm.setSfxTab(i) }.padding(vertical = 10.dp),
@@ -990,6 +995,31 @@ private fun SfxHeader(vm: MainViewModel, st: UiState, open: (String) -> Unit) {
     LaunchedEffect(Unit) { vm.refreshSounds(); if (st.repoSounds.isEmpty() && st.repoUrl.isNotBlank() && !st.repoLoading) vm.refreshRepo() }
     val fxPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris -> if (uris.isNotEmpty()) vm.importSounds(uris, fx = true) }
     val localPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris -> if (uris.isNotEmpty()) vm.importSounds(uris, fx = false) }
+    var pendingAdd by remember { mutableStateOf<List<android.net.Uri>>(emptyList()) }
+    val addPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris -> if (uris.isNotEmpty()) pendingAdd = uris }
+    if (pendingAdd.isNotEmpty()) {
+        val groups = remember { vm.fxGroups() }
+        var g by remember { mutableStateOf(groups.firstOrNull { it != com.taocrypt.micmask.SoundBoard.PACK_FX } ?: "我的音效") }
+        WindowDialog(show = true, title = "添加 ${pendingAdd.size} 个音效到分组", onDismissRequest = { pendingAdd = emptyList() }) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (groups.isNotEmpty()) Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    groups.forEach { x ->
+                        val label = if (x == com.taocrypt.micmask.SoundBoard.PACK_FX) "常用音效" else x
+                        TextButton(label, onClick = { g = x }, colors = if (g == x) ButtonDefaults.textButtonColorsPrimary() else ButtonDefaults.textButtonColors())
+                    }
+                }
+                TextField(value = if (g == com.taocrypt.micmask.SoundBoard.PACK_FX) "常用音效" else g,
+                    onValueChange = { g = it.take(40) }, label = "分组名（填新名字即新建分组）", singleLine = true)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton("取消", onClick = { pendingAdd = emptyList() }, modifier = Modifier.weight(1f))
+                    TextButton("添加", onClick = {
+                        val target = if (g == "常用音效") com.taocrypt.micmask.SoundBoard.PACK_FX else g
+                        vm.importToGroup(pendingAdd, target); pendingAdd = emptyList()
+                    }, enabled = g.isNotBlank(), modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary())
+                }
+            }
+        }
+    }
     val fx = st.sfxTab == 0
     Card(Modifier.fillMaxWidth().padding(PagePad).padding(top = 4.dp, bottom = 8.dp)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1007,12 +1037,16 @@ private fun SfxHeader(vm: MainViewModel, st: UiState, open: (String) -> Unit) {
                 top.yukonga.miuix.kmp.basic.Switch(checked = st.sfxLoop, onCheckedChange = { vm.setSfxLoop(it) })
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(if (st.sfxBusy.isNotEmpty()) st.sfxBusy else if (fx) "导入效果包 (.mim3)" else "导入本地音频",
+                TextButton(if (st.sfxBusy.isNotEmpty()) st.sfxBusy else if (fx) "导入音效包 (.mim3)" else "导入本地音频",
                     onClick = { if (fx) fxPicker.launch(arrayOf("*/*")) else localPicker.launch(arrayOf("audio/*")) },
                     enabled = st.sfxBusy.isEmpty(), modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary())
                 TextButton("全部停止", onClick = { vm.stopPreview(); vm.stopSound() }, enabled = st.sfxPlaying != null || st.sfxPreview != null, modifier = Modifier.weight(1f))
             }
-            if (fx) TextButton("制作效果包（自定义分组，多个 mp3 打包成 .mim3）", onClick = { open("mim3") }, enabled = st.sfxBusy.isEmpty(), modifier = Modifier.fillMaxWidth())
+            if (fx) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton("添加音效 (mp3)", onClick = { addPicker.launch(arrayOf("audio/*")) }, enabled = st.sfxBusy.isEmpty(), modifier = Modifier.weight(1f))
+                TextButton("制作 .mim3", onClick = { open("mim3") }, enabled = st.sfxBusy.isEmpty(), modifier = Modifier.weight(1f))
+            }
+            if (fx) Text("添加的音效可自选分组；每个分组标题右侧「导出 .mim3」可打包分享。", fontSize = 12.sp, color = Summary)
         }
     }
 }
@@ -1054,6 +1088,33 @@ private fun SoundTiles(vm: MainViewModel, st: UiState, list: List<com.taocrypt.m
 
 // ------------------------------------------------------------------ 设置
 
+/** 悬浮窗外观：悬浮球大小/透明度、控制窗大小/透明度（悬浮窗监听配置变化即时重建） */
+@Composable
+private fun FloatLookSettings() {
+    val ctx = LocalContext.current
+    val sp = remember { com.taocrypt.micmask.Prefs.main(ctx) }
+    var ball by remember { mutableStateOf(sp.getInt("lf_ball_dp", 50).toFloat()) }
+    var ballA by remember { mutableStateOf(sp.getFloat("lf_ball_alpha", 1f)) }
+    var scale by remember { mutableStateOf(sp.getFloat("lf_panel_scale", 1f)) }
+    var panelA by remember { mutableStateOf(sp.getFloat("lf_panel_alpha", 1f)) }
+    Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+        @Composable fun row(t: String, v: String, value: Float, range: ClosedFloatingPointRange<Float>, on: (Float) -> Unit, done: () -> Unit) {
+            Row(Modifier.padding(top = 6.dp)) { Text(t, Modifier.weight(1f), fontSize = 14.sp); Text(v, fontSize = 13.sp, color = Summary) }
+            Slider(value = value, onValueChange = on, valueRange = range, onValueChangeFinished = done)
+        }
+        row("悬浮球大小", "${ball.roundToInt()} dp", ball, 32f..80f, { ball = it.roundToInt().toFloat() }) { sp.edit().putInt("lf_ball_dp", ball.roundToInt()).apply() }
+        row("悬浮球不透明度", "${(ballA * 100).roundToInt()}%", ballA, 0.2f..1f, { ballA = (it * 20).roundToInt() / 20f }) { sp.edit().putFloat("lf_ball_alpha", ballA).apply() }
+        row("控制窗大小", "${(scale * 100).roundToInt()}%", scale, 0.7f..1.5f, { scale = (it * 20).roundToInt() / 20f }) { sp.edit().putFloat("lf_panel_scale", scale).apply() }
+        row("控制窗不透明度", "${(panelA * 100).roundToInt()}%", panelA, 0.3f..1f, { panelA = (it * 20).roundToInt() / 20f }) { sp.edit().putFloat("lf_panel_alpha", panelA).apply() }
+        var ah by remember { mutableStateOf(sp.getBoolean("lf_autohide", true)) }
+        Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) { Text("收起后自动贴边半隐藏", fontSize = 14.sp); Text("3 秒不操作，悬浮球缩进屏幕边缘一半", fontSize = 12.sp, color = Summary) }
+            Switch(checked = ah, onCheckedChange = { ah = it; sp.edit().putBoolean("lf_autohide", it).apply() })
+        }
+        Text("控制窗右下角「⤡」长按后拖动也能直接缩放。", fontSize = 12.sp, color = Summary, modifier = Modifier.padding(vertical = 6.dp))
+    }
+}
+
 private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (String) -> Unit) {
     item { SmallTitle("变声目标") }
     item {
@@ -1066,6 +1127,7 @@ private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (St
                 summary = "三种模式通用：变声后的声音同时送到耳机（外放会啸叫，请戴耳机）")
             SwitchPreference(checked = st.liveFloat, onCheckedChange = { vm.setLiveFloat(it) }, title = "悬浮窗快捷切换",
                 summary = "在游戏/QQ 上切换模式、预设，查看 CPU、温度、内存")
+            if (st.liveFloat) FloatLookSettings()
         }
     }
     item { SmallTitle("外观与权限") }
@@ -1303,7 +1365,7 @@ private fun WhitelistPage(vm: MainViewModel) {
 }
 
 
-// ------------------------------------------------------------------ 制作效果包
+// ------------------------------------------------------------------ 制作音效包
 
 @Composable
 private fun Mim3Page(vm: MainViewModel, st: UiState) {
