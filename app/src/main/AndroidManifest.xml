@@ -11,6 +11,7 @@
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING" />
     <!-- 悬浮小窗：让「一键播放待发语音」浮在 QQ 上面，不用来回切界面 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
@@ -48,6 +49,12 @@
         </activity>
 
         <!-- QQ 语音代发：监听 QQ 进入录音态，自动外放合成好的语音 -->
+        <!-- 应用内更新下载：前台服务保证通知常驻、进度实时刷新 -->
+        <service
+            android:name=".update.UpdateService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <service
             android:name=".QqWatchService"
             android:exported="true"

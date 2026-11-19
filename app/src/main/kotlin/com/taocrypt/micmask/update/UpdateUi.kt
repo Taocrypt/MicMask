@@ -67,13 +67,23 @@ fun UpdateDialog() {
     val ctx = LocalContext.current
     val show by Updater.dialog.collectAsState()
     val st by Updater.state.collectAsState()
+    val forcedRel by Updater.forced.collectAsState()
     val r = when (val s = st) {
         is Updater.State.Newer -> s.r
         is Updater.State.Downloading -> s.r
         is Updater.State.Downloaded -> s.r
-        else -> null
+        else -> forcedRel  // 强制更新：下载失败后对话框也不能消失
     }
-    if (!show || r == null) return
+    // 通知权限（Android 13+）：没有就只在 App 内显示进度，不影响下载
+    val notifPerm = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { _ -> r?.let { Updater.download(ctx, it) } }
+    val startDl: (Updater.Release) -> Unit = { rel ->
+        if (android.os.Build.VERSION.SDK_INT >= 33 && androidx.core.content.ContextCompat.checkSelfPermission(ctx,
+                android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
+            notifPerm.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        else Updater.download(ctx, rel)
+    }
+    if (r == null || !(show || forcedRel != null)) return
     val forced = r.forces()
     val close = { if (!forced) Updater.dialog.value = false }
     WindowDialog(show = true, title = "发现新版本 ${r.tag}",
@@ -102,10 +112,16 @@ fun UpdateDialog() {
                     TextButton("安装", onClick = { Updater.install(ctx, s.file) }, modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.textButtonColorsPrimary())
                 }
-                else -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (!forced) TextButton("跳过此版", onClick = { Updater.skip(ctx, r.tag) }, modifier = Modifier.weight(1f))
-                    TextButton("更新", onClick = { Updater.download(ctx, r) }, modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.textButtonColorsPrimary())
+                else -> Column {
+                    (st as? Updater.State.Fail)?.let {
+                        Text("下载失败：${it.msg}", fontSize = 12.sp, color = MiuixTheme.colorScheme.error)
+                        Spacer(Modifier.height(8.dp))
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (!forced) TextButton("跳过此版", onClick = { Updater.skip(ctx, r.tag) }, modifier = Modifier.weight(1f))
+                        TextButton(if (st is Updater.State.Fail) "重试" else "更新", onClick = { startDl(r) }, modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.textButtonColorsPrimary())
+                    }
                 }
             }
         }

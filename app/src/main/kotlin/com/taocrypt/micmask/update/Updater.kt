@@ -53,7 +53,8 @@ object Updater {
         "https://gh-proxy.com", "https://fastgit.cc", "https://ghfile.geekertao.top", "https://tvv.tw", "https://git.yylx.win",
     )
     private const val CH = "micmask_update"
-    private const val NID = 7301
+    const val NID = 7301
+    private const val NID_DONE = 7302
 
     // ---------------------------------------------------------------- 数据
     data class Asset(val name: String, val url: String, val size: Long)
@@ -77,6 +78,8 @@ object Updater {
     val state: StateFlow<State> = _state
     /** 是否要弹更新对话框（启动自动检查发现新版、或用户点了更新） */
     val dialog = MutableStateFlow(false)
+    /** 当前必须安装的强制更新（下载失败/取消后对话框也不消失） */
+    val forced = MutableStateFlow<Release?>(null)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var dlJob: Job? = null
 
@@ -226,6 +229,7 @@ object Updater {
                 val r = fetchRelease(ctx.applicationContext)
                 if (isNewer(r.tag, BuildConfig.VERSION_NAME)) {
                     L.i("更新：发现 ${r.tag}${if (r.forces()) "（强制）" else ""}")
+                    if (r.forces()) forced.value = r
                     if (!silent || r.forces() || (autoCheck(ctx) && skipped(ctx) != r.tag)) dialog.value = true
                     State.Newer(r)
                 } else State.Latest(r.tag)
@@ -295,7 +299,9 @@ object Updater {
             dir.listFiles()?.filter { it.name != asset.name && it.name != asset.name + ".part" }?.forEach { it.delete() }
             val file = File(dir, asset.name)
             if (asset.size > 0 && file.length() == asset.size) { done(app, r, file); return@launch }
+            noteText = Triple("", 0L, asset.size); noteBps = 0.0
             _state.value = State.Downloading(r, 0, asset.size, "测速中…", 0.0)
+            UpdateService.start(app)
             var err = "下载失败"
             for (b in plan(app, asset.url)) {
                 ensureActive()
@@ -310,13 +316,14 @@ object Updater {
                 } catch (e: kotlinx.coroutines.CancellationException) { throw e
                 } catch (e: Exception) { err = "$name：${e.message}"; L.w("更新：$err，换下一个") }
             }
-            cancelNote(app)
+            UpdateService.stop(app); cancelNote(app)
             _state.value = State.Fail(err)
+            failNote(app, r.tag, err)
         }
     }
 
     fun cancelDownload(ctx: Context) {
-        dlJob?.cancel(); dlJob = null; cancelNote(ctx)
+        dlJob?.cancel(); dlJob = null; UpdateService.stop(ctx.applicationContext); cancelNote(ctx)
         (_state.value as? State.Downloading)?.let { _state.value = State.Newer(it.r) }
     }
 
@@ -338,7 +345,7 @@ object Updater {
                     val n = ins.read(buf); if (n < 0) break
                     out.write(buf, 0, n); got += n
                     val now = System.nanoTime()
-                    if (now - lastUi > 300_000_000L) { lastUi = now; onProg(got, total, got / ((now - t0) / 1e9).coerceAtLeast(1e-3)) }
+                    if (now - lastUi > 500_000_000L) { lastUi = now; onProg(got, total, got / ((now - t0) / 1e9).coerceAtLeast(1e-3)) }
                 }
             } }
             if (total > 0 && got != total) throw Exception("没下完")
@@ -348,6 +355,7 @@ object Updater {
 
     private fun done(ctx: Context, r: Release, f: File) {
         _state.value = State.Downloaded(r, f)
+        UpdateService.stop(ctx)
         doneNote(ctx, r.tag)
         install(ctx, f)
     }
@@ -378,16 +386,46 @@ object Updater {
         Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP).putExtra("open_update", true),
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 
-    private fun progressNote(ctx: Context, tag: String, got: Long, total: Long, src: String) = runCatching {
+    private var noteText = Triple("", 0L, 0L)  // 来源, 已下, 总量
+    private var noteBps = 0.0
+
+    private fun cancelIntent(ctx: Context) = PendingIntent.getService(ctx, 1,
+        Intent(ctx, UpdateService::class.java).setAction(UpdateService.ACTION_CANCEL), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+
+    /** 进度通知（常驻、不可划掉），前台服务和进度刷新共用 */
+    fun progressNotification(ctx: Context): android.app.Notification {
+        nm(ctx)
+        val tag = (state.value as? State.Downloading)?.r?.tag ?: ""
+        val (src, got, total) = noteText
         val pct = if (total > 0) (got * 100 / total).toInt() else 0
-        nm(ctx).notify(NID, NotificationCompat.Builder(ctx, CH).setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("正在下载 MicMask $tag").setContentText("$pct% · $src").setOnlyAlertOnce(true).setOngoing(true)
-            .setProgress(100, pct, total <= 0).setContentIntent(openApp(ctx)).build())
+        val text = if (got <= 0) "准备下载…" else "$pct% · ${fmtMb(got)}/${fmtMb(total)} · ${fmtSpeed(noteBps)}" + if (src.isNotEmpty()) " · $src" else ""
+        return NotificationCompat.Builder(ctx, CH).setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentTitle("正在下载 MicMask $tag").setContentText(text)
+            .setOnlyAlertOnce(true).setOngoing(true).setSilent(true).setShowWhen(false)
+            .setCategory(NotificationCompat.CATEGORY_PROGRESS)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+            .setProgress(100, pct, total <= 0 || got <= 0).setContentIntent(openApp(ctx))
+            .addAction(0, "取消", cancelIntent(ctx)).build()
     }
 
+    private fun progressNote(ctx: Context, @Suppress("UNUSED_PARAMETER") tag: String, got: Long, total: Long, src: String) = runCatching {
+        noteText = Triple(src, got, total)
+        noteBps = (state.value as? State.Downloading)?.bps ?: 0.0
+        nm(ctx).notify(NID, progressNotification(ctx))
+    }
+
+    private fun fmtMb(b: Long) = String.format(java.util.Locale.US, "%.1fMB", b / 1048576.0)
+    private fun fmtSpeed(bps: Double) = if (bps >= 1048576) String.format(java.util.Locale.US, "%.1fMB/s", bps / 1048576) else String.format(java.util.Locale.US, "%.0fKB/s", bps / 1024)
+
     private fun doneNote(ctx: Context, tag: String) = runCatching {
-        nm(ctx).notify(NID, NotificationCompat.Builder(ctx, CH).setSmallIcon(android.R.drawable.stat_sys_download_done)
+        nm(ctx).cancel(NID)
+        nm(ctx).notify(NID_DONE, NotificationCompat.Builder(ctx, CH).setSmallIcon(android.R.drawable.stat_sys_download_done)
             .setContentTitle("MicMask $tag 下载完成").setContentText("点击安装").setAutoCancel(true).setContentIntent(openApp(ctx)).build())
+    }
+
+    private fun failNote(ctx: Context, tag: String, err: String) = runCatching {
+        nm(ctx).notify(NID_DONE, NotificationCompat.Builder(ctx, CH).setSmallIcon(android.R.drawable.stat_notify_error)
+            .setContentTitle("MicMask $tag 下载失败").setContentText(err).setAutoCancel(true).setContentIntent(openApp(ctx)).build())
     }
 
     private fun cancelNote(ctx: Context) = runCatching { nm(ctx).cancel(NID) }

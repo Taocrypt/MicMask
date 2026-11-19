@@ -5,12 +5,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.lifecycle.viewmodel.compose.viewModel
-import android.animation.AnimatorSet
-import android.animation.ObjectAnimator
 import android.os.SystemClock
 import android.view.View
-import android.view.animation.AnticipateInterpolator
-import android.view.animation.DecelerateInterpolator
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.withFrameNanos
 import androidx.core.animation.doOnEnd
@@ -30,20 +26,19 @@ class MainActivity : ComponentActivity() {
         // 首帧就绪或最多 1.5 秒后放行
         splash.setKeepOnScreenCondition { !firstFrame && SystemClock.uptimeMillis() - t0 < 1500 }
         splash.setOnExitAnimationListener { p ->
-            // 退场：图标轻微回缩后放大淡出，背景同步淡出露出主界面
+            // 退场：系统圆形遮罩从屏幕收拢到图标中心（原生 circular reveal），图标同时淡出
+            val v = p.view
             val icon: View? = runCatching { p.iconView }.getOrNull()
-            val bg = p.view
-            val set = AnimatorSet()
-            val anims = mutableListOf<android.animation.Animator>(
-                ObjectAnimator.ofFloat(bg, View.ALPHA, 1f, 0f).apply { duration = 320; startDelay = 120; interpolator = DecelerateInterpolator() })
-            if (icon != null) {
-                anims += ObjectAnimator.ofFloat(icon, View.SCALE_X, 1f, 1.35f).apply { duration = 420; interpolator = AnticipateInterpolator(1.2f) }
-                anims += ObjectAnimator.ofFloat(icon, View.SCALE_Y, 1f, 1.35f).apply { duration = 420; interpolator = AnticipateInterpolator(1.2f) }
-                anims += ObjectAnimator.ofFloat(icon, View.ALPHA, 1f, 0f).apply { duration = 260; startDelay = 160 }
-            }
-            set.playTogether(anims)
-            set.doOnEnd { p.remove() }
-            set.start()
+            val cx = icon?.let { (it.left + it.right) / 2 } ?: (v.width / 2)
+            val cy = icon?.let { (it.top + it.bottom) / 2 } ?: (v.height / 2)
+            val r = Math.hypot(maxOf(cx, v.width - cx).toDouble(), maxOf(cy, v.height - cy).toDouble()).toFloat()
+            val reveal = runCatching { android.view.ViewAnimationUtils.createCircularReveal(v, cx, cy, r, 0f) }.getOrNull()
+            if (reveal == null || !v.isAttachedToWindow) { p.remove(); return@setOnExitAnimationListener }
+            reveal.duration = 420
+            reveal.interpolator = android.view.animation.PathInterpolator(0.4f, 0f, 0.2f, 1f)
+            reveal.doOnEnd { p.remove() }
+            icon?.animate()?.alpha(0f)?.setDuration(220)?.start()
+            reveal.start()
         }
         enableEdgeToEdge()
         L.init(applicationContext)
