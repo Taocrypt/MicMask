@@ -1,0 +1,25 @@
+name: 更新赞赏墙
+on:
+  schedule:
+    - cron: "17 */6 * * *"   # 每 6 小时
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  sponsors:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 拉取爱发电赞助者
+        env:
+          AFDIAN_USER_ID: ${{ secrets.AFDIAN_USER_ID }}
+          AFDIAN_TOKEN: ${{ secrets.AFDIAN_TOKEN }}
+          AFDIAN_PLAN_ID: 5a2e6d94e42011f18ad35254001e7c00
+          SHOW_REMARK: "1"
+        run: python3 tools/afdian_sponsors.py
+      - name: 提交
+        run: |
+          git config user.name "Taocrypt"
+          git config user.email "ta03rypt@gmail.com"
+          git add sponsors/sponsors.json
+          git diff --cached --quiet || (git commit -m "chore: 更新赞赏墙" && git push)
