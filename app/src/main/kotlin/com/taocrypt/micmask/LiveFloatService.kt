@@ -145,7 +145,7 @@ class LiveFloatService : Service() {
             // 关闭：直接关掉悬浮窗（同设置里关开关；App 不在时直接停服务）
             addView(chip("关闭", 0x33FFFFFF) { h.post { vm()?.setLiveFloat(false) ?: toggle(applicationContext, false) } })
         }
-        // 右下角工具：内容缩放 A− / A+，窗口大小 ⤡（宽窗时与按钮同一行，窄窗自动换到下一行右对齐）
+        // 右下角工具：内容缩放 A− / A+，窗口大小 ⤡（无底纯图标，和启动/停止同一行贴右；极窄窗才换行）
         val tools = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL; isBaselineAligned = false; gravity = Gravity.END or Gravity.CENTER_VERTICAL
             addView(scaleBtn("A−", -0.1f)); addView(scaleBtn("A+", 0.1f)); addView(resizeHandle())
@@ -203,10 +203,11 @@ class LiveFloatService : Service() {
 
     /** 内容缩放：文字/按钮整体变大变小（0.7–1.5），写配置后自动重建并保持展开 */
     private fun scaleBtn(t: String, step: Float) = TextView(this).apply {
-        text = t; setTextColor(Color.WHITE); textSize = 13f * ps; gravity = Gravity.CENTER; includeFontPadding = false
-        background = round(0x33FFFFFF, 14); minWidth = sdp(34); minHeight = 0; minimumHeight = 0
-        setPadding(sdp(8), sdp(6), sdp(8), sdp(6))
-        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(4) }
+        // 纯文字图标，无按钮底：省位置，和底栏「启动/停止」同一行贴右下角
+        text = t; setTextColor(0xCCFFFFFF.toInt()); textSize = 13f * ps; gravity = Gravity.CENTER; includeFontPadding = false
+        minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0
+        setPadding(sdp(5), sdp(6), sdp(5), sdp(6))
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         setOnClickListener {
             val n = (Math.round((ps + step) * 10) / 10f).coerceIn(0.7f, 1.5f)
             if (n != ps) Prefs.main(applicationContext).edit().putFloat("lf_panel_scale", n).apply()
@@ -215,10 +216,10 @@ class LiveFloatService : Service() {
 
     /** 「⤡」长按后拖动：横向改宽、纵向改高，宽高比例自由；双击恢复默认 */
     private fun resizeHandle() = TextView(this).apply {
-        text = "⤡"; setTextColor(0xDDFFFFFF.toInt()); textSize = 15f * ps; gravity = Gravity.CENTER; includeFontPadding = false
-        background = round(0x33FFFFFF, 14); minWidth = sdp(34); minHeight = 0; minimumHeight = 0
-        setPadding(sdp(8), sdp(5), sdp(8), sdp(5))
-        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(4) }
+        text = "⤡"; setTextColor(0xCCFFFFFF.toInt()); textSize = 15f * ps; gravity = Gravity.CENTER; includeFontPadding = false
+        minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0
+        setPadding(sdp(6), sdp(5), 0, sdp(5))
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         var armed = false; var sx = 0f; var sy = 0f; var w0 = 0; var h0 = 0; var lastTap = 0L
         setOnClickListener {
             val now = SystemClock.uptimeMillis()
