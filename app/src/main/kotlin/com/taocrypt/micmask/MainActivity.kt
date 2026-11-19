@@ -23,24 +23,13 @@ class MainActivity : ComponentActivity() {
         val splash = installSplashScreen()
         super.onCreate(savedInstanceState)
         val t0 = SystemClock.uptimeMillis()
-        // 首帧就绪或最多 1.5 秒后放行
-        splash.setKeepOnScreenCondition { !firstFrame && SystemClock.uptimeMillis() - t0 < 1500 }
+        // 首帧就绪或最多 0.8 秒后放行
+        splash.setKeepOnScreenCondition { !firstFrame && SystemClock.uptimeMillis() - t0 < 800 }
         splash.setOnExitAnimationListener { p ->
-            // 退场：先背景渐隐露出界面，再图标渐隐
-            val v = p.view
-            val icon: View? = runCatching { p.iconView }.getOrNull()
-            val bg = v.background?.mutate()
-            if (bg == null) { icon?.animate()?.alpha(0f)?.setDuration(220)?.withEndAction { p.remove() }?.start() ?: p.remove(); return@setOnExitAnimationListener }
-            android.animation.ValueAnimator.ofInt(255, 0).apply {
-                duration = 260
-                interpolator = android.view.animation.DecelerateInterpolator()
-                addUpdateListener { bg.alpha = it.animatedValue as Int }
-                doOnEnd {
-                    if (icon == null) p.remove()
-                    else icon.animate().alpha(0f).setDuration(220).withEndAction { p.remove() }.start()
-                }
-                start()
-            }
+            // 退场：背景和图标整体一起淡出（同 GitHub），图标不单独停留
+            p.view.animate().alpha(0f).setDuration(180)
+                .setInterpolator(android.view.animation.AccelerateInterpolator())
+                .withEndAction { p.remove() }.start()
         }
         enableEdgeToEdge()
         L.init(applicationContext)

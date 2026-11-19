@@ -16,6 +16,7 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.BatteryManager
 import android.os.Build
+import android.os.SystemClock
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -48,7 +49,7 @@ class LiveFloatService : Service() {
         private val MODES = listOf("AI", "普通", "声卡")
         private const val ACCENT = 0xFF3482FF.toInt()
         private const val RING_OFF = 0x66FFFFFF
-        val LOOK_KEYS = setOf("lf_ball_dp", "lf_ball_alpha", "lf_panel_scale", "lf_panel_alpha", "lf_autohide")
+        val LOOK_KEYS = setOf("lf_ball_dp", "lf_ball_alpha", "lf_panel_scale", "lf_panel_alpha", "lf_autohide", "lf_panel_w", "lf_panel_h")
         private const val RING_BUSY = 0xFFFF9F0A.toInt()
     }
 
@@ -144,15 +145,21 @@ class LiveFloatService : Service() {
             addView(View(this@LiveFloatService), LinearLayout.LayoutParams(0, 1, 1f))
             addView(resizeHandle())
         }
-        panel = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; visibility = View.GONE
-            background = round(0xE61C1C1E.toInt(), 18); setPadding(sdp(12), sdp(10), sdp(12), sdp(10)); alpha = panelAlpha
-            layoutParams = LinearLayout.LayoutParams(minOf(sdp(268), screen().first - dp(8)), ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) }
+        val pw = panelW(); val ph = panelH()
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             addView(stat)
             addView(space(8)); addView(modeRow)
             addView(space(8)); addView(HorizontalScrollView(this@LiveFloatService).apply { isHorizontalScrollBarEnabled = false; addView(presetRow) })
             addView(space(8)); addView(TextView(this@LiveFloatService).apply { text = "语音包"; setTextColor(0xFF999999.toInt()); textSize = 11f * ps })
             addView(space(4)); addView(HorizontalScrollView(this@LiveFloatService).apply { isHorizontalScrollBarEnabled = false; addView(sfxRow) })
+        }
+        bodyScroll = android.widget.ScrollView(this).apply { isVerticalScrollBarEnabled = false; isFillViewport = false; addView(body) }
+        panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; visibility = View.GONE
+            background = round(0xE61C1C1E.toInt(), 18); setPadding(sdp(12), sdp(10), sdp(12), sdp(10)); alpha = panelAlpha
+            layoutParams = LinearLayout.LayoutParams(pw, ph).apply { topMargin = dp(6) }
+            addView(bodyScroll, scrollLp(ph))
             addView(space(8)); addView(bottom)
         }
         root = LinearLayout(this).apply {
@@ -168,22 +175,44 @@ class LiveFloatService : Service() {
     private fun space(h: Int) = View(this).apply { layoutParams = LinearLayout.LayoutParams(1, sdp(h)) }
 
     /** 右下角缩放柄：长按后拖动缩放控制窗，松手保存 */
+    private var bodyScroll: android.widget.ScrollView? = null
+    /** 控制窗宽高（px）：宽默认 268dp，高 0 = 随内容 */
+    private fun panelW() = Prefs.main(applicationContext).getInt("lf_panel_w", 268).let { minOf(dp(it), screen().first - dp(8)) }
+    private fun panelH() = Prefs.main(applicationContext).getInt("lf_panel_h", 0).let { if (it <= 0) ViewGroup.LayoutParams.WRAP_CONTENT else minOf(dp(it), screen().second - dp(80)) }
+    private fun scrollLp(ph: Int) = if (ph == ViewGroup.LayoutParams.WRAP_CONTENT) LinearLayout.LayoutParams(-1, -2) else LinearLayout.LayoutParams(-1, 0, 1f)
+
+    /** 「⤡」长按后拖动：横向改宽、纵向改高，宽高比例自由；双击恢复默认 */
     private fun resizeHandle() = TextView(this).apply {
         text = "⤡"; setTextColor(0xAAFFFFFF.toInt()); textSize = 16f * ps; gravity = Gravity.CENTER
         setPadding(sdp(8), sdp(2), sdp(4), sdp(2))
-        var armed = false; var sx = 0f; var s0 = ps; var cur = ps
-        setOnLongClickListener { armed = true; s0 = ps; cur = ps; performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
-            panel.pivotX = if (dockRight) panel.width.toFloat() else 0f; panel.pivotY = 0f; true }
+        var armed = false; var sx = 0f; var sy = 0f; var w0 = 0; var h0 = 0; var lastTap = 0L
+        setOnClickListener {
+            val now = SystemClock.uptimeMillis()
+            if (now - lastTap < 350) Prefs.main(applicationContext).edit().remove("lf_panel_w").remove("lf_panel_h").apply()
+            lastTap = now
+        }
+        setOnLongClickListener { armed = true; w0 = panel.width; h0 = panel.height
+            performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS); true }
         setOnTouchListener { _, e ->
             when (e.action) {
-                MotionEvent.ACTION_DOWN -> { sx = e.rawX; false }
+                MotionEvent.ACTION_DOWN -> { sx = e.rawX; sy = e.rawY; false }
                 MotionEvent.ACTION_MOVE -> if (armed) {
-                    val dx = (e.rawX - sx) * (if (dockRight) -1 else 1)
-                    cur = (s0 + dx / (268 * resources.displayMetrics.density)).coerceIn(0.7f, 1.5f)
-                    panel.scaleX = cur / s0; panel.scaleY = cur / s0; true } else false
+                    val (sw, sh) = screen()
+                    val dx = (e.rawX - sx).toInt() * (if (dockRight) -1 else 1)
+                    val nw = (w0 + dx).coerceIn(dp(180), sw - dp(8))
+                    val nh = (h0 + (e.rawY - sy).toInt()).coerceIn(dp(120), sh - dp(80))
+                    val l = panel.layoutParams as LinearLayout.LayoutParams
+                    if (l.width != nw || l.height != nh) {
+                        l.width = nw; l.height = nh; panel.layoutParams = l
+                        bodyScroll?.layoutParams = scrollLp(nh)
+                    }
+                    true } else false
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> if (armed) {
-                    armed = false; panel.scaleX = 1f; panel.scaleY = 1f
-                    Prefs.main(applicationContext).edit().putFloat("lf_panel_scale", (cur * 20).toInt() / 20f).apply()  // 触发重建
+                    armed = false
+                    val d = resources.displayMetrics.density
+                    Prefs.main(applicationContext).edit().putInt("lf_panel_w", (panel.layoutParams.width / d).toInt())
+                        .putInt("lf_panel_h", (panel.layoutParams.height / d).toInt()).apply()
+                    root?.post { place(true) }
                     true } else false
                 else -> false
             }
@@ -209,7 +238,10 @@ class LiveFloatService : Service() {
                         // 展开时整个窗口一起移动，不收起；按整个窗口尺寸夹在屏内
                         val (w, hh) = screen(); val r = root
                         val rw = r?.width?.takeIf { it > 0 } ?: ball.width; val rh = r?.height?.takeIf { it > 0 } ?: ball.height
-                        val nx = (ox + dx.toInt()).coerceIn(0, maxOf(0, w - rw)); val ny = (oy + dy.toInt()).coerceIn(0, maxOf(0, hh - rh))
+                        // 只要求悬浮球留在屏内，面板可暂时伸出屏幕；松手贴边后再整体收回屏内
+                        val bw = ball.width
+                        val minX = if (dockRight) -(rw - bw) else 0; val maxX = if (dockRight) w - rw else w - bw
+                        val nx = (ox + dx.toInt()).coerceIn(minX, maxOf(minX, maxX)); val ny = (oy + dy.toInt()).coerceIn(0, maxOf(0, hh - rh))
                         if (nx != lp.x || ny != lp.y) { lp.x = nx; lp.y = ny; r?.let { runCatching { wm.updateViewLayout(it, lp) } } }
                     }
                     true

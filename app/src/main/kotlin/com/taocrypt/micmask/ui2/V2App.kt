@@ -1104,14 +1104,14 @@ private fun FloatLookSettings() {
         }
         row("悬浮球大小", "${ball.roundToInt()} dp", ball, 32f..80f, { ball = it.roundToInt().toFloat() }) { sp.edit().putInt("lf_ball_dp", ball.roundToInt()).apply() }
         row("悬浮球不透明度", "${(ballA * 100).roundToInt()}%", ballA, 0.2f..1f, { ballA = (it * 20).roundToInt() / 20f }) { sp.edit().putFloat("lf_ball_alpha", ballA).apply() }
-        row("控制窗大小", "${(scale * 100).roundToInt()}%", scale, 0.7f..1.5f, { scale = (it * 20).roundToInt() / 20f }) { sp.edit().putFloat("lf_panel_scale", scale).apply() }
+        row("控制窗内容缩放", "${(scale * 100).roundToInt()}%", scale, 0.7f..1.5f, { scale = (it * 20).roundToInt() / 20f }) { sp.edit().putFloat("lf_panel_scale", scale).apply() }
         row("控制窗不透明度", "${(panelA * 100).roundToInt()}%", panelA, 0.3f..1f, { panelA = (it * 20).roundToInt() / 20f }) { sp.edit().putFloat("lf_panel_alpha", panelA).apply() }
         var ah by remember { mutableStateOf(sp.getBoolean("lf_autohide", true)) }
         Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) { Text("收起后自动贴边半隐藏", fontSize = 14.sp); Text("3 秒不操作，悬浮球缩进屏幕边缘一半", fontSize = 12.sp, color = Summary) }
             Switch(checked = ah, onCheckedChange = { ah = it; sp.edit().putBoolean("lf_autohide", it).apply() })
         }
-        Text("控制窗右下角「⤡」长按后拖动也能直接缩放。", fontSize = 12.sp, color = Summary, modifier = Modifier.padding(vertical = 6.dp))
+        Text("控制窗右下角「⤡」长按后拖动，可自由调宽和高；双击「⤡」恢复默认大小。", fontSize = 12.sp, color = Summary, modifier = Modifier.padding(vertical = 6.dp))
     }
 }
 
