@@ -1880,6 +1880,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
+    /** 取消加载：关闭文件变声引擎释放内存（转换中不允许） */
+    fun unloadEngine() {
+        if (_state.value.busy || _state.value.loadingEngine) { _state.value = _state.value.copy(toast = "正在转换，完成后再释放"); return }
+        val e = engine ?: run { _state.value = _state.value.copy(engineLoaded = false); return }
+        engine = null
+        _state.value = _state.value.copy(engineLoaded = false, engineLog = "", toast = "已释放模型内存")
+        viewModelScope.launch(Dispatchers.Default) { runCatching { e.close() }.onFailure { L.e("释放模型失败", it) }; System.gc() }
+        L.i("文件变声模型已卸载")
+    }
+
     fun loadEngine() {
         if (_state.value.loadingEngine) return
         _state.value = _state.value.copy(loadingEngine = true, engineLog = "", error = null)

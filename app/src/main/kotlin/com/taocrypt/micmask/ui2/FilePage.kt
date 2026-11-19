@@ -93,9 +93,9 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
                     }
                 }
             }
-            ArrowPreference(title = when { st.loadingEngine -> "加载中…"; st.engineLoaded -> "重新加载模型"; else -> "加载模型" },
-                summary = if (st.engineLoaded) "已在内存里" else if (st.modelsReady) "加载一次会一直留在内存" else "缺模型，先导入",
-                onClick = { if (st.modelsReady && !st.loadingEngine) vm.loadEngine() })
+            ArrowPreference(title = when { st.loadingEngine -> "加载中…"; st.engineLoaded -> "取消加载模型"; else -> "加载模型" },
+                summary = if (st.engineLoaded) "已在内存里，点击释放内存" else if (st.modelsReady) "加载一次会一直留在内存" else "缺模型，先导入",
+                onClick = { if (st.engineLoaded) vm.unloadEngine() else if (st.modelsReady && !st.loadingEngine) vm.loadEngine() })
             ArrowPreference(title = if (st.importing) "导入中 ${st.importDone}/${st.importTotal}" else "从手机导入模型",
                 summary = "zip 或 .onnx / .bin", onClick = { if (!st.importing) modelPicker.launch(arrayOf("*/*")) })
             val idxMissing = st.modelItems.any { it.name == ModelStore.INDEX && !it.present }

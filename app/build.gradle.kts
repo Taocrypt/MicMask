@@ -14,8 +14,8 @@ android {
         applicationId = "com.taocrypt.micmask"
         minSdk = 26
         targetSdk = 34
-        versionCode = 66
-        versionName = "2.0-alpha39"
+        versionCode = 67
+        versionName = "2.0-alpha40"
         ndk {
             // 目前只做离线文件转换，纯 Kotlin + ONNX Runtime（自带 x86_64/arm64 原生库）
             abiFilters += listOf("arm64-v8a")
