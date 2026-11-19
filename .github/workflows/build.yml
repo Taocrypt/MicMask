@@ -1,0 +1,173 @@
+name: Build
+
+# push 到 main      -> 构建 APK，上传为 workflow 产物
+# push v* 标签       -> 同上，再发布 GitHub Release（APK + update.json，说明取自 CHANGELOG.md）
+# pull_request      -> 只构建
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths-ignore:
+      - 'sponsors/**'
+      - '**.md'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # 版本号以 app/build.gradle.kts 的 versionName 为准；打标签时标签必须是 v<versionName>
+      - name: Version
+        id: ver
+        shell: bash
+        run: |
+          VER=$(sed -n 's/^ *versionName *= *"\(.*\)".*/\1/p' app/build.gradle.kts | head -n1)
+          CODE=$(sed -n 's/^ *versionCode *= *\([0-9]*\).*/\1/p' app/build.gradle.kts | head -n1)
+          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF_NAME#v}" != "$VER" ]]; then
+            echo "::error::标签 $GITHUB_REF_NAME 与 versionName $VER 不一致"; exit 1
+          fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "MicMask $VER ($CODE)"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-37 build-tools;35.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+
+      # 签名：仓库 Secrets
+      #   ANDROID_KEYSTORE_BASE64   PKCS12 签名文件的 base64
+      #   ANDROID_KEYSTORE_PASSWORD 签名文件密码
+      #   ANDROID_KEY_ALIAS         密钥别名
+      #   ANDROID_KEY_PASSWORD      密钥密码（留空则同上）
+      # 没有 Secrets（fork / PR）时用临时调试密钥，这种包不能覆盖安装正式版。标签构建必须用正式密钥。
+      - name: Android signing
+        shell: bash
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          K="$RUNNER_TEMP/sign"; mkdir -p "$K"
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$K/release.p12"
+            printf 'storeFile=%s\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
+              "$K/release.p12" "$KS_PASS" "$KEY_ALIAS" "${KEY_PASS:-$KS_PASS}" > "$K/signing.properties"
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "::error::标签构建缺少 ANDROID_KEYSTORE_BASE64"; exit 1
+          else
+            echo "::warning::没有签名 Secrets，使用临时调试密钥"
+            keytool -genkeypair -storetype PKCS12 -keystore "$K/release.p12" -storepass android \
+              -alias dev -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=MicMask Dev"
+            printf 'storeFile=%s\nstorePassword=android\nkeyAlias=dev\nkeyPassword=android\n' "$K/release.p12" > "$K/signing.properties"
+          fi
+          echo "SIGNING_PROPS=$K/signing.properties" >> "$GITHUB_ENV"
+
+      - name: Build APK
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon :app:assembleRelease -PsigningProps="$SIGNING_PROPS"
+
+      - name: Package
+        shell: bash
+        run: |
+          VER=${{ steps.ver.outputs.version }}
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-release.apk dist/MicMask-$VER-android-arm64-v8a.apk
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          "$BT/apksigner" verify --print-certs dist/*.apk | grep -E 'Signer #1 certificate (DN|SHA-256)' || true
+          rm -rf "$RUNNER_TEMP/sign"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MicMask-${{ steps.ver.outputs.version }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Release notes
+        shell: bash
+        run: |
+          TAG="$GITHUB_REF_NAME"; VER="${TAG#v}"
+          # CHANGELOG.md 里 "## [版本]" 小节
+          awk -v v="$VER" '
+            /^## / { if (on) exit; h=$0; gsub(/[\[\]]/, "", h); split(h, a, " "); if (a[2] == v) { on=1; next } }
+            on { print }
+          ' CHANGELOG.md > notes.md || true
+          if ! grep -q '[^[:space:]]' notes.md; then
+            PREV=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)
+            echo "## 更新内容" > notes.md
+            if [ -n "$PREV" ]; then git log --pretty='- %s' "$PREV..$TAG" >> notes.md
+            else git log --pretty='- %s' "$TAG" >> notes.md; fi
+          fi
+          # 强制更新：小节里单独一行「最低支持版本: x」，从可见说明里移出，写进 HTML 注释和 update.json
+          export LC_ALL=C.UTF-8
+          MIN=$(grep -oP '^\s*(<!--\s*)?([-*]\s*)?(最低支持版本|min-version|min_supported_version)\s*[:：]\s*[vV]?\K[0-9][0-9A-Za-z.-]*' notes.md | head -n1 || true)
+          grep -vP '^\s*(<!--\s*)?([-*]\s*)?(最低支持版本|min-version|min_supported_version)\s*[:：]' notes.md > notes.tmp || true
+          mv notes.tmp notes.md
+          if [ -n "$MIN" ]; then printf '\n<!-- min-version: %s -->\n' "$MIN" >> notes.md; fi
+          echo "最低支持版本: ${MIN:-无}"
+          cat notes.md
+          # update.json：GitHub API 不通时 App 经镜像读取
+          MIN="$MIN" TAG="$TAG" VER="$VER" REPO="$GITHUB_REPOSITORY" python3 - <<'PY'
+          import json, os, datetime
+          tag, ver, repo = os.environ["TAG"], os.environ["VER"], os.environ["REPO"]
+          notes = open("notes.md", encoding="utf-8").read()
+          assets = []
+          for n in sorted(os.listdir("artifacts")):
+              p = os.path.join("artifacts", n)
+              if os.path.isfile(p) and n != "update.json":
+                  assets.append({"name": n, "size": os.path.getsize(p),
+                                 "url": f"https://github.com/{repo}/releases/download/{tag}/{n}"})
+          data = {
+              "version": ver,
+              "tag": tag,
+              "published_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "notes": notes,
+              "min_supported_version": os.environ.get("MIN") or None,
+              "assets": assets,
+          }
+          json.dump(data, open("artifacts/update.json", "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+          PY
+          cat artifacts/update.json
+      # 不标 prerelease：App 走 releases/latest，预发布版不会出现在 latest 里
+      - name: Publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="$GITHUB_REF_NAME"
+          ls -l artifacts
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TAG" --notes-file notes.md
+            gh release upload "$TAG" artifacts/* --clobber
+          else
+            gh release create "$TAG" artifacts/* --title "$TAG" --notes-file notes.md --verify-tag
+          fi

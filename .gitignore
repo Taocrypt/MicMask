@@ -1,5 +1,36 @@
-node_modules
-.wrangler/
-.dev.vars
+# 构建产物
+build/
+*/build/
+.gradle/
+.kotlin/
+*.apk
+*.aab
+release/
+
+# 本机配置与签名（绝不进仓库）
+local.properties
+*.keystore
+*.jks
+*.p12
+signing.properties
+key.properties
+
+# 模型权重（用户自备，不进仓库）
+model_assets/
+*.onnx
+*.data
+*.refbin
+*.pth
+*.ckpt
+*.pt
+*.safetensors
+*.index
+
+# IDE / 系统
+.idea/
+*.iml
+.vscode/
+captures/
 *.log
 .DS_Store
+Thumbs.db

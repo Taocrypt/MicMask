@@ -1,0 +1,203 @@
+package com.taocrypt.micmask.ui2
+
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.widget.Toast
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.taocrypt.micmask.L
+import com.taocrypt.micmask.MainViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import top.yukonga.miuix.kmp.basic.TextField
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.theme.MiuixTheme
+
+private data class Lv(val c: Char, val name: String, val color: Color)
+private val LEVELS = listOf(
+    Lv('E', "错误", Color(0xFFE5484D)),
+    Lv('W', "警告", Color(0xFFF5A524)),
+    Lv('I', "信息", Color(0xFF3B82F6)),
+    Lv('D', "调试", Color(0xFF8B8B8B)),
+    Lv('M', "指标", Color(0xFF14B8A6)),
+)
+private fun lvColor(c: Char) = LEVELS.firstOrNull { it.c == c }?.color ?: Color.Gray
+
+private fun copy(ctx: Context, text: String, what: String) {
+    val cm = ctx.getSystemService(ClipboardManager::class.java)
+    cm.setPrimaryClip(ClipData.newPlainText("MicMask 日志", text))
+    Toast.makeText(ctx, "已复制$what", Toast.LENGTH_SHORT).show()
+}
+
+@Composable
+fun LogPage(vm: MainViewModel) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var all by remember { mutableStateOf(L.entries()) }
+    var levels by remember { mutableStateOf(setOf('E', 'W', 'I', 'D')) }   // 指标默认不看，太多
+    var cat by remember { mutableStateOf<String?>(null) }
+    var q by remember { mutableStateOf("") }
+    var paused by remember { mutableStateOf(false) }
+    var expanded by remember { mutableStateOf(setOf<Long>()) }
+    val listState = rememberLazyListState()
+
+    // 实时刷新：有新行才重取；暂停时冻结画面
+    LaunchedEffect(paused) {
+        var v = -1L
+        while (!paused) {
+            if (L.version != v) { v = L.version; all = L.entries() }
+            delay(400)
+        }
+    }
+    val counts = remember(all) { all.groupingBy { it.level }.eachCount() }
+    val cats = remember(all) { L.CATS.filter { c -> all.any { it.cat == c } } }
+    val shown = remember(all, levels, cat, q) {
+        all.filter { it.level in levels && (cat == null || it.cat == cat) &&
+            (q.isBlank() || it.msg.contains(q, true) || it.thread.contains(q, true)) }
+    }
+    // 跟随：停在底部时自动滚到最新，往上翻就不打扰
+    val atBottom by remember { derivedStateOf {
+        val info = listState.layoutInfo
+        val last = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+        info.totalItemsCount == 0 || last >= info.totalItemsCount - 2
+    } }
+    var follow by remember { mutableStateOf(true) }
+    LaunchedEffect(atBottom) { if (atBottom) follow = true }
+    LaunchedEffect(listState.isScrollInProgress) { if (listState.isScrollInProgress && !atBottom) follow = false }
+    LaunchedEffect(shown.size, follow) { if (follow && shown.isNotEmpty()) listState.scrollToItem(shown.size - 1) }
+
+    val primary = MiuixTheme.colorScheme.primary
+    val chipBg = MiuixTheme.colorScheme.secondaryContainer
+    val summary = MiuixTheme.colorScheme.onSurfaceVariantSummary
+
+    Column(Modifier.fillMaxSize().navigationBarsPadding()) {
+        TextField(value = q, onValueChange = { q = it }, label = "搜索内容或线程", singleLine = true,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp))
+        // 级别：多选
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            LEVELS.forEach { l ->
+                val on = l.c in levels
+                Row(Modifier.clip(RoundedCornerShape(50)).background(if (on) l.color.copy(alpha = 0.18f) else chipBg)
+                    .clickable { levels = if (on) levels - l.c else levels + l.c }
+                    .padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(8.dp).clip(CircleShape).background(if (on) l.color else summary.copy(alpha = 0.4f)))
+                    Spacer(Modifier.width(5.dp))
+                    Text("${l.name} ${counts[l.c] ?: 0}", fontSize = 12.sp, color = if (on) l.color else summary,
+                        fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal)
+                }
+            }
+        }
+        // 分类：单选
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            (listOf<String?>(null) + cats).forEach { c ->
+                val on = cat == c
+                Text(c ?: "全部", fontSize = 12.sp, color = if (on) MiuixTheme.colorScheme.onPrimary else MiuixTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.clip(RoundedCornerShape(50)).background(if (on) primary else chipBg)
+                        .clickable { cat = c }.padding(horizontal = 12.dp, vertical = 6.dp))
+            }
+        }
+        Text("${shown.size} / ${all.size} 条" + (if (paused) " · 已暂停" else " · 实时") + " · 点按展开，长按复制",
+            fontSize = 11.sp, color = summary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp))
+
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+                items(shown, key = { it.seq }) { e ->
+                    val open = e.seq in expanded
+                    Row(Modifier.fillMaxWidth()
+                        .pointerInput(e.seq) {
+                            detectTapGestures(
+                                onTap = { expanded = if (open) expanded - e.seq else expanded + e.seq },
+                                onLongPress = { copy(ctx, e.line(), "这一条") })
+                        }
+                        .padding(horizontal = 12.dp, vertical = 4.dp)) {
+                        Box(Modifier.padding(top = 3.dp).width(3.dp).height(if (open) 28.dp else 14.dp).clip(RoundedCornerShape(2.dp)).background(lvColor(e.level)))
+                        Column(Modifier.padding(start = 8.dp)) {
+                            Text("${e.time.substring(6)}  ${e.level}  ${e.cat} · ${e.thread}", fontSize = 10.sp, color = summary,
+                                fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(e.msg, fontSize = 12.sp, fontFamily = FontFamily.Monospace, lineHeight = 16.sp,
+                                color = if (e.level == 'E' || e.level == 'W') lvColor(e.level) else MiuixTheme.colorScheme.onBackground,
+                                maxLines = if (open) Int.MAX_VALUE else 3, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
+            if (!follow && shown.isNotEmpty()) {
+                Text("↓ 回到最新", fontSize = 13.sp, color = MiuixTheme.colorScheme.onPrimary,
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp).clip(RoundedCornerShape(50)).background(primary)
+                        .clickable { follow = true }.padding(horizontal = 14.dp, vertical = 8.dp))
+            }
+        }
+
+        // 底部操作
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+            Action(if (paused) "继续" else "暂停") { paused = !paused }
+            Action("复制") { copy(ctx, shown.takeLast(2000).joinToString("\n") { it.line() }, "${minOf(shown.size, 2000)} 条") }
+            Action("分享") {
+                val text = shown.takeLast(3000).joinToString("\n") { it.line() }
+                runCatching {
+                    ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
+                        .putExtra(Intent.EXTRA_SUBJECT, "MicMask 日志").putExtra(Intent.EXTRA_TEXT, text), "分享日志")
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                }
+            }
+            Action("导出") {
+                scope.launch {
+                    val m = withContext(Dispatchers.IO) { runCatching { "已导出到 " + L.exportToDownloads(ctx) }.getOrElse { "导出失败：${it.message}" } }
+                    Toast.makeText(ctx, m, Toast.LENGTH_LONG).show()
+                }
+            }
+            Action("清屏") { L.clearView(); expanded = emptySet() }
+        }
+    }
+}
+
+@Composable
+private fun Action(t: String, onClick: () -> Unit) {
+    Text(t, fontSize = 14.sp, color = MiuixTheme.colorScheme.primary, fontWeight = FontWeight.Medium,
+        modifier = Modifier.clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 8.dp))
+}

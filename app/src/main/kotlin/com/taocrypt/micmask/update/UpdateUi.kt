@@ -1,0 +1,179 @@
+package com.taocrypt.micmask.update
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
+import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.LinearProgressIndicator
+import top.yukonga.miuix.kmp.basic.SmallTitle
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.basic.TextField
+import top.yukonga.miuix.kmp.preference.ArrowPreference
+import top.yukonga.miuix.kmp.preference.WindowDropdownPreference
+import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.window.WindowDialog
+
+private fun mb(b: Long) = "%.1f MB".format(b / 1048576.0)
+private fun speed(bps: Double) = if (bps >= 1048576) "%.1f MB/s".format(bps / 1048576) else "%.0f KB/s".format(bps / 1024)
+
+/** 发布说明（CHANGELOG 小节）简单渲染：### 标题加粗，- 列表变圆点 */
+@Composable
+private fun Notes(md: String) {
+    val text = buildAnnotatedString {
+        md.lines().forEachIndexed { i, raw ->
+            val l = raw.trimEnd()
+            if (i > 0) append('\n')
+            when {
+                l.startsWith("#") -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(l.trimStart('#').trim()) }
+                l.trimStart().startsWith("- ") || l.trimStart().startsWith("* ") -> append("• " + l.trimStart().drop(2).replace("**", "").replace("`", ""))
+                else -> append(l.replace("**", "").replace("`", ""))
+            }
+        }
+    }
+    Text(text, fontSize = 13.sp, lineHeight = 19.sp)
+}
+
+/** 全局更新对话框：V2App 里挂一次，Updater.dialog 控制显示 */
+@Composable
+fun UpdateDialog() {
+    val ctx = LocalContext.current
+    val show by Updater.dialog.collectAsState()
+    val st by Updater.state.collectAsState()
+    val r = when (val s = st) {
+        is Updater.State.Newer -> s.r
+        is Updater.State.Downloading -> s.r
+        is Updater.State.Downloaded -> s.r
+        else -> null
+    }
+    if (!show || r == null) return
+    val forced = r.forces()
+    val close = { if (!forced) Updater.dialog.value = false }
+    WindowDialog(show = true, title = "发现新版本 ${r.tag}",
+        summary = if (forced) "当前版本已停止支持，需要更新后才能继续使用" else "当前 v${com.taocrypt.micmask.BuildConfig.VERSION_NAME}",
+        onDismissRequest = { close() }) {
+        Column {
+            if (r.notes.isNotBlank()) {
+                Column(Modifier.fillMaxWidth().heightIn(max = 320.dp).verticalScroll(rememberScrollState())) { Notes(r.notes) }
+                Spacer(Modifier.height(12.dp))
+            }
+            when (val s = st) {
+                is Updater.State.Downloading -> {
+                    val p = if (s.total > 0) s.got.toFloat() / s.total else 0f
+                    LinearProgressIndicator(progress = p)
+                    Spacer(Modifier.height(6.dp))
+                    Text(if (s.got == 0L) s.source else "${mb(s.got)} / ${mb(s.total)} · ${speed(s.bps)} · ${s.source}",
+                        fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                    Spacer(Modifier.height(12.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton("取消下载", onClick = { Updater.cancelDownload(ctx) }, modifier = Modifier.weight(1f))
+                        if (!forced) TextButton("后台下载", onClick = { close() }, modifier = Modifier.weight(1f))
+                    }
+                }
+                is Updater.State.Downloaded -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (!forced) TextButton("稍后", onClick = { close() }, modifier = Modifier.weight(1f))
+                    TextButton("安装", onClick = { Updater.install(ctx, s.file) }, modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.textButtonColorsPrimary())
+                }
+                else -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (!forced) TextButton("跳过此版", onClick = { Updater.skip(ctx, r.tag) }, modifier = Modifier.weight(1f))
+                    TextButton("更新", onClick = { Updater.download(ctx, r) }, modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.textButtonColorsPrimary())
+                }
+            }
+        }
+    }
+}
+
+/** 下载镜像设置页 */
+@Composable
+fun MirrorPage() {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var mode by remember { mutableStateOf(Updater.mode(ctx)) }
+    var list by remember { mutableStateOf(Updater.userMirrors(ctx)) }
+    var input by remember { mutableStateOf("") }
+    var err by remember { mutableStateOf<String?>(null) }
+    var testing by remember { mutableStateOf(false) }
+    var results by remember { mutableStateOf<List<Updater.Speed>>(emptyList()) }
+    val summary = MiuixTheme.colorScheme.onSurfaceVariantSummary
+    fun save(l: List<String>) { list = l; Updater.setUserMirrors(ctx, l) }
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding()) {
+        SmallTitle("下载方式")
+        Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+            WindowDropdownPreference(items = listOf("自动（GitHub 不通时测速选镜像）", "始终直连 GitHub"), selectedIndex = mode, title = "镜像",
+                onSelectedIndexChange = { mode = it; Updater.setMode(ctx, it) })
+        }
+        Text("填了自定义镜像时优先按顺序使用它们，最后直连；都失败才会用内置镜像。镜像格式：https://example.com（会拼成 镜像/https://github.com/…）",
+            fontSize = 11.sp, color = summary, modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp))
+
+        SmallTitle("自定义镜像")
+        Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+            list.forEachIndexed { i, m ->
+                Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("${i + 1}. $m", fontSize = 14.sp, modifier = Modifier.weight(1f))
+                    if (i > 0) TextButton("上移", onClick = { save(list.toMutableList().apply { add(i - 1, removeAt(i)) }) })
+                    TextButton("删除", onClick = { save(list.filterIndexed { j, _ -> j != i }) })
+                }
+            }
+            Column(Modifier.padding(12.dp)) {
+                TextField(value = input, onValueChange = { input = it; err = null }, label = "添加镜像，如 https://gh-proxy.com", singleLine = true)
+                err?.let { Text(it, fontSize = 12.sp, color = MiuixTheme.colorScheme.error, modifier = Modifier.padding(top = 4.dp)) }
+                Spacer(Modifier.height(8.dp))
+                TextButton("添加", modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.textButtonColorsPrimary(), onClick = {
+                    val m = Updater.normalizeMirror(input)
+                    when {
+                        m == null -> err = "地址不对，需要 http(s)://域名[/路径]"
+                        m in list -> err = "已经有了"
+                        else -> { save(list + m); input = "" }
+                    }
+                })
+            }
+        }
+
+        SmallTitle("测速")
+        Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+            ArrowPreference(title = if (testing) "正在测速…" else "测试全部下载源", summary = "直连、自定义镜像与内置镜像",
+                enabled = !testing, onClick = {
+                    testing = true
+                    scope.launch { results = Updater.speedTestAll(ctx).sortedByDescending { if (it.ok) it.bps else -1.0 }; testing = false }
+                })
+            results.forEach { r ->
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
+                    Text(r.base ?: "GitHub 直连", fontSize = 13.sp, modifier = Modifier.weight(1f))
+                    Text(if (r.ok) speed(r.bps) else "不可用", fontSize = 13.sp,
+                        color = if (r.ok) MiuixTheme.colorScheme.primary else summary)
+                }
+            }
+            if (results.isNotEmpty()) Spacer(Modifier.height(8.dp))
+        }
+    }
+}
