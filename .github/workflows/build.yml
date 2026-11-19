@@ -47,7 +47,8 @@ jobs:
           java-version: '17'
       - uses: android-actions/setup-android@v3
         with:
-          packages: 'platforms;android-37 build-tools;35.0.0'
+          # 平台与 build-tools 由 AGP 按 compileSdk 自动下载（许可已由此步接受）
+          packages: 'platform-tools'
       - uses: gradle/actions/setup-gradle@v4
 
       # 签名：仓库 Secrets
