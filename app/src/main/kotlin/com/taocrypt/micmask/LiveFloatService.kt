@@ -47,6 +47,8 @@ class LiveFloatService : Service() {
         }
         private val MODES = listOf("AI", "普通", "声卡")
         private const val ACCENT = 0xFF3482FF.toInt()
+        private const val RING_OFF = 0x66FFFFFF
+        private const val RING_BUSY = 0xFFFF9F0A.toInt()
     }
 
     private val h = Handler(Looper.getMainLooper())
@@ -54,7 +56,10 @@ class LiveFloatService : Service() {
     private var root: LinearLayout? = null
     private lateinit var lp: WindowManager.LayoutParams
     private var expanded = false
-    private lateinit var ball: TextView
+    private lateinit var ball: android.widget.FrameLayout
+    private lateinit var ring: GradientDrawable
+    private var dockRight = false
+    private var homeY = 0
     private lateinit var panel: LinearLayout
     private lateinit var stat: TextView
     private lateinit var modeRow: LinearLayout
@@ -101,11 +106,15 @@ class LiveFloatService : Service() {
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT).apply { gravity = Gravity.TOP or Gravity.START; x = p.getInt("lf_x", dp(8)); y = p.getInt("lf_y", dp(200)) }
 
-        ball = TextView(this).apply {
-            gravity = Gravity.CENTER; setTextColor(Color.WHITE); textSize = 13f; typeface = Typeface.DEFAULT_BOLD
+        dockRight = p.getBoolean("lf_right", false); homeY = lp.y
+        // 悬浮球 = App 图标 + 状态色环（灰=未开启，蓝=变声中，橙=AI 还在输出）
+        ring = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0x00000000); setStroke(dp(3), RING_OFF) }
+        ball = android.widget.FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(dp(50), dp(50))
-            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0xCC333333.toInt()) }
-            elevation = dp(6).toFloat()
+            background = ring; setPadding(dp(3), dp(3), dp(3), dp(3)); elevation = dp(6).toFloat()
+            addView(android.widget.ImageView(this@LiveFloatService).apply {
+                setImageResource(R.drawable.float_logo); scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+            }, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         }
         stat = TextView(this).apply { setTextColor(0xFFDDDDDD.toInt()); textSize = 11f; typeface = Typeface.MONOSPACE; text = "读取中…" }
         modeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -133,9 +142,12 @@ class LiveFloatService : Service() {
             addView(space(4)); addView(HorizontalScrollView(this@LiveFloatService).apply { isHorizontalScrollBarEnabled = false; addView(sfxRow) })
             addView(space(8)); addView(bottom)
         }
-        root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(ball); addView(panel) }
+        root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; gravity = if (dockRight) Gravity.END else Gravity.START; addView(ball); addView(panel)
+        }
         attachDrag(ball)
         wm.addView(root, lp)
+        root?.post { place(false) }
         tick()
     }
 
@@ -156,12 +168,26 @@ class LiveFloatService : Service() {
                 MotionEvent.ACTION_MOVE -> {
                     val dx = e.rawX - sx; val dy = e.rawY - sy
                     if (abs(dx) + abs(dy) > dp(6)) moved = true
-                    if (moved) { lp.x = ox + dx.toInt(); lp.y = oy + dy.toInt(); root?.let { wm.updateViewLayout(it, lp) } }
+                    if (moved) {
+                        if (expanded) setExpanded(false)
+                        val (w, hh) = screen()
+                        lp.x = (ox + dx.toInt()).coerceIn(0, maxOf(0, w - ball.width))
+                        lp.y = (oy + dy.toInt()).coerceIn(0, maxOf(0, hh - ball.height))
+                        root?.let { wm.updateViewLayout(it, lp) }
+                    }
                     true
                 }
-                MotionEvent.ACTION_UP -> {
-                    if (!moved) setExpanded(!expanded)
-                    else Prefs.main(applicationContext).edit().putInt("lf_x", lp.x).putInt("lf_y", lp.y).apply()
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (!moved) { if (e.action == MotionEvent.ACTION_UP) setExpanded(!expanded) }
+                    else {
+                        // 贴边：松手后吸到最近的左/右边
+                        val (w, _) = screen()
+                        dockRight = lp.x + ball.width / 2 > w / 2
+                        homeY = lp.y
+                        root?.gravity = if (dockRight) Gravity.END else Gravity.START
+                        Prefs.main(applicationContext).edit().putBoolean("lf_right", dockRight).putInt("lf_y", homeY).apply()
+                        place(true)
+                    }
                     true
                 }
                 else -> false
@@ -174,7 +200,49 @@ class LiveFloatService : Service() {
         panel.visibility = if (on) View.VISIBLE else View.GONE
         panel.alpha = 0f; if (on) panel.animate().alpha(1f).setDuration(160).start()
         refresh(true)
+        root?.post { place(false) }
     }
+
+    /** 屏幕可用尺寸（像素） */
+    private fun screen(): Pair<Int, Int> =
+        if (Build.VERSION.SDK_INT >= 30) wm.currentWindowMetrics.bounds.let { it.width() to it.height() }
+        else resources.displayMetrics.let { it.widthPixels to it.heightPixels }
+
+    private var dockAnim: android.animation.ValueAnimator? = null
+    /** 贴边 + 夹在屏幕内：靠右时整个窗口右对齐（面板往左展开），展开放不下就往上挪，收起回原位 */
+    private fun place(animate: Boolean) {
+        val r = root ?: return
+        val (w, hh) = screen()
+        val rw = if (r.width > 0) r.width else ball.width
+        val rh = if (r.height > 0) r.height else ball.height
+        val tx = if (dockRight) maxOf(0, w - rw) else 0
+        val ty = (if (expanded) homeY else homeY).coerceIn(0, maxOf(0, hh - rh))
+        dockAnim?.cancel()
+        if (!animate) { lp.x = tx; lp.y = ty; runCatching { wm.updateViewLayout(r, lp) }; return }
+        val x0 = lp.x; val y0 = lp.y
+        dockAnim = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 220; interpolator = android.view.animation.DecelerateInterpolator()
+            addUpdateListener { a -> val f = a.animatedValue as Float
+                lp.x = (x0 + (tx - x0) * f).toInt(); lp.y = (y0 + (ty - y0) * f).toInt()
+                if (root != null) runCatching { wm.updateViewLayout(r, lp) } }
+            start()
+        }
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig); root?.post { place(false) }
+    }
+
+    // AI 变声时快速轮询输出状态，给色环上色
+    private var outVoiced = false
+    private val fast = object : Runnable { override fun run() {
+        val st = vm()?.state?.value
+        val ai = (st?.liveOn == true) && st.liveMode == 0
+        outVoiced = ai && (MicInjector.outState()?.let { it.first in 0..250 } ?: false)
+        paintRing(st?.liveOn == true)
+        h.postDelayed(this, if (ai) 120 else 600)
+    } }
+    private fun paintRing(on: Boolean) = ring.setStroke(dp(3), when { outVoiced -> RING_BUSY; on -> ACCENT; else -> RING_OFF })
 
     private fun vm(): MainViewModel? = MainViewModel.current
 
@@ -183,7 +251,7 @@ class LiveFloatService : Service() {
     }
 
     private val loop = object : Runnable { override fun run() { refresh(false); h.postDelayed(this, 1000) } }
-    private fun tick() { h.post(loop) }
+    private fun tick() { h.post(loop); h.post(fast) }
 
     private var stopChip: TextView? = null
     private var lastStopOn: Boolean? = null
@@ -193,8 +261,7 @@ class LiveFloatService : Service() {
         val st = vm?.state?.value
         val on = st?.liveOn == true
         val mode = st?.liveMode ?: 0
-        ball.text = if (on) MODES[mode] else "变声"
-        (ball.background as GradientDrawable).setColor(if (on) ACCENT else 0xCC333333.toInt())
+        paintRing(on)
         if (!expanded) return
         // 停止 ↔ 启动
         if (force || lastStopOn != on) {

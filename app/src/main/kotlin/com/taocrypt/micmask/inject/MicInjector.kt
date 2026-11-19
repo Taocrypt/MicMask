@@ -399,6 +399,11 @@ object MicInjector {
         runCatching { call(InjectorService.TX_LIVE_SET, { it.writeFloat(semis) }) { } }
     }
 
+    /** (距上次有声输出 ms, 输出缓冲 ms)；未连接返回 null */
+    fun outState(): Pair<Int, Int>? = if (!liveOn) null else runCatching {
+        call(InjectorService.TX_OUT_STATE) { r -> r.readInt() to r.readInt() }
+    }.getOrNull()
+
     class SysStat(val cpu: Float, val temp: Float, val rssMb: Int, val underruns: Long)
     /** 需要注入服务已连接（实时变声开着或刚停）；失败返回 null */
     fun sysStat(): SysStat? = runCatching {

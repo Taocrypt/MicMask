@@ -88,6 +88,8 @@ class InjectorService : Binder {
         /** 语音包：fd(48k mono s16le) + gain + loop；22 停止 */
         const val TX_SFX_PLAY = 21
         const val TX_SFX_STOP = 22
+        /** 输出状态：距上次有人声输出的毫秒（-1=从未），输出缓冲毫秒 */
+        const val TX_OUT_STATE = 23
         const val TX_DESTROY = 16777115
 
         const val SR = 48000
@@ -310,6 +312,13 @@ class InjectorService : Binder {
                 TX_SFX_STOP -> {
                     sfx = null
                     reply?.writeNoException()
+                    return true
+                }
+                TX_OUT_STATE -> {
+                    reply?.writeNoException()
+                    val t = lastVoicedNs
+                    reply?.writeInt(if (t == 0L) -1 else ((System.nanoTime() - t) / 1_000_000L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
+                    reply?.writeInt(outRing.size() * 1000 / SR)
                     return true
                 }
                 TX_SYS_STAT -> {
@@ -586,6 +595,9 @@ class InjectorService : Binder {
     @Volatile private var tierPrimeMs = 0
     private val micRing = ShortRing(SR * 3)
     private val outRing = ShortRing(SR * 3)
+    /** 外部（AI）输出里最近一次出现人声的时刻；峰值约 -30 dBFS 以上算有声 */
+    @Volatile private var lastVoicedNs = 0L
+    private val VOICED_PEAK = 1000
     @Volatile private var underruns = 0L
     @Volatile private var liveLevelDb = -120f
     @Volatile private var liveFrames = 0L
@@ -725,7 +737,9 @@ class InjectorService : Binder {
                     if (primed && k < hop) { underruns++; primed = false; slog('W', "断流#$underruns：输出缓冲只剩 ${k * 1000 / SR}ms"); engine?.takeIf { engineState == "运行" }?.noteTrouble("断流") }
                     // 积压超过「预缓冲 + 一块」就丢旧的回到预缓冲：启动时的积压不会一直挂着变成延迟（1.13 实测稳定在 0.7~1 s）
                     if (outRing.size() > prime + SR / 2) { outRing.trimTo(prime); slog('I', "输出积压过多，丢到预缓冲 ${livePrimeMs}ms") }
-                    for (i in 0 until hop) fxBuf[i] = if (i < k) ext[i] / 32768f else 0f
+                    var pk = 0
+                    for (i in 0 until hop) { fxBuf[i] = if (i < k) ext[i] / 32768f else 0f; if (i < k) pk = maxOf(pk, kotlin.math.abs(ext[i].toInt())) }
+                    if (pk > VOICED_PEAK) lastVoicedNs = System.nanoTime()
                     fx.process(fxBuf, hop); mixSfx(fxBuf, hop)
                     for (i in 0 until hop) {
                         var v = (fxBuf[i] * 32767f).toInt().coerceIn(-32768, 32767)
