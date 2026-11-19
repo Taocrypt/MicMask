@@ -148,7 +148,7 @@ class LiveFloatService : Service() {
         // 右下角工具：内容缩放 A− / A+，窗口大小 ⤡（无底纯图标，和启动/停止同一行贴右；极窄窗才换行）
         val tools = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL; isBaselineAligned = false; gravity = Gravity.END or Gravity.CENTER_VERTICAL
-            addView(scaleBtn("A−", -0.1f)); addView(scaleBtn("A+", 0.1f)); addView(resizeHandle())
+            addView(scaleBtn("A−", -0.05f)); addView(scaleBtn("A+", 0.05f)); addView(resizeHandle())
         }
         val bottomWrap = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(bottom) }
         fun layBottom(w: Int) {
@@ -201,6 +201,7 @@ class LiveFloatService : Service() {
     private fun panelH() = Prefs.main(applicationContext).getInt("lf_panel_h", 0).let { if (it <= 0) ViewGroup.LayoutParams.WRAP_CONTENT else minOf(dp(it), screen().second - dp(80)) }
     private fun scrollLp(ph: Int) = if (ph == ViewGroup.LayoutParams.WRAP_CONTENT) LinearLayout.LayoutParams(-1, -2) else LinearLayout.LayoutParams(-1, 0, 1f)
 
+    private var scaleToast: android.widget.Toast? = null
     /** 内容缩放：文字/按钮整体变大变小（0.7–1.5），写配置后自动重建并保持展开 */
     private fun scaleBtn(t: String, step: Float) = TextView(this).apply {
         // 纯文字图标，无按钮底：省位置，和底栏「启动/停止」同一行贴右下角
@@ -209,8 +210,12 @@ class LiveFloatService : Service() {
         setPadding(sdp(5), sdp(6), sdp(5), sdp(6))
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         setOnClickListener {
-            val n = (Math.round((ps + step) * 10) / 10f).coerceIn(0.7f, 1.5f)
+            // 每次 5%，点击时短暂提示当前比例
+            val n = (Math.round((ps + step) * 20) / 20f).coerceIn(0.7f, 1.5f)
             if (n != ps) Prefs.main(applicationContext).edit().putFloat("lf_panel_scale", n).apply()
+            scaleToast?.cancel()
+            scaleToast = android.widget.Toast.makeText(applicationContext,
+                "内容缩放 ${Math.round(n * 100)}%" + (if (n == ps) (if (step > 0) "（已最大）" else "（已最小）") else ""), android.widget.Toast.LENGTH_SHORT).also { it.show() }
         }
     }
 
