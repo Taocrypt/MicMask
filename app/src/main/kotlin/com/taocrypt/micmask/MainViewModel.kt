@@ -670,12 +670,47 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val r = recorder.stop()
         _state.value = _state.value.copy(recording = false, recElapsedMs = 0L, recLevel = 0f)
         if (r == null) { _state.value = _state.value.copy(toast = tr("太短了，按住多说一会儿")); return }
+        clipRaw = r.file.absolutePath; clipSigDone = null
+        clipConvert(mode, autoPlay, again = false)
+    }
+
+    // 录播原声：保留最近一次录音，切换音色/预设后可直接重新转换，不用重录
+    private var clipRaw: String? = null
+    private var clipSigDone: String? = null
+
+    /** 当前转换参数的签名：AI=音色+音高+档位，普通=音调+效果 */
+    private fun clipSig(mode: Int): String {
+        val st = _state.value
+        return if (mode == 0) "0|${ModelStore.currentVoice(ctx)}|${prefs.getFloat("ai_semis", 0f).toInt()}|${st.aiTier}|${st.aiGate}|${st.aiFeatTh}|${st.aiSynTh}"
+        else "1|${st.pitchSemis}|${st.fx.joinToString(",")}"
+    }
+
+    private fun clipStale(mode: Int): Boolean =
+        clipRaw?.let { File(it).exists() } == true && clipSig(mode) != clipSigDone
+
+    /** 悬浮窗切换音色/预设后调用：有原声且参数变了就重新转换（不自动外放） */
+    fun clipReconvertIfStale(mode: Int) {
+        val st = _state.value
+        if (st.clipBusy || st.recording || st.qqPlaying || !clipStale(mode)) return
+        clipConvert(mode, autoPlay = false, again = true)
+    }
+
+    /** 悬浮窗 ▶：参数变了先按当前音色/预设重新转换再播，否则直接播 */
+    fun clipPlay(mode: Int) {
+        val st = _state.value
+        if (st.clipBusy || st.recording) return
+        if (clipStale(mode)) clipConvert(mode, autoPlay = true, again = true) else playPendingNow()
+    }
+
+    private fun clipConvert(mode: Int, autoPlay: Boolean, again: Boolean) {
+        val raw = clipRaw ?: return
+        val sig = clipSig(mode)
         val st0 = _state.value
         _state.value = st0.copy(clipBusy = true, clipStage = tr("读取录音"), clipProgress = 0f)
         viewModelScope.launch {
             val res = kotlinx.coroutines.withContext(Dispatchers.Default) {
                 runCatching {
-                    val x = SoundBoard.decode(null, r.file.absolutePath)
+                    val x = SoundBoard.decode(null, raw)
                     val y: ShortArray = if (mode == 0) {
                         val voice = ModelStore.currentVoice(ctx) ?: throw IllegalStateException(tr("还没有音色，先在变声页下载"))
                         val tu = _state.value
@@ -717,12 +752,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
             res.onSuccess { (f, sec) ->
+                clipSigDone = sig
                 armQqPending(f)
                 L.i("录播 ${if (mode == 0) "AI" else "普通"} → ${f.name} %.1fs".format(sec))
                 // 松手转换完直接外放（不再需要单独的悬浮球/外放按钮）
                 if (autoPlay) runCatching { playPendingNow() }
                 _state.value = _state.value.copy(clipBusy = false, clipStage = "", clipFile = f, clipSeconds = sec,
-                    toast = if (autoPlay) tr("转换完成，正在外放") else tr("转换完成，点 ▶ 播放"))
+                    toast = when {
+                        autoPlay -> tr("转换完成，正在外放")
+                        again -> tr("已按当前音色重新转换，点 ▶ 播放")
+                        else -> tr("转换完成，点 ▶ 播放")
+                    })
             }.onFailure {
                 L.e("录播转换失败", it)
                 _state.value = _state.value.copy(clipBusy = false, clipStage = "", toast = tr("转换失败：{0}", it.message))

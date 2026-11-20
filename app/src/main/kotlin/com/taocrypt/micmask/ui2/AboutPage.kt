@@ -1,5 +1,6 @@
 package com.taocrypt.micmask.ui2
 
+import androidx.compose.ui.graphics.luminance
 import com.taocrypt.micmask.tr
 
 import android.content.Context
@@ -139,13 +140,18 @@ fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit =
             Text(tr("安卓实时变声 · 直通游戏与通话麦克风"), fontSize = 13.sp, color = summary, textAlign = TextAlign.Center)
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                // 两个胶囊同款：图标 + 文字
-                Pill(com.taocrypt.micmask.R.drawable.ic_tag, "v${BuildConfig.VERSION_NAME}",
-                    MiuixTheme.colorScheme.primary, MiuixTheme.colorScheme.onPrimary) { openUrl(ctx, AboutLinks.RELEASE_TAG) }
-                Pill(com.taocrypt.micmask.R.drawable.ic_github, stars?.let { "★ $it" } ?: "GitHub",
-                    MiuixTheme.colorScheme.onSurface, MiuixTheme.colorScheme.surface) { openUrl(ctx, AboutLinks.HOME) }
-                Pill(com.taocrypt.micmask.R.drawable.ic_globe, tr("官网"),
-                    MiuixTheme.colorScheme.onSurface, MiuixTheme.colorScheme.surface) { openUrl(ctx, AboutLinks.SITE) }
+                // 三个胶囊同款：图标 + 文字；底色跟随莫奈取色，压成低饱和的浅色/深色调
+                val cs = MiuixTheme.colorScheme
+                val dark = cs.background.luminance() < 0.5f
+                val logo = androidx.compose.ui.graphics.lerp(androidx.compose.ui.graphics.Color(0xFF8E6CE0), cs.primary, 0.35f)
+                val gray = androidx.compose.ui.graphics.lerp(cs.onSurface, cs.primary, 0.2f)
+                fun tone(c: androidx.compose.ui.graphics.Color) =
+                    androidx.compose.ui.graphics.lerp(cs.surface, c, if (dark) 0.22f else 0.14f) to
+                        androidx.compose.ui.graphics.lerp(c, if (dark) androidx.compose.ui.graphics.Color.White else androidx.compose.ui.graphics.Color.Black, if (dark) 0.25f else 0.15f)
+                val (vb, vf) = tone(cs.primary); val (gb, gf) = tone(gray); val (wb, wf) = tone(logo)
+                Pill(com.taocrypt.micmask.R.drawable.ic_tag, "v${BuildConfig.VERSION_NAME}", vb, vf) { openUrl(ctx, AboutLinks.RELEASE_TAG) }
+                Pill(com.taocrypt.micmask.R.drawable.ic_github, stars?.let { "★ $it" } ?: "GitHub", gb, gf) { openUrl(ctx, AboutLinks.HOME) }
+                Pill(com.taocrypt.micmask.R.drawable.ic_globe, "Website", wb, wf) { openUrl(ctx, AboutLinks.SITE) }
             }
         }
 
@@ -180,7 +186,8 @@ fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit =
                 InfoRow(tr("设备"), "${Build.MANUFACTURER} ${Build.MODEL}")
                 InfoRow(tr("架构"), abi)
                 InfoRow(tr("版本"), "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
-                InfoRow(tr("构建"), if (BuildConfig.DEBUG) tr("测试版") else tr("正式版"))
+                InfoRow(tr("构建"), (if (Regex("alpha|beta|rc", RegexOption.IGNORE_CASE).containsMatchIn(BuildConfig.VERSION_NAME)) tr("测试版") else tr("正式版")) +
+                    if (BuildConfig.DEBUG) " · debug" else "")
                 InfoRow(tr("包名"), ctx.packageName)
             }
         }
@@ -206,7 +213,7 @@ fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit =
             ArrowPreference(title = tr("免责声明"), summary = tr("版权归属、使用准则与隐私"), onClick = openDisclaimer)
             ArrowPreference(title = tr("参考项目"), summary = AboutLinks.REFS.joinToString(" · ") { it.first }, onClick = openRefs)
         }
-        Text("© 2026 Taocrypt · Made with ❤️ & AI",
+        Text("© 2026 Taocrypt · Made with AI & ❤️",
             fontSize = 11.sp, color = summary, textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 20.dp))
     }

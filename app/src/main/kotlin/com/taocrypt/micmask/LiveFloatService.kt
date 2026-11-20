@@ -499,6 +499,8 @@ class LiveFloatService : Service() {
         val sel = when (mode) { 2 -> st?.fxCardPreset; 1 -> st?.fxPreset; else -> st?.liveVoice }.orEmpty()
         val key = "$mode|$sel|${st?.userPresets?.get(mode)?.size}|${st?.liveVoices?.size}"
         if (force || key != lastPresetKey) {
+            // 普通模式：切换音色/预设后，用保留的原声按新参数重新转换，不用重录
+            if (lastPresetKey.isNotEmpty() && key != lastPresetKey && st?.speakerMode == true && mode <= 1) vm?.clipReconvertIfStale(mode)
             lastPresetKey = key
             presetRow.removeAllViews()
             if (vm == null || st == null) { presetRow.addView(chip(tr("先打开 App"), 0x33FFFFFF) { openApp() }); return }
@@ -548,7 +550,7 @@ class LiveFloatService : Service() {
                 st.qqPlaying -> vm.stopQqLoop()
                 st.clipBusy || st.recording -> {}
                 st.qqPendingName == null -> android.widget.Toast.makeText(applicationContext, tr("还没有录音，先按住录一句"), android.widget.Toast.LENGTH_SHORT).show()
-                else -> vm.playPendingNow()
+                else -> vm.clipPlay(st.liveMode.coerceAtMost(1))
             }
             h.postDelayed({ paintRec(vm()?.state?.value) }, 80); scheduleHide()
         }
