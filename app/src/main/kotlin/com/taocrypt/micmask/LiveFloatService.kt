@@ -103,6 +103,8 @@ class LiveFloatService : Service() {
     }
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+    private val R1 = 6
+    private val R2 = 16
     private fun round(color: Int, r: Int) = GradientDrawable().apply { setColor(color); cornerRadius = dp(r).toFloat() }
 
     private fun add() {
@@ -117,7 +119,7 @@ class LiveFloatService : Service() {
         dockRight = p.getBoolean("lf_right", false); homeY = lp.y
         ballDp = p.getInt("lf_ball_dp", 45).coerceIn(32, 80); ballAlpha = p.getFloat("lf_ball_alpha", 0.9f).coerceIn(0.2f, 1f)
         ps = p.getFloat("lf_panel_scale", 0.85f).coerceIn(0.7f, 1.5f); panelAlpha = p.getFloat("lf_panel_alpha", 1f).coerceIn(0.3f, 1f)
-        lastSfxKey = ""; lastPresetKey = ""; lastStopOn = null
+        lastSfxKey = ""; lastPresetKey = ""; 
         p.unregisterOnSharedPreferenceChangeListener(prefL); p.registerOnSharedPreferenceChangeListener(prefL)
         // 悬浮球 = App 图标 + 状态色环（灰=未开启，蓝=变声中，橙=AI 还在输出）
         ring = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0x00000000); setStroke(dp(3), RING_OFF) }
@@ -128,48 +130,26 @@ class LiveFloatService : Service() {
                 setImageResource(R.drawable.float_logo); scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
             }, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         }
-        stat = TextView(this).apply { setTextColor(0xFFDDDDDD.toInt()); textSize = 11f * ps; typeface = Typeface.MONOSPACE; text = "读取中…" }
+        stat = TextView(this).apply { setTextColor(0xFFAAAAAA.toInt()); textSize = 10f * ps; typeface = Typeface.MONOSPACE; text = "读取中…" }
         modeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         presetRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         sfxRow = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val bottom = LinearLayout(this).apply {
-            // 不按文字基线对齐（否则右侧工具按钮会被基线拉低），整行垂直居中
-            orientation = LinearLayout.HORIZONTAL; isBaselineAligned = false; gravity = Gravity.CENTER_VERTICAL
-            stopChip = chip("停止", 0xFFE5484D.toInt()) {
-                val v = vm(); val on = (v?.state?.value?.liveOn == true) || MicInjector.liveOn
-                if (on) v?.stopAll() ?: run { MicInjector.stopLive(); LiveService.stop(this@LiveFloatService) }
-                else if (v == null) openApp() else v.startMode(v.state.value.liveMode)
-            }
-            addView(stopChip)
-            // 耳返开关（戴耳机用，外放会啸叫）：只写「耳返」，颜色表示开/关
-            monChip = chip("耳返", 0x33FFFFFF) {
-                val v = vm(); if (v == null) openApp() else v.setLiveMonitor(!(v.state.value.liveMonitor))
-            }
-            addView(monChip)
-            // 「打开 App」「关闭」已去掉：双击悬浮球打开 App，长按悬浮球关闭悬浮窗
-        }
-        // 右下角工具：内容缩放 A− / A+，窗口大小 ⤡（无底纯图标，和启动/停止同一行贴右；极窄窗才换行）
+        // 底栏：左下性能信息（可换行，占满剩余宽度），右下缩放工具 A− / A+ / ⤡
+        // 启动/停止按钮已去掉：点正在运行的模式按钮即停止；「打开 App」「关闭」改为双击 / 长按悬浮球
         val tools = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL; isBaselineAligned = false; gravity = Gravity.END or Gravity.CENTER_VERTICAL
+            orientation = LinearLayout.HORIZONTAL; isBaselineAligned = false; gravity = Gravity.END or Gravity.BOTTOM
             addView(scaleBtn("A−", -0.05f)); addView(scaleBtn("A+", 0.05f)); addView(resizeHandle())
         }
-        val bottomWrap = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(bottom) }
-        fun layBottom(w: Int) {
-            // 拖动缩放中不挪工具条：移走正在接收触摸的「⤡」会打断手势（表现为一卡一卡）
-            if (resizing) return
-            (tools.parent as? ViewGroup)?.removeView(tools)
-            bottom.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED); tools.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED)
-            if (bottom.measuredWidth + tools.measuredWidth <= w) bottom.addView(tools, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            else bottomWrap.addView(tools, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
+        val bottomWrap = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; isBaselineAligned = false; gravity = Gravity.CENTER_VERTICAL
+            addView(stat, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(tools, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
-        relayBottom = { bottomWrap.post { layBottom(bottomWrap.width.takeIf { it > 0 } ?: (panelW() - sdp(24))) } }
-        bottomWrap.addOnLayoutChangeListener { _, l, _, r, _, ol, _, or_, _ -> if (r - l != or_ - ol && r > l) bottomWrap.post { layBottom(r - l) } }
-        layBottom(panelW() - sdp(24))
+        relayBottom = null
         val pw = panelW(); val ph = panelH()
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            addView(stat)
-            addView(space(8)); addView(modeRow)
+            addView(modeRow)
             addView(space(8)); addView(HorizontalScrollView(this@LiveFloatService).apply { isHorizontalScrollBarEnabled = false; addView(presetRow) })
             addView(space(8)); addView(TextView(this@LiveFloatService).apply { text = "音效包"; setTextColor(0xFF999999.toInt()); textSize = 11f * ps })
             addView(space(2)); addView(sfxRow)
@@ -177,7 +157,7 @@ class LiveFloatService : Service() {
         bodyScroll = android.widget.ScrollView(this).apply { isVerticalScrollBarEnabled = false; isFillViewport = false; addView(body) }
         panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; visibility = View.GONE
-            background = round(0xE61C1C1E.toInt(), 18); setPadding(sdp(12), sdp(10), sdp(12), sdp(10)); alpha = panelAlpha
+            background = round(0xE61C1C1E.toInt(), 10); setPadding(sdp(12), sdp(10), sdp(12), sdp(10)); alpha = panelAlpha
             layoutParams = LinearLayout.LayoutParams(pw, ph).apply { topMargin = dp(6) }
             addView(bodyScroll, scrollLp(ph))
             addView(space(8)); addView(bottomWrap)
@@ -281,9 +261,10 @@ class LiveFloatService : Service() {
         }
     }
 
-    private fun chip(text: String, bg: Int, onClick: () -> Unit) = TextView(this).apply {
+    /** 一级按钮（模式/启动停止/耳返）小圆角 R1，二级按钮（预设/音效等）胶囊 R2 */
+    private fun chip(text: String, bg: Int, r: Int = R2, onClick: () -> Unit) = TextView(this).apply {
         this.text = text; setTextColor(Color.WHITE); textSize = 13f * ps; gravity = Gravity.CENTER
-        background = round(bg, 14); setPadding(sdp(12), sdp(6), sdp(12), sdp(6))
+        background = round(bg, r); setPadding(sdp(12), sdp(6), sdp(12), sdp(6))
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = sdp(6) }
         setOnClickListener { onClick(); h.postDelayed({ refresh(true) }, 150) }
     }
@@ -435,9 +416,6 @@ class LiveFloatService : Service() {
     private val loop = object : Runnable { override fun run() { refresh(false); h.postDelayed(this, 1000) } }
     private fun tick() { h.post(loop); h.post(fast) }
 
-    private var stopChip: TextView? = null
-    private var monChip: TextView? = null
-    private var lastStopOn: Boolean? = null
     private fun refresh(force: Boolean) {
         if (root == null) return
         val vm = vm()
@@ -446,12 +424,6 @@ class LiveFloatService : Service() {
         val mode = st?.liveMode ?: 0
         paintRing(on)
         if (!expanded) return
-        // 停止 ↔ 启动
-        if (force || lastStopOn != on) {
-            lastStopOn = on
-            stopChip?.text = if (on) "停止" else "启动"
-            stopChip?.background = round(if (on) 0xFFE5484D.toInt() else 0xFF2EA043.toInt(), 14)
-        }
         // 性能：每秒一次
         val now = System.currentTimeMillis()
         if (force || now - lastStatT >= 900) { lastStatT = now; stat.text = statText() }
@@ -461,13 +433,13 @@ class LiveFloatService : Service() {
             // 声卡依赖 Shizuku 注入：未授权（外放模式）时不显示
             if (i == 2 && !runCatching { com.taocrypt.micmask.inject.MicInjector.shizukuGranted() }.getOrDefault(false)) return@forEachIndexed
             val sel = st != null && mode == i
-            modeRow.addView(chip(if (on && sel) "■ $n" else n, if (on && sel) ACCENT else if (sel) 0x553482FF else 0x33FFFFFF) {
+            modeRow.addView(chip(if (on && sel) "■ $n" else n, if (on && sel) ACCENT else if (sel) 0x553482FF else 0x33FFFFFF, R1) {
                 if (vm == null) openApp() else vm.startMode(i)
             })
         }
-        // 耳返：颜色标识开关
+        // 耳返（放在声卡后面）：只写「耳返」，颜色标识开关；戴耳机用，外放会啸叫
         val mon = st?.liveMonitor == true
-        monChip?.background = round(if (mon) ACCENT else 0x33FFFFFF, 14)
+        modeRow.addView(chip("耳返", if (mon) ACCENT else 0x33FFFFFF, R1) { if (vm == null) openApp() else vm.setLiveMonitor(!mon) })
         // 语音包
         val sk = "${st?.sfxPlaying}|${st?.sounds?.size}|${st?.sfxLoop}|${st?.packsOff}"
         if (force || sk != lastSfxKey) {
