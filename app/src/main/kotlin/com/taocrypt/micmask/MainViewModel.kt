@@ -1069,6 +1069,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun stopSoundLocal() { sfxJob?.cancel(); sfxJob = null; if (_state.value.sfxPlaying != null) _state.value = _state.value.copy(sfxPlaying = null) }
     fun stopSound() { stopSoundLocal(); com.taocrypt.micmask.inject.MicInjector.stopSfx(); SpeakerSfx.stopSfx() }
     /** 点一下播放（再点同一个停止）。没在变声时自动以声卡模式打开麦克风通道。 */
+    /** 悬浮窗长按音效：只从扬声器外放（不进麦克风）；再长按同一个停止 */
+    fun playSoundSpeaker(id: String) {
+        if (_state.value.sfxPlaying == id) { stopSound(); return }
+        val s = _state.value.sounds.firstOrNull { it.id == id } ?: SoundBoard.find(ctx, id) ?: return
+        sfxJob?.cancel()
+        _state.value = _state.value.copy(sfxPlaying = id, toast = "外放：${s.name}")
+        sfxJob = viewModelScope.launch {
+            val n = kotlinx.coroutines.withContext(Dispatchers.IO) { SpeakerSfx.playSfx(s.file, _state.value.sfxGain, _state.value.sfxLoop) }
+            if (n <= 0) { _state.value = _state.value.copy(sfxPlaying = null, toast = "播放失败"); return@launch }
+            if (!_state.value.sfxLoop) { kotlinx.coroutines.delay(n * 1000L / SoundBoard.SR + 100); if (_state.value.sfxPlaying == id) _state.value = _state.value.copy(sfxPlaying = null) }
+        }
+    }
+
     fun playSound(id: String) {
         if (_state.value.sfxPlaying == id) { stopSound(); return }
         val s = _state.value.sounds.firstOrNull { it.id == id } ?: SoundBoard.find(ctx, id) ?: return
@@ -1394,6 +1407,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (com.taocrypt.micmask.inject.MicInjector.liveOn) return
         ctx.getSharedPreferences("live", 0).edit().putBoolean("aec", on).apply()
         _state.value = _state.value.copy(liveAec = on)
+    }
+
+    /** 悬浮窗「降噪」：未变声直接切；变声中切换录音源后重启一次（录音源只能在启动时设定） */
+    fun toggleLiveAecAnywhere() {
+        val on = !_state.value.liveAec
+        ctx.getSharedPreferences("live", 0).edit().putBoolean("aec", on).apply()
+        _state.value = _state.value.copy(liveAec = on)
+        L.i("UI 降噪 → $on")
+        if (com.taocrypt.micmask.inject.MicInjector.liveOn || _state.value.liveOn) {
+            toggleLive()
+            viewModelScope.launch { kotlinx.coroutines.delay(900); if (!_state.value.liveOn) toggleLive() }
+        }
     }
 
     fun setLiveAi(on: Boolean) {

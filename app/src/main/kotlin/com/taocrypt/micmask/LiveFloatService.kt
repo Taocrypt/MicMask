@@ -264,7 +264,8 @@ class LiveFloatService : Service() {
     }
 
     /** 一级按钮（模式/启动停止/耳返）小圆角 R1，二级按钮（预设/音效等）胶囊 R2 */
-    private fun chip(text: String, bg: Int, r: Int = R2, onClick: () -> Unit) = TextView(this).apply {
+    private fun chip(text: String, bg: Int, r: Int = R2, onLong: (() -> Unit)? = null, onClick: () -> Unit) = TextView(this).apply {
+        if (onLong != null) setOnLongClickListener { onLong(); h.postDelayed({ refresh(true) }, 150); true }
         this.text = text; setTextColor(Color.WHITE); textSize = 13f * ps; gravity = Gravity.CENTER
         background = round(bg, r); setPadding(sdp(12), sdp(6), sdp(12), sdp(6))
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = sdp(6) }
@@ -442,6 +443,9 @@ class LiveFloatService : Service() {
         // 耳返（放在声卡后面）：只写「耳返」，颜色标识开关；戴耳机用，外放会啸叫
         val mon = st?.liveMonitor == true
         modeRow.addView(chip("耳返", if (mon) ACCENT else 0x33FFFFFF, R1) { if (vm == null) openApp() else vm.setLiveMonitor(!mon) })
+        // 降噪（通话录音源，带回声消除/降噪）：变声中切换会自动重启一次
+        val aec = st?.liveAec == true
+        modeRow.addView(chip("降噪", if (aec) ACCENT else 0x33FFFFFF, R1) { if (vm == null) openApp() else vm.toggleLiveAecAnywhere() })
         // 语音包
         val sk = "${st?.sfxPlaying}|${st?.sounds?.size}|${st?.sfxLoop}|${st?.packsOff}"
         if (force || sk != lastSfxKey) {
@@ -458,7 +462,7 @@ class LiveFloatService : Service() {
                     sfxRow.addView(TextView(this).apply { text = "▍$title"; setTextColor(0xFFBBBBBB.toInt()); textSize = 10.5f * ps; setPadding(0, sdp(4), 0, sdp(3)) })
                     val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
                     list.forEach { so -> row.addView(chip((if (so.id == st.sfxPlaying) "▶ " else "") + so.name,
-                        if (so.id == st.sfxPlaying) ACCENT else 0x33FFFFFF) { vm.playSound(so.id) }) }
+                        if (so.id == st.sfxPlaying) ACCENT else 0x33FFFFFF, onLong = { vm.playSoundSpeaker(so.id) }) { vm.playSound(so.id) }) }
                     sfxRow.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(row) })
                 }
             }
@@ -496,7 +500,8 @@ class LiveFloatService : Service() {
         // 一行显示：段内不断行（不换行空格），宽度不够时才在段与段之间换行
         val segs = mutableListOf("CPU $cpu", temp, "内存 %.1f/%.1fG".format(avail / 1024f, total / 1024f) + if (mi.lowMemory) " ⚠" else "")
         if (ss != null) { segs += "进程 $rss"; segs += "断流 ${ss.underruns}" } else segs += "未开始变声"
-        return segs.joinToString("  ") { it.replace(' ', '\u00A0') }
+        // 每段内部用不换行空格 + 词连接符（U+2060）粘住，只在段与段之间换行，避免「进/程624M」这种拆字
+        return segs.joinToString("  ") { seg -> seg.replace(' ', '\u00A0').toList().joinToString("\u2060") }
     }
 
     private fun remove() {
