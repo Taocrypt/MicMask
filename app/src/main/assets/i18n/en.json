@@ -863,5 +863,8 @@
   "启动时检查": "Check on launch",
   "当前 {0} 位 · 历史 {1} 位": "{0} current · {1} past",
   "感谢以上项目的作者与贡献者": "Thanks to the authors and contributors of these projects",
-  "已按当前音色重新转换，点 ▶ 播放": "Re-converted with the current voice. Tap ▶ to play"
+  "已按当前音色重新转换，点 ▶ 播放": "Re-converted with the current voice. Tap ▶ to play",
+  "首次 {0}": "Since {0}",
+  "最近 {0}": "Latest {0}",
+  "有效至 {0}": "Until {0}"
 }
