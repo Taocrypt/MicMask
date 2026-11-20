@@ -44,7 +44,7 @@ class LiveFloatService : Service() {
         @Volatile var running = false; private set
         fun toggle(ctx: Context, on: Boolean) {
             val i = Intent(ctx, LiveFloatService::class.java).setAction(if (on) "show" else "hide")
-            runCatching { if (on) ctx.startForegroundService(i) else ctx.startService(i) }.onFailure { L.w("LiveFloatService：${it.message}") }
+            runCatching { ctx.startService(i) }.onFailure { L.w("LiveFloatService：${it.message}") }
         }
         private val MODES = listOf("AI", "普通", "声卡")
         private const val ACCENT = 0xFF3482FF.toInt()
@@ -81,7 +81,8 @@ class LiveFloatService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "hide") { Prefs.main(applicationContext).edit().putBoolean("lf_on", false).apply(); remove(); stopSelf(); return START_NOT_STICKY }
-        foreground()
+        // 不单独发通知：悬浮窗可见时进程本身算前台可感知；变声时由 LiveService 的常驻通知提供「开启悬浮窗」
+        runCatching { getSystemService(NotificationManager::class.java).deleteNotificationChannel(CH) }
         if (root == null) {
             if (!FloatingPlayService.canDraw(this)) { stopSelf(); return START_NOT_STICKY }
             add()
