@@ -150,20 +150,20 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
             if (st.useIndex) LabeledSlider("检索混合比例", "%.2f".format(st.indexRate), null, st.indexRate, 0f..1f) { vm.setIndexRate(it) }
             LabeledSlider("无声段保护", "%.2f".format(st.protect), "越小越贴近检索音色，太小静音段易出杂音，默认 0.33", st.protect, 0f..0.5f) { vm.setProtect(it) }
         }
-        // 高级：默认折叠
+        // ---- 高级参数（样式同文字转语音页：开关展开，默认关） ----
         var advOpen by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 8.dp).clip(RoundedCornerShape(8.dp))
-            .clickable { advOpen = !advOpen }.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("高级", Modifier.weight(1f), fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
-            Text(if (advOpen) "收起 ▴" else "说话人 ID / 拼接重叠 / 线程 ▾", fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+        SmallTitle("高级参数")
+        Card(Modifier.fillMaxWidth().padding(Pad2)) {
+            SwitchPreference(checked = advOpen, onCheckedChange = { advOpen = it }, title = "显示高级参数",
+                summary = "说话人 ID / 拼接重叠 / 推理线程，不熟的话保持默认")
+            if (advOpen) {
+                LabeledSlider("说话人 ID", "${st.sid}", "单人模型保持 0", st.sid.toFloat(), 0f..108f, 107) { vm.setSid(it.roundToInt()) }
+                LabeledSlider("拼接重叠", "${st.overlap} 帧", "长音频分块拼接的平滑程度", st.overlap.toFloat(), 0f..256f, 15) { vm.setOverlap(it.roundToInt()) }
+                LabeledSlider("推理线程", if (st.threads == 0) "自动" else "${st.threads}", "本机 ${Runtime.getRuntime().availableProcessors()} 核，0 = 自动；改后需重新加载",
+                    st.threads.toFloat(), 0f..8f, 7) { vm.setThreads(it.roundToInt()) }
+            }
         }
-        if (advOpen) Card(Modifier.fillMaxWidth().padding(Pad2)) {
-            LabeledSlider("说话人 ID", "${st.sid}", "单人模型保持 0", st.sid.toFloat(), 0f..108f, 107) { vm.setSid(it.roundToInt()) }
-            LabeledSlider("拼接重叠", "${st.overlap} 帧", "长音频分块拼接的平滑程度", st.overlap.toFloat(), 0f..256f, 15) { vm.setOverlap(it.roundToInt()) }
-            LabeledSlider("推理线程", if (st.threads == 0) "自动" else "${st.threads}", "本机 ${Runtime.getRuntime().availableProcessors()} 核，0 = 自动；改后需重新加载",
-                st.threads.toFloat(), 0f..8f, 7) { vm.setThreads(it.roundToInt()) }
-        }
-        Text("恢复默认参数", Modifier.padding(horizontal = 16.dp).clip(RoundedCornerShape(8.dp))
+        Text("恢复默认参数", Modifier.padding(horizontal = 16.dp).clip(RoundedCornerShape(10.dp))
             .clickable { vm.resetFileParams() }.padding(vertical = 6.dp, horizontal = 4.dp),
             fontSize = 14.sp, color = MiuixTheme.colorScheme.primary)
 
