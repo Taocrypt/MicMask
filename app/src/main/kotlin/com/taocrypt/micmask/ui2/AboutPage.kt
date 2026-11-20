@@ -8,6 +8,16 @@ import android.net.Uri
 import android.os.Build
 import android.widget.Toast
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.res.painterResource
+import top.yukonga.miuix.kmp.basic.Icon
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -100,7 +110,7 @@ private fun openQqGroup(ctx: Context) {
 }
 
 @Composable
-fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit = {}) {
+fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit = {}, openDisclaimer: () -> Unit = {}) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val upd by Updater.state.collectAsState()
@@ -111,17 +121,32 @@ fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit =
     LaunchedEffect(Unit) { if (upd is Updater.State.Idle || upd is Updater.State.Fail) Updater.check(ctx, silent = true) }
     val summary = MiuixTheme.colorScheme.onSurfaceVariantSummary
     val pad = PaddingValues(horizontal = 12.dp)
+    var stars by remember { mutableStateOf(com.taocrypt.micmask.Prefs.main(ctx).getInt("gh_stars", -1).takeIf { it >= 0 }) }
+    LaunchedEffect(Unit) { fetchStars()?.let { stars = it; com.taocrypt.micmask.Prefs.main(ctx).edit().putInt("gh_stars", it).apply() } }
+    var boom by remember { mutableStateOf(0) }   // 彩蛋：点图标放烟花
+    if (boom > 0) Fireworks(boom) { boom = 0 }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding()) {
         // ---- 头部 ----
         Column(Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            if (icon != null) Image(icon, null, Modifier.size(88.dp).clip(RoundedCornerShape(22.dp)))
+            if (icon != null) Image(icon, null, Modifier.size(88.dp).clip(RoundedCornerShape(22.dp))
+                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { boom++ })
             Spacer(Modifier.height(12.dp))
             Text("MicMask", fontSize = 24.sp, fontWeight = FontWeight.Bold)
             Text(tr("安卓实时变声 · 直通游戏与通话麦克风"), fontSize = 13.sp, color = summary, textAlign = TextAlign.Center)
             Spacer(Modifier.height(8.dp))
-            Text("v${BuildConfig.VERSION_NAME}", fontSize = 12.sp, color = MiuixTheme.colorScheme.onPrimary,
-                modifier = Modifier.clip(RoundedCornerShape(50)).background(MiuixTheme.colorScheme.primary).padding(horizontal = 10.dp, vertical = 3.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("v${BuildConfig.VERSION_NAME}", fontSize = 12.sp, color = MiuixTheme.colorScheme.onPrimary,
+                    modifier = Modifier.clip(RoundedCornerShape(50)).background(MiuixTheme.colorScheme.primary).padding(horizontal = 10.dp, vertical = 3.dp))
+                // GitHub 胶囊：图标 + star 数，点开项目主页
+                Row(Modifier.clip(RoundedCornerShape(50)).background(MiuixTheme.colorScheme.onSurface)
+                    .clickable { openUrl(ctx, AboutLinks.HOME) }.padding(horizontal = 10.dp, vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Icon(painterResource(com.taocrypt.micmask.R.drawable.ic_github), "GitHub", Modifier.size(14.dp), tint = MiuixTheme.colorScheme.surface)
+                    Spacer(Modifier.width(4.dp))
+                    Text(stars?.let { "★ $it" } ?: "GitHub", fontSize = 12.sp, color = MiuixTheme.colorScheme.surface)
+                }
+            }
         }
 
         // ---- 更新 ----
@@ -146,16 +171,15 @@ fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit =
             var beta by remember { mutableStateOf(Updater.betaChannel(ctx)) }
             SwitchPreference(checked = beta, onCheckedChange = { beta = it; Updater.setBetaChannel(ctx, it); Updater.check(ctx) }, title = tr("接收测试版"),
                 summary = if (beta) tr("测试版通道：alpha / beta / rc 和正式版都会推送，新功能先到，可能不稳定") else tr("稳定版通道：只推送正式版"))
-            SwitchPreference(checked = auto, onCheckedChange = { auto = it; Updater.setAutoCheck(ctx, it) }, title = tr("启动时检查更新"),
+            SwitchPreference(checked = auto, onCheckedChange = { auto = it; Updater.setAutoCheck(ctx, it) }, title = tr("启动时检查"),
                 summary = tr("关闭后仍会检查强制更新"))
             ArrowPreference(title = tr("下载镜像"), summary = tr("GitHub 不通时自动测速选择镜像"), onClick = openMirrors)
-            ArrowPreference(title = tr("全部版本"), summary = "GitHub Releases", onClick = { openUrl(ctx, AboutLinks.RELEASES) })
         }
 
-        // ---- 版本信息 ----
+        // ---- 版本信息（默认折叠） ----
         SmallTitle(tr("版本信息"))
         Card(Modifier.fillMaxWidth().padding(pad)) {
-            Column(Modifier.padding(vertical = 8.dp)) {
+            Collapsible("${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) · Android ${Build.VERSION.RELEASE}") {
                 InfoRow(tr("版本"), "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
                 InfoRow(tr("构建"), if (BuildConfig.DEBUG) tr("测试版") else tr("正式版"))
                 InfoRow(tr("包名"), ctx.packageName)
@@ -165,19 +189,12 @@ fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit =
             }
         }
 
-        // ---- 项目 ----
-        SmallTitle(tr("项目"))
-        Card(Modifier.fillMaxWidth().padding(pad)) {
-            ArrowPreference(title = tr("项目主页"), summary = "github.com/Taocrypt/MicMask", onClick = { openUrl(ctx, AboutLinks.HOME) })
-            ArrowPreference(title = tr("模型与素材仓库"), summary = "cnb.build/taocrypt/MicMask", onClick = { openUrl(ctx, AboutLinks.MODEL_REPO) })
-        }
-
         // ---- 反馈 ----
-        SmallTitle(tr("反馈与交流"))
+        SmallTitle(tr("交流反馈"))
         Card(Modifier.fillMaxWidth().padding(pad)) {
-            ArrowPreference(title = tr("加入 QQ 群"), summary = "【${AboutLinks.QQ_GROUP_NAME}】${AboutLinks.QQ_GROUP_NO}", onClick = { openQqGroup(ctx) })
+            ArrowPreference(title = tr("加群交流"), summary = tr("加入MicMask用户交流Q群"), onClick = { openQqGroup(ctx) })
             ArrowPreference(title = tr("提交问题"), summary = tr("GitHub Issues，附上日志更快定位"), onClick = { openUrl(ctx, AboutLinks.ISSUES) })
-            ArrowPreference(title = tr("日志"), summary = tr("查看并导出日志，反馈时一起发"), onClick = openLogs)
+            ArrowPreference(title = tr("免责声明"), summary = tr("版权归属、使用准则与隐私"), onClick = openDisclaimer)
         }
 
         // ---- 赞赏 ----
@@ -192,8 +209,10 @@ fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit =
         // ---- 参考项目 ----
         SmallTitle(tr("参考项目与致谢"))
         Card(Modifier.fillMaxWidth().padding(pad)) {
-            AboutLinks.REFS.forEach { (name, desc, url) ->
-                ArrowPreference(title = name, summary = desc, onClick = { openUrl(ctx, url) })
+            Collapsible(AboutLinks.REFS.joinToString(" · ") { it.first }) {
+                AboutLinks.REFS.forEach { (name, desc, url) ->
+                    ArrowPreference(title = name, summary = desc, onClick = { openUrl(ctx, url) })
+                }
             }
         }
         Text(tr("音色模型来自第三方，版权归原作者；请勿用于冒充他人、诈骗等违法用途。"),
@@ -208,4 +227,32 @@ private fun InfoRow(k: String, v: String) {
         Text(k, fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
         Text(v, fontSize = 14.sp, textAlign = TextAlign.End, modifier = Modifier.padding(start = 16.dp))
     }
+}
+
+/** 折叠卡片内容：头部一行摘要 + 展开/收起箭头，默认收起 */
+@Composable
+private fun Collapsible(summary: String, content: @Composable () -> Unit) {
+    var open by rememberSaveable { mutableStateOf(false) }
+    val rot by animateFloatAsState(if (open) 180f else 0f, label = "fold")
+    Column {
+        Row(Modifier.fillMaxWidth().clickable { open = !open }.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Text(if (open) tr("收起") else summary, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary, modifier = Modifier.weight(1f))
+            Text("⌄", fontSize = 18.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary, modifier = Modifier.padding(start = 8.dp).rotate(rot))
+        }
+        AnimatedVisibility(open) { Column(Modifier.padding(bottom = 8.dp)) { content() } }
+    }
+}
+
+/** GitHub star 数（匿名 API，失败返回 null，界面用缓存） */
+private suspend fun fetchStars(): Int? = withContext(Dispatchers.IO) {
+    runCatching {
+        val c = (URL("https://api.github.com/repos/Taocrypt/MicMask").openConnection() as HttpURLConnection).apply {
+            connectTimeout = 6000; readTimeout = 6000
+            setRequestProperty("Accept", "application/vnd.github+json")
+            setRequestProperty("User-Agent", "MicMask/${BuildConfig.VERSION_NAME}")
+        }
+        if (c.responseCode != 200) null else JSONObject(c.inputStream.bufferedReader().readText()).optInt("stargazers_count", -1).takeIf { it >= 0 }
+    }.getOrNull()
 }

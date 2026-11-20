@@ -239,7 +239,8 @@ fun V2App(vm: MainViewModel) {
                     "file" -> SubPage(tr("文件变声"), { sub = null }) { FilePage(vm, st) }
                     "whitelist" -> SubPage(tr("目标应用"), { sub = null }) { WhitelistPage(vm) }
                     "theme" -> SubPage(tr("外观"), { sub = null }) { ThemePage(ui) }
-                    "about" -> SubPage(tr("关于"), { sub = null }) { AboutPage(vm, { sub = "logs" }, { sub = "mirrors" }) }
+                    "about" -> SubPage(tr("关于"), { sub = null }) { AboutPage(vm, { sub = "logs" }, { sub = "mirrors" }, { sub = "disclaimer" }) }
+                    "disclaimer" -> SubPage(tr("免责声明"), { sub = "about" }) { DisclaimerPage() }
                     "mirrors" -> SubPage(tr("下载镜像"), { sub = "about" }) { com.taocrypt.micmask.update.MirrorPage() }
                     "logs" -> SubPage(tr("日志"), { sub = null }) { LogPage(vm) }
                     "mim3" -> SubPage(tr("制作音效包"), { sub = null }) { Mim3Page(vm, st) }
