@@ -43,7 +43,9 @@ object ModelRepo {
     data class RTts(val path: String, val url: String, val sha256: String, val size: Long, val parts: List<String> = emptyList())
     data class Manifest(val base: List<RFile>, val models: List<RModel>, val sounds: List<RSound> = emptyList(), val tts: List<RTts> = emptyList(),
                         /** 文件变声（句级）：完整合成器 + 检索索引，清单 "file":[…] */
-                        val file: List<RFile> = emptyList()) {
+                        val file: List<RFile> = emptyList(),
+                        /** fetchAll：拿不到的仓库及原因 */
+                        val errors: List<String> = emptyList()) {
         val ttsSize: Long get() = tts.sumOf { it.size }
     }
 
@@ -97,6 +99,21 @@ object ModelRepo {
             return c
         }
         throw java.io.IOException("重定向次数过多")
+    }
+
+    /**
+     * 多仓库：逐个拉清单后合并。音色按 id、素材按 pack/name、base/文件变声/TTS 按文件名去重，靠前的仓库优先。
+     * 单个仓库失败不影响其它，原因放进 errors；全部失败才抛异常。
+     */
+    fun fetchAll(inputs: List<String>): Manifest {
+        val ok = ArrayList<Manifest>(); val err = ArrayList<String>()
+        for (u in inputs) runCatching { fetch(u) }.onSuccess { ok += it }.onFailure {
+            L.w("模型仓库 $u 获取失败：${it.message}"); err += (u.substringAfter("://").take(40) + "：" + (it.message ?: "未知错误"))
+        }
+        if (ok.isEmpty()) throw java.io.IOException(err.joinToString("；"))
+        fun <T, K> merge(sel: (Manifest) -> List<T>, key: (T) -> K) = ok.flatMap(sel).distinctBy(key)
+        return Manifest(base = merge({ it.base }, { it.name }), models = merge({ it.models }, { it.id }),
+            sounds = merge({ it.sounds }, { it.id }), tts = merge({ it.tts }, { it.path }), file = merge({ it.file }, { it.name }), errors = err)
     }
 
     fun fetch(repoInput: String): Manifest {

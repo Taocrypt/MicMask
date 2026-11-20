@@ -158,6 +158,8 @@ data class UiState(
 
     // ---------------- v2：在线模型仓库 ----------------
     val repoUrl: String = "",
+    /** 多个模型仓库（按顺序合并，同名音色/文件以靠前的仓库为准）；repoUrl = 第一个，兼容旧逻辑 */
+    val repoUrls: List<String> = emptyList(),
     val repoModels: List<com.taocrypt.micmask.repo.ModelRepo.RModel> = emptyList(),
     val repoLoading: Boolean = false,
     val repoMsg: String = "",
@@ -234,6 +236,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         @Volatile var current: MainViewModel? = null
         /** 不内置任何模型仓库：用户在设置里填自己有权使用的仓库 */
         const val DEFAULT_REPO = ""
+        /** 仓库列表：新键 repoUrls（换行分隔），没有就沿用旧的单个 repoUrl */
+        fun loadRepoUrls(ctx: android.content.Context): List<String> {
+            val sp = Prefs.main(ctx)
+            val l = sp.getString("repoUrls", null)?.split('\n') ?: listOf(sp.getString("repoUrl", null).orEmpty())
+            return l.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        }
         /**
          * 无障碍**自动**触发时的外放时长（秒）。
          *
@@ -260,7 +268,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         _state.value = _state.value.copy(liveAec = ctx.getSharedPreferences("live", 0).getBoolean("aec", true), liveBench = "",
-            repoUrl = Prefs.main(ctx).getString("repoUrl", null)?.ifBlank { null } ?: DEFAULT_REPO)
+            repoUrl = loadRepoUrls(ctx).firstOrNull() ?: DEFAULT_REPO, repoUrls = loadRepoUrls(ctx))
         refreshVoices()
         migrateRoutingOnce()
 
@@ -1131,22 +1139,37 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ---------------------------------------------------------------- v2 模型仓库 / 音色管理
     private var repoManifest: com.taocrypt.micmask.repo.ModelRepo.Manifest? = null
 
-    fun setRepoUrl(v: String) {
-        prefs.edit().putString("repoUrl", v.trim()).apply()
-        _state.value = _state.value.copy(repoUrl = v.trim())
+    fun setRepoUrl(v: String) = setRepoUrls(listOf(v))
+    /** 保存仓库列表（去空去重）；repoUrl 同步为第一个，旧版本读到的也是它 */
+    fun setRepoUrls(list: List<String>) {
+        val l = list.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        prefs.edit().putString("repoUrls", l.joinToString("\n")).putString("repoUrl", l.firstOrNull().orEmpty()).apply()
+        _state.value = _state.value.copy(repoUrl = l.firstOrNull().orEmpty(), repoUrls = l)
+    }
+    fun addRepo(v: String) { if (v.isNotBlank()) { setRepoUrls(_state.value.repoUrls + v); refreshRepo() } }
+    fun removeRepo(v: String) { setRepoUrls(_state.value.repoUrls - v); refreshRepo() }
+    fun moveRepoUp(v: String) {
+        val l = _state.value.repoUrls.toMutableList(); val i = l.indexOf(v)
+        if (i > 0) { l.removeAt(i); l.add(i - 1, v); setRepoUrls(l); refreshRepo() }
     }
 
     fun refreshRepo() {
         if (_state.value.repoLoading) return
-        val url = _state.value.repoUrl
-        if (url.isBlank()) { _state.value = _state.value.copy(repoMsg = "还没填模型仓库地址（设置页）"); return }
+        val urls = _state.value.repoUrls
+        if (urls.isEmpty()) {
+            repoManifest = null
+            _state.value = _state.value.copy(repoModels = emptyList(), repoSounds = emptyList(), repoTtsSize = 0L, repoMsg = "还没填模型仓库地址（设置页）"); return
+        }
         _state.value = _state.value.copy(repoLoading = true, repoMsg = "正在获取模型列表…")
         viewModelScope.launch {
-            val r = kotlinx.coroutines.withContext(Dispatchers.IO) { runCatching { com.taocrypt.micmask.repo.ModelRepo.fetch(url) } }
+            val r = kotlinx.coroutines.withContext(Dispatchers.IO) { runCatching { com.taocrypt.micmask.repo.ModelRepo.fetchAll(urls) } }
             r.onSuccess { repoManifest = it; _state.value = _state.value.copy(repoSounds = it.sounds, repoTtsSize = it.ttsSize) }
             _state.value = _state.value.copy(repoLoading = false,
                 repoModels = r.getOrNull()?.models ?: _state.value.repoModels,
-                repoMsg = r.fold({ if (it.models.isEmpty()) "仓库里还没有模型" else "" }, { L.e("模型仓库获取失败", it); "获取失败：${it.message}" }))
+                // 多仓库时部分失败也照常显示能拿到的
+                repoMsg = r.fold({ m -> when { m.errors.isNotEmpty() && m.models.isEmpty() -> "获取失败：" + m.errors.joinToString("；")
+                    m.errors.isNotEmpty() -> "部分仓库获取失败：" + m.errors.joinToString("；"); m.models.isEmpty() -> "仓库里还没有模型"; else -> "" } },
+                    { L.e("模型仓库获取失败", it); "获取失败：${it.message}" }))
         }
     }
 

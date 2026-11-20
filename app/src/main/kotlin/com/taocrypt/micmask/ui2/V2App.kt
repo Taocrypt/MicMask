@@ -1266,13 +1266,30 @@ private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (St
 
 @Composable
 private fun RepoSetting(vm: MainViewModel, st: UiState) {
-    var repo by remember(st.repoUrl) { mutableStateOf(st.repoUrl) }
+    var repo by remember { mutableStateOf("") }
     Card(Modifier.fillMaxWidth().padding(PagePad)) {
         Column(Modifier.padding(16.dp)) {
-            TextField(value = repo, onValueChange = { repo = it }, label = "GitHub 仓库地址或 models.json 链接", singleLine = true)
+            // 可添加多个仓库，按顺序合并显示；同名音色以靠上的仓库为准
+            st.repoUrls.forEachIndexed { i, u ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("${i + 1}. " + u.substringAfter("://"), Modifier.weight(1f), fontSize = 13.sp, maxLines = 2,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    if (i > 0) Text("上移", Modifier.clip(RoundedCornerShape(8.dp)).clickable { vm.moveRepoUp(u) }.padding(horizontal = 8.dp, vertical = 4.dp),
+                        fontSize = 13.sp, color = MiuixTheme.colorScheme.primary)
+                    Text("移除", Modifier.clip(RoundedCornerShape(8.dp)).clickable { vm.removeRepo(u) }.padding(horizontal = 8.dp, vertical = 4.dp),
+                        fontSize = 13.sp, color = Color(0xFFE5484D))
+                }
+            }
+            if (st.repoUrls.isEmpty()) Text("还没有模型仓库。仓库为社区维护，请只添加你信任、有权使用的仓库。", fontSize = 12.sp, color = Summary)
             Spacer(Modifier.height(8.dp))
-            TextButton("保存并刷新", onClick = { vm.setRepoUrl(repo); vm.refreshRepo() }, modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.textButtonColorsPrimary())
+            TextField(value = repo, onValueChange = { repo = it }, label = "cnb / GitHub 仓库地址或 models.json 链接", singleLine = true)
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton("刷新全部", onClick = { vm.refreshRepo() }, enabled = st.repoUrls.isNotEmpty() && !st.repoLoading, modifier = Modifier.weight(1f))
+                TextButton("添加仓库", onClick = { vm.addRepo(repo); repo = "" }, enabled = repo.isNotBlank(), modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.textButtonColorsPrimary())
+            }
+            if (st.repoMsg.isNotBlank()) Text(st.repoMsg, fontSize = 12.sp, color = Summary, modifier = Modifier.padding(top = 6.dp))
         }
     }
 }

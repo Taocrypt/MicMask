@@ -49,7 +49,10 @@ import java.net.URL
 import java.text.DecimalFormat
 
 /** 赞赏墙：读 GitHub Action 从爱发电生成的 sponsors.json，只显示「MicMask 赞助」方案的赞助者。 */
-private data class Sponsor(val name: String, val avatar: String, val amount: Double, val remark: String)
+private data class Sponsor(val name: String, val avatar: String, val amount: Double, val remark: String, val expire: Long) {
+    /** 旧名单没有 expire 字段时当作在期 */
+    val active: Boolean get() = expire <= 0 || expire * 1000 > System.currentTimeMillis()
+}
 private data class SponsorDoc(val count: Int, val total: Double, val list: List<Sponsor>)
 private const val KEY = "sponsors_json"
 private val avatarCache = HashMap<String, ImageBitmap?>()
@@ -59,7 +62,7 @@ private fun parse(text: String): SponsorDoc? = runCatching {
     val arr = j.optJSONArray("sponsors")
     val list = (0 until (arr?.length() ?: 0)).map { i ->
         val o = arr!!.getJSONObject(i)
-        Sponsor(o.optString("name", "爱发电用户"), o.optString("avatar"), o.optDouble("amount", 0.0), o.optString("remark"))
+        Sponsor(o.optString("name", "爱发电用户"), o.optString("avatar"), o.optDouble("amount", 0.0), o.optString("remark"), o.optLong("expire", 0))
     }
     SponsorDoc(j.optInt("count", list.size), j.optDouble("total", list.sumOf { it.amount }), list)
 }.getOrNull()
@@ -121,11 +124,21 @@ fun SponsorWall() {
         }
         Text("${d.count} 位赞助者 · 累计 ${yuan(d.total)}，谢谢你们！", fontSize = 13.sp, color = summary,
             modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 4.dp))
-        val shown = if (showAll) d.list else d.list.take(20)
-        shown.forEachIndexed { i, s -> SponsorRow(i + 1, s) }
-        if (d.list.size > 20) {
-            TextButton(text = if (showAll) "收起" else "查看全部 ${d.list.size} 位", onClick = { showAll = !showAll },
-                modifier = Modifier.fillMaxWidth().padding(12.dp))
+        // 按爱发电赞助期限分两栏：在期的在上，过期的进「历史赞助」（金额累计、排序不变）
+        val cur = d.list.filter { it.active }; val past = d.list.filterNot { it.active }
+        @Composable fun head(t: String) = Text(t, fontSize = 12.sp, color = summary, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 2.dp))
+        head("当前赞助 ${cur.size}")
+        if (cur.isEmpty()) Text("暂时没有在期的赞助", fontSize = 13.sp, color = summary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
+        cur.forEachIndexed { i, s -> SponsorRow(i + 1, s) }
+        if (past.isNotEmpty()) {
+            head("历史赞助 ${past.size}")
+            val shown = if (showAll) past else past.take(20)
+            shown.forEach { s -> SponsorRow(99, s) }
+            if (past.size > 20) {
+                TextButton(text = if (showAll) "收起" else "查看全部 ${past.size} 位", onClick = { showAll = !showAll },
+                    modifier = Modifier.fillMaxWidth().padding(12.dp))
+            } else Spacer(Modifier.size(8.dp))
         } else Spacer(Modifier.size(8.dp))
     }
 }

@@ -51,11 +51,14 @@ def avatar(u):
 
 def main():
     agg = {}
-    for o in all_pages("query-order"):
-        if o.get("plan_id") != PLAN or int(o.get("status", 0)) != 2: continue
-        a = agg.setdefault(o["user_id"], {"amount": 0.0, "first": 1 << 62, "last": 0, "remark": ""})
+    orders = [o for o in all_pages("query-order") if o.get("plan_id") == PLAN and int(o.get("status", 0)) == 2]
+    orders.sort(key=lambda o: int(o.get("create_time") or 0))
+    for o in orders:
+        a = agg.setdefault(o["user_id"], {"amount": 0.0, "first": 1 << 62, "last": 0, "remark": "", "expire": 0})
         a["amount"] += float(o.get("total_amount") or 0)
         t = int(o.get("create_time") or 0)
+        # 赞助期限：每单 month 个月（按 30 天算），连续续费顺延；App 用 expire 区分「当前赞助」和「历史赞助」
+        a["expire"] = max(a["expire"], t) + max(1, int(o.get("month") or 1)) * 30 * 86400
         a["first"] = min(a["first"], t)
         if t >= a["last"]:
             a["last"] = t
@@ -70,7 +73,7 @@ def main():
     for uid, a in agg.items():
         u = users.get(uid, {})
         r = {"name": (u.get("name") or "爱发电用户").strip()[:24], "avatar": avatar(u.get("avatar")),
-             "amount": round(a["amount"], 2), "since": a["first"], "last": a["last"]}
+             "amount": round(a["amount"], 2), "since": a["first"], "last": a["last"], "expire": a["expire"]}
         if SHOW_REMARK and a["remark"]: r["remark"] = a["remark"][:60]
         rows.append(r)
     rows.sort(key=lambda r: (-r["amount"], r["since"]))
