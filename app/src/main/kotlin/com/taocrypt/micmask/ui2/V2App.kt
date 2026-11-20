@@ -1293,10 +1293,10 @@ private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (St
     item {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
             val n = vm.whitelist().size
-            ArrowPreference(title = "目标应用", summary = if (n == 0) "未选择，只做本机试听" else "已选 $n 个应用",
-                onClick = { if (st.liveOn) vm.toast("请先关闭变声，再修改目标应用") else open("whitelist") })
-            SwitchPreference(checked = st.liveAec, onCheckedChange = { vm.setLiveAec(it) }, title = "降噪模式",
-                summary = if (st.liveAec) "已开：回声消除 + 降噪" else "已关：原始麦克风，音质优先", enabled = !st.liveOn)
+            ArrowPreference(title = "目标应用", summary = if (st.liveOn) "变声中不可修改，先关闭变声" else if (n == 0) "未选择，只做本机试听" else "已选 $n 个应用",
+                enabled = !st.liveOn, onClick = { if (st.liveOn) vm.toast("请先关闭变声，再修改目标应用") else open("whitelist") })
+            SwitchPreference(checked = st.liveAec, onCheckedChange = { if (it != st.liveAec) vm.toggleLiveAecAnywhere() }, title = "降噪模式",
+                summary = (if (st.liveAec) "已开：回声消除 + 降噪" else "已关：原始麦克风，音质优先") + if (st.liveOn) "（切换会重启变声）" else "")
             SwitchPreference(checked = st.liveMonitor, onCheckedChange = { vm.setLiveMonitor(it) }, title = "实时耳返",
                 summary = "变声后的声音送到耳机")
             SwitchPreference(checked = st.liveFloat, onCheckedChange = { vm.setLiveFloat(it) }, title = "悬浮窗开关",

@@ -57,10 +57,8 @@ class LiveService : Service() {
                 .setContentText("点「停止」结束，或回到 App 点当前模式的「停止」")
                 .setContentIntent(open)
                 .setOngoing(true)
-            if (!LiveFloatService.running) {
-                val fl = PendingIntent.getService(ctx, 12, Intent(ctx, LiveService::class.java).setAction("float"), PendingIntent.FLAG_IMMUTABLE)
-                b.addAction(Notification.Action.Builder(null, "开启悬浮窗", fl).build())
-            }
+            val fl = PendingIntent.getService(ctx, 12, Intent(ctx, LiveService::class.java).setAction("float"), PendingIntent.FLAG_IMMUTABLE)
+            b.addAction(Notification.Action.Builder(null, if (LiveFloatService.running) "关闭悬浮窗" else "开启悬浮窗", fl).build())
             b.addAction(Notification.Action.Builder(null, "停止", stop).build())
             return b.build()
         }
@@ -79,7 +77,10 @@ class LiveService : Service() {
                 stopSelf(); return START_NOT_STICKY
             }
             "float" -> {
-                if (FloatingPlayService.canDraw(this)) {
+                if (LiveFloatService.running) {
+                    Prefs.main(applicationContext).edit().putBoolean("lf_on", false).apply()
+                    LiveFloatService.toggle(applicationContext, false)
+                } else if (FloatingPlayService.canDraw(this)) {
                     Prefs.main(applicationContext).edit().putBoolean("lf_on", true).apply()
                     LiveFloatService.toggle(applicationContext, true)
                 } else {

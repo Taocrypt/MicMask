@@ -667,6 +667,13 @@ class InjectorService : Binder {
         }
     }
 
+    private val monBuf = ShortArray(SR / 100)
+    /** 耳返/录制预览只取人声（音效混入之前），音效只进麦克风；要本机听音效用悬浮窗长按外放 */
+    private fun voiceTap(buf: FloatArray, n: Int) {
+        for (i in 0 until n) monBuf[i] = (buf[i] * 32767f).toInt().coerceIn(-32768, 32767).toShort()
+        tap(monBuf, n)
+    }
+
     /** 每 10 ms 一帧变声结果都过一遍这里：耳返 + 录制预览 */
     private fun tap(mono: ShortArray, n: Int) {
         monTrack?.let { t -> if (t.write(mono, 0, n, AudioTrack.WRITE_NON_BLOCKING) < 0) setMonitor(false) }
@@ -772,7 +779,7 @@ class InjectorService : Binder {
                     var pk = 0
                     for (i in 0 until hop) { fxBuf[i] = if (i < k) ext[i] / 32768f else 0f; if (i < k) pk = maxOf(pk, kotlin.math.abs(ext[i].toInt())) }
                     if (pk > VOICED_PEAK) lastVoicedNs = System.nanoTime()
-                    fx.process(fxBuf, hop); mixSfx(fxBuf, hop)
+                    fx.process(fxBuf, hop); voiceTap(fxBuf, hop); mixSfx(fxBuf, hop)
                     for (i in 0 until hop) {
                         var v = (fxBuf[i] * 32767f).toInt().coerceIn(-32768, 32767)
                         if (v == 0) v = rnd.nextInt(5) - 2
@@ -781,7 +788,6 @@ class InjectorService : Binder {
                         val o = i * FRAME_BYTES
                         outBytes[o] = lo; outBytes[o + 1] = hi; outBytes[o + 2] = lo; outBytes[o + 3] = hi
                     }
-                    tap(tapBuf, hop)
                     val t = track ?: break
                     val tw0 = System.nanoTime()
                     val w = t.write(outBytes, 0, outBytes.size)
@@ -804,7 +810,7 @@ class InjectorService : Binder {
                     e += x * x
                     fxBuf[i] = if (ratio == 1f) x else shifter.process(x, ratio)
                 }
-                fx.process(fxBuf, hop); mixSfx(fxBuf, hop)
+                fx.process(fxBuf, hop); voiceTap(fxBuf, hop); mixSfx(fxBuf, hop)
                 for (i in 0 until hop) {
                     val y = fxBuf[i]
                     // 微弱抖动，避免出现整段纯 0（微信会判定录音异常）
@@ -815,7 +821,6 @@ class InjectorService : Binder {
                     val o = i * FRAME_BYTES
                     outBytes[o] = lo; outBytes[o + 1] = hi; outBytes[o + 2] = lo; outBytes[o + 3] = hi
                 }
-                tap(tapBuf, hop)
                 liveLevelDb = (10 * Math.log10(e / hop + 1e-12)).toFloat()
                 liveFrames++
                 val t = track ?: break
