@@ -68,6 +68,7 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
     val clip = remember { ClipPlayer() }
     DisposableEffect(Unit) { onDispose { clip.stop() } }
     LaunchedEffect(Unit) { vm.refreshModels(); if (!vm.state.value.modelsReady) vm.refreshRepo() }
+    val impPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris -> vm.importRecordings(uris) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             runCatching { ctx.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
@@ -137,7 +138,7 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
                 }
             }
             if (st.recCount > 0) ArrowPreference(title = "历史录音", summary = "${st.recCount} 条", onClick = { recList = vm.listRecordings() })
-            ArrowPreference(title = "从 App 目录导入", summary = "读取 App 外部目录里放好的音频", onClick = { vm.importFromDir() })
+            ArrowPreference(title = "导入到历史录音", summary = "用文件选择器选音频，可多选", onClick = { impPicker.launch(arrayOf("audio/*")) })
         }
 
         // ---- 参数 ----
@@ -149,8 +150,14 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
             if (st.useIndex) LabeledSlider("检索混合比例", "%.2f".format(st.indexRate), null, st.indexRate, 0f..1f) { vm.setIndexRate(it) }
             LabeledSlider("无声段保护", "%.2f".format(st.protect), "越小越贴近检索音色，太小静音段易出杂音，默认 0.33", st.protect, 0f..0.5f) { vm.setProtect(it) }
         }
-        SmallTitle("高级")
-        Card(Modifier.fillMaxWidth().padding(Pad2)) {
+        // 高级：默认折叠
+        var advOpen by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 8.dp).clip(RoundedCornerShape(8.dp))
+            .clickable { advOpen = !advOpen }.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("高级", Modifier.weight(1f), fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+            Text(if (advOpen) "收起 ▴" else "说话人 ID / 拼接重叠 / 线程 ▾", fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+        }
+        if (advOpen) Card(Modifier.fillMaxWidth().padding(Pad2)) {
             LabeledSlider("说话人 ID", "${st.sid}", "单人模型保持 0", st.sid.toFloat(), 0f..108f, 107) { vm.setSid(it.roundToInt()) }
             LabeledSlider("拼接重叠", "${st.overlap} 帧", "长音频分块拼接的平滑程度", st.overlap.toFloat(), 0f..256f, 15) { vm.setOverlap(it.roundToInt()) }
             LabeledSlider("推理线程", if (st.threads == 0) "自动" else "${st.threads}", "本机 ${Runtime.getRuntime().availableProcessors()} 核，0 = 自动；改后需重新加载",

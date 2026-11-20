@@ -80,7 +80,7 @@ class LiveFloatService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == "hide") { remove(); stopSelf(); return START_NOT_STICKY }
+        if (intent?.action == "hide") { Prefs.main(applicationContext).edit().putBoolean("lf_on", false).apply(); remove(); stopSelf(); return START_NOT_STICKY }
         foreground()
         if (root == null) {
             if (!FloatingPlayService.canDraw(this)) { stopSelf(); return START_NOT_STICKY }
@@ -168,7 +168,7 @@ class LiveFloatService : Service() {
             addView(stat)
             addView(space(8)); addView(modeRow)
             addView(space(8)); addView(HorizontalScrollView(this@LiveFloatService).apply { isHorizontalScrollBarEnabled = false; addView(presetRow) })
-            addView(space(8)); addView(TextView(this@LiveFloatService).apply { text = "语音包"; setTextColor(0xFF999999.toInt()); textSize = 11f * ps })
+            addView(space(8)); addView(TextView(this@LiveFloatService).apply { text = "音效包"; setTextColor(0xFF999999.toInt()); textSize = 11f * ps })
             addView(space(2)); addView(sfxRow)
         }
         bodyScroll = android.widget.ScrollView(this).apply { isVerticalScrollBarEnabled = false; isFillViewport = false; addView(body) }
@@ -436,21 +436,30 @@ class LiveFloatService : Service() {
         // 模式按钮
         modeRow.removeAllViews()
         MODES.forEachIndexed { i, n ->
+            // 声卡依赖 Shizuku 注入：未授权（外放模式）时不显示
+            if (i == 2 && !runCatching { com.taocrypt.micmask.inject.MicInjector.shizukuGranted() }.getOrDefault(false)) return@forEachIndexed
             val sel = st != null && mode == i
             modeRow.addView(chip(if (on && sel) "■ $n" else n, if (on && sel) ACCENT else if (sel) 0x553482FF else 0x33FFFFFF) {
                 if (vm == null) openApp() else vm.startMode(i)
             })
         }
+        // 耳返开关（戴耳机用，外放会啸叫）
+        val mon = st?.liveMonitor == true
+        modeRow.addView(chip(if (mon) "耳返 开" else "耳返 关", if (mon) ACCENT else 0x33FFFFFF) {
+            if (vm == null) openApp() else vm.setLiveMonitor(!mon)
+        })
         // 语音包
-        val sk = "${st?.sfxPlaying}|${st?.sounds?.size}|${st?.sfxLoop}"
+        val sk = "${st?.sfxPlaying}|${st?.sounds?.size}|${st?.sfxLoop}|${st?.packsOff}"
         if (force || sk != lastSfxKey) {
             lastSfxKey = sk
             sfxRow.removeAllViews()
             if (vm != null && st != null) {
+                val shown = st.sounds.filter { it.pack !in st.packsOff }
+                if (st.sounds.isNotEmpty() && shown.isEmpty()) sfxRow.addView(chip("音效包都已关闭，去 App 开启", 0x33FFFFFF) { openApp() })
                 if (st.sounds.isEmpty()) sfxRow.addView(chip("去 App 导入素材", 0x33FFFFFF) { openApp() })
                 if (st.sfxPlaying != null) sfxRow.addView(LinearLayout(this).apply { setPadding(0, sdp(2), 0, sdp(2)); addView(chip("■ 停止音效", 0xFFE5484D.toInt()) { vm.stopSound() }) })
                 // 按分组展示：每组一个小标题 + 一行横向滚动
-                st.sounds.groupBy { it.pack }.forEach { (pack, list) ->
+                shown.groupBy { it.pack }.forEach { (pack, list) ->
                     val title = when (pack) { SoundBoard.PACK_FX -> "预设音效"; SoundBoard.PACK_LOCAL -> "本地音频"; else -> pack }
                     sfxRow.addView(TextView(this).apply { text = "▍$title"; setTextColor(0xFFBBBBBB.toInt()); textSize = 10.5f * ps; setPadding(0, sdp(4), 0, sdp(3)) })
                     val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }

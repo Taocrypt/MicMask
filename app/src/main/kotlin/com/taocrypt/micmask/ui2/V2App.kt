@@ -608,13 +608,6 @@ private fun ModeSwitch(vm: MainViewModel, st: UiState) {
 }
 
 @Composable
-private fun GainCard(vm: MainViewModel, mode: Int, db: Float) {
-    Card(Modifier.fillMaxWidth().padding(PagePad)) {
-        Column(Modifier.padding(16.dp)) { GainBody(vm, mode, db) }
-    }
-}
-
-@Composable
 private fun GainBody(vm: MainViewModel, mode: Int, db: Float) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("音量增益", Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
@@ -944,13 +937,18 @@ private fun LazyListScope.pitchPage(vm: MainViewModel, st: UiState) {
     item {
         Card(Modifier.fillMaxWidth().padding(PagePad).animateContentSize()) {
             Column(Modifier.padding(16.dp)) {
-                Text("音调  ${if (st.pitchSemis > 0) "+" else ""}${st.pitchSemis.roundToInt()} 半音", fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("音调", Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                    Text("${if (st.pitchSemis > 0) "+" else ""}${st.pitchSemis.roundToInt()} 半音", color = Summary)
+                    if (st.pitchSemis.roundToInt() != 0) Text("  重置", fontSize = 13.sp, color = MiuixTheme.colorScheme.primary,
+                        modifier = Modifier.clickable { vm.setPitchSemis(0f) })
+                }
                 Slider(value = st.pitchSemis, onValueChange = { vm.setPitchSemis(it.roundToInt().toFloat()) }, valueRange = -12f..12f, steps = 23)
+                Spacer(Modifier.height(14.dp))
+                GainBody(vm, 1, st.pitchGain)
             }
         }
     }
-    item { GainCard(vm, 1, st.pitchGain) }
     item { SmallTitle("音色") }
     item {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
@@ -1065,9 +1063,13 @@ private fun LazyListScope.soundBoardPage(vm: MainViewModel, st: UiState, open: (
                         TextButton("删除", onClick = { vm.deleteGroup(pack); askDel = false }, modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary())
                     }
                 }
-                Text("导出音效包", Modifier.padding(end = 24.dp).clip(RoundedCornerShape(10.dp)).clickable(enabled = st.sfxBusy.isEmpty()) { vm.exportGroup(pack) }
+                Text("导出音效包", Modifier.clip(RoundedCornerShape(10.dp)).clickable(enabled = st.sfxBusy.isEmpty()) { vm.exportGroup(pack) }
                     .padding(horizontal = 8.dp, vertical = 4.dp), fontSize = 13.sp, color = MiuixTheme.colorScheme.primary)
+                // 开关：关闭后不在悬浮窗显示（App 内照常可播）
+                top.yukonga.miuix.kmp.basic.Switch(checked = pack !in st.packsOff, onCheckedChange = { vm.togglePack(pack, it) },
+                    modifier = Modifier.padding(start = 4.dp, end = 24.dp))
             }
+            if (pack in st.packsOff) Text("已关闭，不在悬浮窗显示", Modifier.padding(horizontal = 28.dp).padding(bottom = 4.dp), fontSize = 12.sp, color = Summary)
             info?.description?.takeIf { it.isNotBlank() }?.let { Text(it, Modifier.padding(horizontal = 28.dp).padding(bottom = 4.dp), fontSize = 12.sp, color = Summary) }
         }
         item(key = "sfx_grid_${pack}_${st.gridLayout}") { SoundTiles(vm, st, list) }

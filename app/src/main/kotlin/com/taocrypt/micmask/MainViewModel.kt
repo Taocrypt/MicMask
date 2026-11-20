@@ -146,6 +146,8 @@ data class UiState(
     val liveVoices: List<String> = emptyList(),
     /** 置顶的本地音色 */
     val voicePins: Set<String> = emptySet(),
+    /** 关闭的音效包（不在悬浮窗显示） */
+    val packsOff: Set<String> = emptySet(),
     val liveVoice: String = "",
     val liveBenching: Boolean = false,
     val logMsg: String = "",
@@ -283,6 +285,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             repos = loadRepos(ctx), repoUrl = loadRepos(ctx).firstOrNull { it.on }?.url ?: DEFAULT_REPO)
         refreshVoices()
         migrateRoutingOnce()
+        runCatching { restoreLiveFloat() }
 
         val s = _state.value
         _state.value = s.copy(
@@ -937,7 +940,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val res = kotlinx.coroutines.withContext(Dispatchers.IO) { runCatching { com.taocrypt.micmask.repo.ModelRepo.downloadSound(ctx, r) } }
             _state.value = _state.value.copy(sfxBusy = "", sounds = SoundBoard.list(ctx),
-                toast = res.fold({ "已加入语音包：${r.name}" }, { L.e("素材下载失败", it); "下载失败：${it.message}" }))
+                toast = res.fold({ "已加入音效包：${r.name}" }, { L.e("素材下载失败", it); "下载失败：${it.message}" }))
         }
     }
     /** 自定义分组：多个音频打包成 .mim3（原样不转码），可选同时导入本机 */
@@ -1093,8 +1096,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setLiveFloat(on: Boolean) {
         if (on && !canFloat()) { _state.value = _state.value.copy(toast = "请先授予「显示在其他应用上层」权限"); requestFloatPermission(); return }
+        prefs.edit().putBoolean("lf_on", on).apply()
         LiveFloatService.toggle(ctx, on)
         _state.value = _state.value.copy(liveFloat = on)
+    }
+    /** 启动时恢复上次的悬浮窗开关 */
+    private fun restoreLiveFloat() {
+        if (prefs.getBoolean("lf_on", false) && !LiveFloatService.running && canFloat()) {
+            LiveFloatService.toggle(ctx, true); _state.value = _state.value.copy(liveFloat = true)
+            L.i("UI 恢复悬浮窗")
+        }
     }
     fun refreshLiveFloat() { _state.value = _state.value.copy(liveFloat = LiveFloatService.running) }
 
@@ -1152,6 +1163,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var repoManifest: com.taocrypt.micmask.repo.ModelRepo.Manifest? = null
 
     // ---- 本地音色排序：置顶的在前（按置顶先后），其余按拖动后的顺序，新下载的排最后 ----
+    private fun packsOff(): Set<String> = prefs.getString("packsOff", "")!!.split('\n').filter { it.isNotEmpty() }.toSet()
+    fun togglePack(pack: String, on: Boolean) {
+        val s = _state.value.packsOff.toMutableSet(); if (on) s.remove(pack) else s.add(pack)
+        prefs.edit().putString("packsOff", s.joinToString("\n")).apply()
+        _state.value = _state.value.copy(packsOff = s)
+        L.i("UI 音效包 $pack ${if (on) "开启" else "关闭"}")
+    }
     private fun voicePins(): Set<String> = prefs.getString("voicePins", "")!!.split('\n').filter { it.isNotEmpty() }.toCollection(LinkedHashSet())
     private fun orderVoices(all: List<String>): List<String> {
         val ord = prefs.getString("voiceOrder", "")!!.split('\n').filter { it.isNotEmpty() }
@@ -1356,7 +1374,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun refreshVoices() {
         val v = ModelStore.currentVoice(ctx) ?: ""
-        _state.value = _state.value.copy(liveVoices = orderVoices(ModelStore.voices(ctx)), voicePins = voicePins(), liveVoice = v,
+        _state.value = _state.value.copy(liveVoices = orderVoices(ModelStore.voices(ctx)), voicePins = voicePins(), packsOff = packsOff(), liveVoice = v,
             liveBench = ctx.getSharedPreferences("live", 0).getString("bench_$v", "") ?: "")
     }
 
@@ -1644,6 +1662,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun listRecordings(): List<File> = AudioIo.listWavs(ctx, "recordings")
+
+    /** 通过文件选择器把音频导入历史录音（解码成 16k wav 存到 recordings/） */
+    fun importRecordings(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        _state.value = _state.value.copy(busy = true, stage = "导入音频", progress = 0.02f, error = null)
+        viewModelScope.launch(Dispatchers.Default) {
+            var ok = 0; val fail = mutableListOf<String>()
+            uris.forEachIndexed { i, u ->
+                runCatching {
+                    val d = AudioIo.decodeTo16k(ctx, u)
+                    val base = d.sourceName.substringBeforeLast('.').replace(Regex("[\\\\/:*?\"<>|\\s]+"), "_").take(40).ifBlank { "audio" }
+                    var name = "imp_$base"; var k = 1
+                    while (File(AudioIo.recordingsDir(ctx), "$name.wav").exists()) name = "imp_${base}_${++k}"
+                    AudioIo.saveLocalWav(ctx, d.samples, 16000, "recordings", name, normalize = false)
+                    ok++
+                }.onFailure { L.e("导入录音失败 $u", it); fail += AudioIo.displayName(ctx, u) }
+                _state.value = _state.value.copy(progress = (i + 1f) / uris.size)
+            }
+            L.i("导入历史录音 $ok/${uris.size}")
+            _state.value = _state.value.copy(busy = false, recCount = listRecordings().size,
+                toast = "已导入 $ok 条到历史录音" + if (fail.isNotEmpty()) "，${fail.size} 条失败：${fail.joinToString("、")}" else "")
+        }
+    }
 
     /** 删除历史录音（多选）；删到当前录音时回落到最新一条 */
     fun deleteRecordings(files: Collection<File>): Int {
