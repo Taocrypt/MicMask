@@ -1,5 +1,7 @@
 package com.taocrypt.micmask.ui2
 
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.ui.zIndex
 import com.taocrypt.micmask.tr
 
 import com.taocrypt.micmask.Prefs
@@ -201,15 +203,21 @@ fun SponsorWall(header: @Composable () -> Unit = {}) {
 private fun Danmaku(list: List<Sponsor>) {
     val lanes = 3
     val byLane = List(lanes) { l -> list.filterIndexed { i, _ -> i % lanes == l } }.filter { it.isNotEmpty() }
-    // 长按任意轨道：按住期间全部加速；点一下某条轨道：该轨道停住（内容滞留），再点或 5 秒后继续
+    // 长按任意轨道：按住期间全部 5 倍速；点一条弹幕：只有这一条停住，再点或 5 秒后继续
     var fast by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         byLane.forEachIndexed { l, items ->
-            // 名单太少时重复填满一行，保证一直在滚
-            val fill = generateSequence { items }.flatten().take(maxOf(items.size, 6)).toList()
-            DanmakuLane(fill, speedDp = 26f + l * 9f, lead = (l * 28).dp, fast = fast, onFast = { fast = it })
+            DanmakuLane(items, speedDp = 26f + l * 9f, lead = (l * 28).dp, fast = fast, onFast = { fast = it })
         }
     }
+}
+
+/** 一条弹幕：x 为左边缘（px），w 为测得宽度，paused 时原地滞留 */
+private class Bullet(val id: Long, val s: Sponsor, x0: Float) {
+    var x by mutableStateOf(x0)
+    var w = 0
+    var paused by mutableStateOf(false)
+    var pauseAt = 0L
 }
 
 @Composable
@@ -217,42 +225,61 @@ private fun DanmakuLane(items: List<Sponsor>, speedDp: Float, lead: androidx.com
     val density = androidx.compose.ui.platform.LocalDensity.current
     val gapPx = with(density) { 12.dp.toPx() }
     val speedPx = with(density) { speedDp.dp.toPx() }
-    var w by remember { mutableStateOf(0) }
-    var x by remember { mutableStateOf(0f) }
-    var paused by remember { mutableStateOf(false) }
-    var pauseAt by remember { mutableStateOf(0L) }
+    val leadPx = with(density) { lead.toPx() }
+    var laneW by remember { mutableStateOf(0) }
+    val bullets = remember { androidx.compose.runtime.mutableStateListOf<Bullet>() }
     val fastNow by androidx.compose.runtime.rememberUpdatedState(fast)
-    LaunchedEffect(Unit) {
+    LaunchedEffect(items) {
+        bullets.clear()
+        var next = 0          // 下一条要发的名单下标（循环）
+        var seq = 0L
+        var tail: Float? = leadPx   // 下一条的起点，跟着轨道一起左移；null = 最新一条还没测出宽度
         var last = 0L
         while (true) {
             androidx.compose.runtime.withFrameNanos { t ->
                 val dt = if (last == 0L) 0f else (t - last) / 1e9f
                 last = t
-                if (paused && System.currentTimeMillis() - pauseAt > 5000) paused = false
-                val period = w + gapPx
-                if (!paused && period > gapPx) x = (x + dt * speedPx * (if (fastNow) 2f else 1f)) % period
+                val dx = dt * speedPx * (if (fastNow) 5f else 1f)
+                val now = System.currentTimeMillis()
+                for (b in bullets) {
+                    if (b.paused && now - b.pauseAt > 5000) b.paused = false
+                    if (!b.paused) b.x -= dx
+                }
+                bullets.removeAll { !it.paused && it.w > 0 && it.x + it.w < 0 }
+                if (tail == null) {
+                    val nb = bullets.lastOrNull()
+                    if (nb == null) tail = laneW.toFloat()
+                    else if (nb.w > 0) tail = maxOf(nb.x, -1e6f) + nb.w + gapPx
+                } else tail = tail!! - dx
+                val tl = tail
+                if (laneW > 0 && tl != null && tl < laneW) {
+                    bullets.add(Bullet(seq++, items[next % items.size], tl))
+                    next++
+                    tail = null
+                }
             }
         }
     }
-    Box(Modifier.fillMaxWidth().clipToBounds()
+    Box(Modifier.fillMaxWidth().height(30.dp).clipToBounds()
+        .onSizeChanged { laneW = it.width }
         .pointerInput(Unit) {
             detectTapGestures(
-                onTap = { paused = !paused; pauseAt = System.currentTimeMillis() },
-                onLongPress = { paused = false; onFast(true) },
+                onTap = { p ->
+                    // 只停被点到的那一条（滞留的优先，它画在最上层）
+                    val hit = bullets.lastOrNull { it.paused && p.x >= it.x && p.x <= it.x + it.w }
+                        ?: bullets.lastOrNull { p.x >= it.x && p.x <= it.x + it.w }
+                    if (hit != null) { hit.paused = !hit.paused; hit.pauseAt = System.currentTimeMillis() }
+                },
+                onLongPress = { onFast(true) },
                 onPress = { tryAwaitRelease(); onFast(false) },
             )
         }) {
-        Row(Modifier.wrapContentWidth(Alignment.Start, unbounded = true)
-            .offset { androidx.compose.ui.unit.IntOffset(-x.toInt(), 0) },
-            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(Modifier.onSizeChanged { w = it.width }, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Spacer(Modifier.width(lead))
-                items.forEach { DanmakuChip(it) }
-            }
-            // 第二份接在后面，实现无缝循环
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Spacer(Modifier.width(lead))
-                items.forEach { DanmakuChip(it) }
+        for (b in bullets) {
+            androidx.compose.runtime.key(b.id) {
+                Box(Modifier.wrapContentWidth(Alignment.Start, unbounded = true)
+                    .zIndex(if (b.paused) 1f else 0f)
+                    .offset { androidx.compose.ui.unit.IntOffset(b.x.toInt(), 0) }
+                    .onSizeChanged { b.w = it.width }) { DanmakuChip(b.s) }
             }
         }
     }
@@ -299,11 +326,13 @@ private fun SponsorRow(rank: Int, s: Sponsor) {
                 fontWeight = if (rank <= 3) FontWeight.Bold else FontWeight.Normal)
             if (s.remark.isNotBlank()) Text(s.remark, fontSize = 12.sp, color = summary, maxLines = 2, overflow = TextOverflow.Ellipsis)
             val dates = listOfNotNull(
-                day(s.since).takeIf { it.isNotEmpty() }?.let { tr("首次 {0}", it) },
-                day(s.last).takeIf { it.isNotEmpty() && s.last != s.since }?.let { tr("最近 {0}", it) },
-                day(s.expire).takeIf { it.isNotEmpty() && s.active }?.let { tr("有效至 {0}", it) },
+                day(s.since, "yy-MM-dd").takeIf { it.isNotEmpty() }?.let { tr("首次 {0}", it) },
+                day(s.last, "yy-MM-dd").takeIf { it.isNotEmpty() && s.last != s.since }?.let { tr("最近 {0}", it) },
+                day(s.expire, "yy-MM-dd").takeIf { it.isNotEmpty() && s.active }?.let { tr("有效至 {0}", it) },
             )
-            if (dates.isNotEmpty()) Text(dates.joinToString(" · "), fontSize = 11.sp, color = summary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            // 日期一行放不下时可左右滑动
+            if (dates.isNotEmpty()) Text(dates.joinToString(" · "), fontSize = 11.sp, color = summary, maxLines = 1, softWrap = false,
+                modifier = Modifier.horizontalScroll(androidx.compose.foundation.rememberScrollState()))
         }
         Spacer(Modifier.width(8.dp))
         Text(yuan(s.amount), fontSize = 14.sp, fontWeight = FontWeight.Medium, color = if (s.active) tierColor(s.amount) else summary)
