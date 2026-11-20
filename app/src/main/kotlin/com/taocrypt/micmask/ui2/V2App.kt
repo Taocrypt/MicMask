@@ -1293,7 +1293,8 @@ private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (St
     item {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
             val n = vm.whitelist().size
-            ArrowPreference(title = "目标应用", summary = if (n == 0) "未选择，只做本机试听" else "已选 $n 个应用", onClick = { open("whitelist") })
+            ArrowPreference(title = "目标应用", summary = if (n == 0) "未选择，只做本机试听" else "已选 $n 个应用",
+                onClick = { if (st.liveOn) vm.toast("请先关闭变声，再修改目标应用") else open("whitelist") })
             SwitchPreference(checked = st.liveAec, onCheckedChange = { vm.setLiveAec(it) }, title = "降噪模式",
                 summary = if (st.liveAec) "已开：回声消除 + 降噪" else "已关：原始麦克风，音质优先", enabled = !st.liveOn)
             SwitchPreference(checked = st.liveMonitor, onCheckedChange = { vm.setLiveMonitor(it) }, title = "实时耳返",
@@ -1497,11 +1498,11 @@ private fun WhitelistPage(vm: MainViewModel) {
     var all by remember { mutableStateOf<List<AppInfo>?>(null) }
     var sel by remember { mutableStateOf(vm.whitelist()) }
     var q by remember { mutableStateOf("") }
-    // 排序：0=安装时间（新→旧） 1=名称；记住上次选择
-    var sort by remember { mutableStateOf(prefs.getInt("wlSort", 0)) }
+    // 排序：0=名称（默认） 1=安装时间（新→旧）；记住上次选择（新键 wlSort2，旧 wlSort 的 0/1 含义相反，弃用）
+    var sort by remember { mutableStateOf(prefs.getInt("wlSort2", 0)) }
     var showSys by remember { mutableStateOf(prefs.getBoolean("wlSystem", false)) }
     // 方向：安装时间默认新→旧，名称默认 A→Z；再点一次当前项切换
-    var desc by remember { mutableStateOf(prefs.getBoolean("wlDesc", sort == 0)) }
+    var desc by remember { mutableStateOf(prefs.getBoolean("wlDesc2", sort == 1)) }
     LaunchedEffect(Unit) {
         all = withContext(Dispatchers.IO) {
             val pm = ctx.packageManager
@@ -1526,13 +1527,13 @@ private fun WhitelistPage(vm: MainViewModel) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             val primary = MiuixTheme.colorScheme.primary
             Row(Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).background(MiuixTheme.colorScheme.secondaryContainer).padding(3.dp)) {
-                listOf("安装时间", "名称").forEachIndexed { i, t ->
+                listOf("名称", "安装时间").forEachIndexed { i, t ->
                     val on = sort == i
                     val bg by animateColorAsState(if (on) primary else Color.Transparent, label = "wlsort")
                     Box(Modifier.weight(1f).height(34.dp).clip(RoundedCornerShape(10.dp)).background(bg)
                         .clickable {
-                            if (on) desc = !desc else { sort = i; desc = i == 0 }
-                            prefs.edit().putInt("wlSort", sort).putBoolean("wlDesc", desc).apply()
+                            if (on) desc = !desc else { sort = i; desc = i == 1 }
+                            prefs.edit().putInt("wlSort2", sort).putBoolean("wlDesc2", desc).apply()
                         },
                         contentAlignment = Alignment.Center) {
                         Text(if (on) t + if (desc) " ↓" else " ↑" else t, fontSize = 13.sp, maxLines = 1, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
@@ -1550,7 +1551,7 @@ private fun WhitelistPage(vm: MainViewModel) {
         val src = all
         if (src == null) Text("正在读取应用列表…", Modifier.padding(24.dp))
         else {
-            val asc: Comparator<AppInfo> = if (sort == 0) compareBy { it.installed }
+            val asc: Comparator<AppInfo> = if (sort == 1) compareBy { it.installed }
                 else Comparator { x, y -> collator.compare(x.label, y.label) }
             val byOrder = if (desc) asc.reversed() else asc
             // 已选的置顶，其余按所选方式排

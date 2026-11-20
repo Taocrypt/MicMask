@@ -622,6 +622,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
+    fun toast(msg: String) { _state.value = _state.value.copy(toast = msg) }
+
     /** 无条件停止（悬浮窗/通知用）：不看状态，一律下发 DISARM */
     fun stopAll() {
         stopSoundLocal(); stopPreview()
