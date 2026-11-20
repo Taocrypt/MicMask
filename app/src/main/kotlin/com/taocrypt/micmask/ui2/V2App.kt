@@ -1,5 +1,7 @@
 package com.taocrypt.micmask.ui2
 
+import com.taocrypt.micmask.tr
+
 import com.taocrypt.micmask.Prefs
 
 import androidx.compose.animation.AnimatedContent
@@ -154,8 +156,8 @@ import kotlin.math.sin
 
 // ------------------------------------------------------------------ 外观设置（存 prefs "ui"）
 
-private val KeyColors = listOf("壁纸取色" to null, "蓝" to Color(0xFF3482FF), "绿" to Color(0xFF36D167),
-    "紫" to Color(0xFF7C4DFF), "橙" to Color(0xFFFF5722), "粉" to Color(0xFFE91E63), "青" to Color(0xFF00BCD4))
+private val KeyColors get() = listOf(tr("壁纸取色") to null, tr("蓝") to Color(0xFF3482FF), tr("绿") to Color(0xFF36D167),
+    tr("紫") to Color(0xFF7C4DFF), tr("橙") to Color(0xFFFF5722), tr("粉") to Color(0xFFE91E63), tr("青") to Color(0xFF00BCD4))
 
 private class UiPrefs(ctx: Context) {
     private val sp = ctx.getSharedPreferences("ui", 0)
@@ -233,21 +235,21 @@ fun V2App(vm: MainViewModel) {
         ) { page ->
             Box(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.background)) {
                 when (page) {
-                    "tts" -> SubPage("文字转语音", { sub = null }) { TtsPage(vm, st) }
-                    "file" -> SubPage("文件变声", { sub = null }) { FilePage(vm, st) }
-                    "whitelist" -> SubPage("目标应用", { sub = null }) { WhitelistPage(vm) }
-                    "theme" -> SubPage("外观", { sub = null }) { ThemePage(ui) }
-                    "about" -> SubPage("关于", { sub = null }) { AboutPage(vm, { sub = "logs" }, { sub = "mirrors" }) }
-                    "mirrors" -> SubPage("下载镜像", { sub = "about" }) { com.taocrypt.micmask.update.MirrorPage() }
-                    "logs" -> SubPage("日志", { sub = null }) { LogPage(vm) }
-                    "mim3" -> SubPage("制作音效包", { sub = null }) { Mim3Page(vm, st) }
+                    "tts" -> SubPage(tr("文字转语音"), { sub = null }) { TtsPage(vm, st) }
+                    "file" -> SubPage(tr("文件变声"), { sub = null }) { FilePage(vm, st) }
+                    "whitelist" -> SubPage(tr("目标应用"), { sub = null }) { WhitelistPage(vm) }
+                    "theme" -> SubPage(tr("外观"), { sub = null }) { ThemePage(ui) }
+                    "about" -> SubPage(tr("关于"), { sub = null }) { AboutPage(vm, { sub = "logs" }, { sub = "mirrors" }) }
+                    "mirrors" -> SubPage(tr("下载镜像"), { sub = "about" }) { com.taocrypt.micmask.update.MirrorPage() }
+                    "logs" -> SubPage(tr("日志"), { sub = null }) { LogPage(vm) }
+                    "mim3" -> SubPage(tr("制作音效包"), { sub = null }) { Mim3Page(vm, st) }
                     else -> MainTabs(vm, st, ui, mainPage, { mainPage = it }) { sub = it }
                 }
             }
         }
         com.taocrypt.micmask.update.UpdateDialog()
         if (st.importing && st.importTotal > 0) {
-            WindowDialog(show = true, title = "正在导入模型", summary = "${st.importDone}/${st.importTotal}  ${st.importName}") {
+            WindowDialog(show = true, title = tr("正在导入模型"), summary = "${st.importDone}/${st.importTotal}  ${st.importName}") {
                 LinearProgressIndicator(progress = st.importDone.toFloat() / st.importTotal.coerceAtLeast(1))
             }
         }
@@ -257,8 +259,8 @@ fun V2App(vm: MainViewModel) {
 private val tabSpring = spring<Float>(dampingRatio = 0.86f, stiffness = 260f)
 
 private data class Tab(val title: String, val icon: ImageVector)
-private val Tabs = listOf(Tab("变声", MiuixIcons.Mic), Tab("效果", MiuixIcons.Tune), Tab("语音", MiuixIcons.Music), Tab("设置", MiuixIcons.Settings))
-private val TabTitles = listOf("变声", "效果", "语音", "设置")
+private val Tabs get() = listOf(Tab(tr("变声"), MiuixIcons.Mic), Tab(tr("效果"), MiuixIcons.Tune), Tab(tr("语音"), MiuixIcons.Music), Tab(tr("设置"), MiuixIcons.Settings))
+private val TabTitles get() = listOf(tr("变声"), tr("效果"), tr("语音"), tr("设置"))
 
 @Composable
 private fun MainTabs(vm: MainViewModel, st: UiState, ui: UiPrefs, page0: Int, onPage: (Int) -> Unit, open: (String) -> Unit) {
@@ -334,7 +336,7 @@ private fun MainTabs(vm: MainViewModel, st: UiState, ui: UiPrefs, page0: Int, on
 private fun SubPage(title: String, onBack: () -> Unit, content: @Composable () -> Unit) {
     Scaffold(topBar = {
         SmallTopAppBar(title = title, navigationIcon = {
-            IconButton(onClick = onBack, modifier = Modifier.padding(start = 12.dp)) { Icon(MiuixIcons.Back, "返回") }
+            IconButton(onClick = onBack, modifier = Modifier.padding(start = 12.dp)) { Icon(MiuixIcons.Back, tr("返回")) }
         })
     }) { pad -> Box(Modifier.padding(top = pad.calculateTopPadding()).fillMaxSize()) { content() } }
 }
@@ -366,19 +368,19 @@ private fun HeroCard(vm: MainViewModel, st: UiState, mode: Int) {
                     Icon(listOf(MiuixIcons.Mic, MiuixIcons.Tune, MiuixIcons.Music)[mode], null, tint = if (mine) onPrimary else primary)
                 }
                 Column(Modifier.weight(1f).padding(start = 14.dp)) {
-                    Text(when { mine -> "正在变声"; otherMode -> "另一模式运行中"; else -> "未运行" },
+                    Text(when { mine -> tr("正在变声"); otherMode -> tr("另一模式运行中"); else -> tr("未运行") },
                         fontWeight = FontWeight.Bold, fontSize = 20.sp, color = fg)
                     val target = vm.whitelist()
-                    Text(if (st.speakerMode) "外放模式 · 扬声器播放，对方也会听到原声" else if (target.isEmpty()) "未选目标应用 · 仅本机试听" else "目标 ${target.size} 个应用 · ${if (st.liveAec) "通话录音" else "原始麦克风"}",
+                    Text(if (st.speakerMode) tr("外放模式 · 扬声器播放，对方也会听到原声") else if (target.isEmpty()) tr("未选目标应用 · 仅本机试听") else tr("目标 {0} 个应用 · {1}", target.size, if (st.liveAec) tr("通话录音") else tr("原始麦克风")),
                         fontSize = 13.sp, color = fg2)
                 }
             }
-            if (ai) Text("音色 ${if (st.liveVoice.isEmpty()) "未安装" else vm.voiceLabel(st.liveVoice)}" +
+            if (ai) Text(tr("音色 {0}", if (st.liveVoice.isEmpty()) tr("未安装") else vm.voiceLabel(st.liveVoice)) +
                 (if (st.liveBench.isNotEmpty()) " · ${st.liveBench}" else ""), fontSize = 13.sp, color = fg2, maxLines = 2)
             if (st.speakerMode && !st.liveOn && mode < 2) {
-                Text("未授权 Shizuku，当前为录播模式：按住下方按钮录一句，松手自动转换并设为待发送；到 QQ 按住说话前点悬浮球，从扬声器放出。",
+                Text(tr("未授权 Shizuku，当前为录播模式：按住下方按钮录一句，松手自动转换并设为待发送；到 QQ 按住说话前点悬浮球，从扬声器放出。"),
                     fontSize = 12.sp, color = fg2)
-                TextButton("授权 Shizuku（切换到实时变声）", onClick = { vm.requestShizuku() }, modifier = Modifier.fillMaxWidth())
+                TextButton(tr("授权 Shizuku（切换到实时变声）"), onClick = { vm.requestShizuku() }, modifier = Modifier.fillMaxWidth())
                 return@Column
             }
             if (st.liveMsg.isNotEmpty() && (mine || !st.liveOn)) Text(st.liveMsg, fontSize = 12.sp, color = fg2, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -388,7 +390,7 @@ private fun HeroCard(vm: MainViewModel, st: UiState, mode: Int) {
                 modifier = Modifier.fillMaxWidth(),
                 colors = if (mine) ButtonDefaults.buttonColors(color = onPrimary) else ButtonDefaults.buttonColorsPrimary(),
             ) {
-                Text(if (mine) "停止" else "开始", fontWeight = FontWeight.SemiBold, color = if (mine) primary else onPrimary)
+                Text(if (mine) tr("停止") else tr("开始"), fontWeight = FontWeight.SemiBold, color = if (mine) primary else onPrimary)
             }
         }
     }
@@ -404,7 +406,7 @@ private fun ClipRecorder(vm: MainViewModel, st: UiState, mode: Int) {
     val primary = MiuixTheme.colorScheme.primary
     var cancel by remember { mutableStateOf(false) }
     val perm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
-        if (!ok) Toast.makeText(ctx, "需要麦克风权限才能录音", Toast.LENGTH_LONG).show()
+        if (!ok) Toast.makeText(ctx, tr("需要麦克风权限才能录音"), Toast.LENGTH_LONG).show()
     }
     val density = androidx.compose.ui.platform.LocalDensity.current
     val cancelPx = with(density) { 72.dp.toPx() }
@@ -434,18 +436,18 @@ private fun ClipRecorder(vm: MainViewModel, st: UiState, mode: Int) {
         }, contentAlignment = Alignment.Center) {
         Text(when {
             st.clipBusy -> "${st.clipStage} ${(st.clipProgress * 100).roundToInt()}%"
-            cancel -> "松开取消"
-            rec -> "录音中 %d:%02d · 松手转换，上滑取消".format(st.recElapsedMs / 60000, st.recElapsedMs / 1000 % 60)
-            else -> "按住 录一句"
+            cancel -> tr("松开取消")
+            rec -> tr("录音中 %d:%02d · 松手转换，上滑取消").format(st.recElapsedMs / 60000, st.recElapsedMs / 1000 % 60)
+            else -> tr("按住 录一句")
         }, color = fgc, fontWeight = FontWeight.SemiBold)
     }
     if (st.clipBusy) LinearProgressIndicator(progress = st.clipProgress, modifier = Modifier.padding(PagePad).padding(bottom = 12.dp))
     st.clipFile?.let { f ->
         Card(Modifier.fillMaxWidth().padding(PagePad).padding(bottom = 12.dp)) {
-            SwitchPreference(checked = st.qqFloating, onCheckedChange = { vm.setFloating(it) }, title = "悬浮球",
-                summary = "浮在 QQ 上，按住说话前点一下就外放待发送语音")
-            ArrowPreference(title = if (st.qqPlaying) "停止外放" else "现在外放一遍",
-                summary = "待发送：%s · %.1f 秒".format(st.qqPendingName ?: f.name, st.clipSeconds),
+            SwitchPreference(checked = st.qqFloating, onCheckedChange = { vm.setFloating(it) }, title = tr("悬浮球"),
+                summary = tr("浮在 QQ 上，按住说话前点一下就外放待发送语音"))
+            ArrowPreference(title = if (st.qqPlaying) tr("停止外放") else tr("现在外放一遍"),
+                summary = tr("待发送：%s · %.1f 秒").format(st.qqPendingName ?: f.name, st.clipSeconds),
                 onClick = { if (st.qqPlaying) vm.stopQqLoop() else vm.playPendingNow() })
         }
     }
@@ -479,7 +481,7 @@ private fun HoldToRecord(vm: MainViewModel, st: UiState, enabled: Boolean) {
                 vm.holdPreview(false, cancel); pressed = false; cancel = false
             }
         }, contentAlignment = Alignment.Center) {
-        Text(when { !enabled -> "开始变声后可按住录制预览"; cancel -> "松开取消"; pressed -> "录制中 ${st.previewLeft}s · 松手回放，上滑取消"; else -> "按住 录制预览" },
+        Text(when { !enabled -> tr("开始变声后可按住录制预览"); cancel -> tr("松开取消"); pressed -> tr("录制中 {0}s · 松手回放，上滑取消", st.previewLeft); else -> tr("按住 录制预览") },
             color = fgc, fontWeight = FontWeight.SemiBold)
     }
 }
@@ -494,7 +496,7 @@ internal class Tile(val text: String, val sel: Boolean, val accent: Boolean = fa
 private fun SectionHead(title: String, vm: MainViewModel, st: UiState) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         SmallTitle(title, Modifier.weight(1f))
-        Text(if (st.gridLayout) "▦ 网格" else "☰ 列表", Modifier.padding(end = 24.dp).clip(RoundedCornerShape(10.dp))
+        Text(if (st.gridLayout) tr("▦ 网格") else tr("☰ 列表"), Modifier.padding(end = 24.dp).clip(RoundedCornerShape(10.dp))
             .clickable { vm.setGridLayout(!st.gridLayout) }.padding(horizontal = 10.dp, vertical = 4.dp),
             fontSize = 13.sp, color = MiuixTheme.colorScheme.primary)
     }
@@ -554,22 +556,22 @@ private fun PresetBar(vm: MainViewModel, st: UiState, mode: Int, builtins: List<
         }
     }
     val entries = buildList {
-        builtins.forEachIndexed { i, n -> add(Tile(n, selected == n) { onBuiltin(i) }) }
+        builtins.forEachIndexed { i, n -> add(Tile(tr(n), selected == n) { onBuiltin(i) }) }
         mine.forEach { p -> add(Tile("★ " + p.name, selected == p.name, onLong = { menu = p }) { vm.applyUserPreset(p) }) }
-        add(Tile("保存", false, accent = true) { saving = true })
-        add(Tile("导入", false, accent = true) { vm.importPresetFromClipboard() })
+        add(Tile(tr("保存"), false, accent = true) { saving = true })
+        add(Tile(tr("导入"), false, accent = true) { vm.importPresetFromClipboard() })
     }
     TileGroup(entries, st.gridLayout)
-    if (mine.isNotEmpty()) Text("长按 ★ 预设可分享、重命名、删除", Modifier.padding(horizontal = 24.dp, vertical = 4.dp), fontSize = 11.sp, color = Summary)
+    if (mine.isNotEmpty()) Text(tr("长按 ★ 预设可分享、重命名、删除"), Modifier.padding(horizontal = 24.dp, vertical = 4.dp), fontSize = 11.sp, color = Summary)
     if (saving) {
         var text by remember { mutableStateOf(if (selected == "自定义" || selected in builtins) "" else selected) }
-        WindowDialog(show = true, title = "保存为预设", summary = "保存当前${if (mode == 1) "音调和音色" else "全部旋钮推子"}参数", onDismissRequest = { saving = false }) {
+        WindowDialog(show = true, title = tr("保存为预设"), summary = tr("保存当前{0}参数", if (mode == 1) tr("音调和音色") else tr("全部旋钮推子")), onDismissRequest = { saving = false }) {
             Column {
-                TextField(value = text, onValueChange = { text = it.take(24) }, label = "预设名称", singleLine = true)
+                TextField(value = text, onValueChange = { text = it.take(24) }, label = tr("预设名称"), singleLine = true)
                 Spacer(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton("取消", onClick = { saving = false }, modifier = Modifier.weight(1f))
-                    TextButton("保存", onClick = { vm.saveCurrentPreset(mode, text); saving = false }, modifier = Modifier.weight(1f),
+                    TextButton(tr("取消"), onClick = { saving = false }, modifier = Modifier.weight(1f))
+                    TextButton(tr("保存"), onClick = { vm.saveCurrentPreset(mode, text); saving = false }, modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.textButtonColorsPrimary())
                 }
             }
@@ -579,12 +581,12 @@ private fun PresetBar(vm: MainViewModel, st: UiState, mode: Int, builtins: List<
         var text by remember(p) { mutableStateOf(p.name) }
         WindowDialog(show = true, title = p.name, onDismissRequest = { menu = null }) {
             Column {
-                TextField(value = text, onValueChange = { text = it.take(24) }, label = "名称", singleLine = true)
+                TextField(value = text, onValueChange = { text = it.take(24) }, label = tr("名称"), singleLine = true)
                 Spacer(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton("删除", onClick = { vm.deleteUserPreset(mode, p.name); menu = null }, modifier = Modifier.weight(1f))
-                    TextButton("分享", onClick = { vm.sharePreset(p); menu = null }, modifier = Modifier.weight(1f))
-                    TextButton("保存", onClick = { vm.renameUserPreset(mode, p.name, text); menu = null }, modifier = Modifier.weight(1f),
+                    TextButton(tr("删除"), onClick = { vm.deleteUserPreset(mode, p.name); menu = null }, modifier = Modifier.weight(1f))
+                    TextButton(tr("分享"), onClick = { vm.sharePreset(p); menu = null }, modifier = Modifier.weight(1f))
+                    TextButton(tr("保存"), onClick = { vm.renameUserPreset(mode, p.name, text); menu = null }, modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.textButtonColorsPrimary())
                 }
             }
@@ -604,7 +606,7 @@ private fun ModeSwitch(vm: MainViewModel, st: UiState) {
     val primary = MiuixTheme.colorScheme.primary
     Row(Modifier.fillMaxWidth().padding(PagePad).padding(top = 4.dp, bottom = 4.dp)
         .clip(androidx.compose.foundation.shape.RoundedCornerShape(16.dp)).background(MiuixTheme.colorScheme.secondaryContainer).padding(4.dp)) {
-        listOf("AI 变声", "普通变声").forEachIndexed { i, n ->
+        listOf(tr("AI 变声"), tr("普通变声")).forEachIndexed { i, n ->
             val sel = st.voiceTab == i
             val bg by animateColorAsState(if (sel) primary else androidx.compose.ui.graphics.Color.Transparent, tween(260), label = "seg$i")
             Box(Modifier.weight(1f).clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp)).background(bg)
@@ -625,14 +627,14 @@ private fun ModeSwitch(vm: MainViewModel, st: UiState) {
 @Composable
 private fun GainBody(vm: MainViewModel, mode: Int, db: Float) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("音量增益", Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                Text(tr("音量增益"), Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
                 Text("${if (db > 0) "+" else ""}${db.roundToInt()} dB", color = Summary)
-                if (db.roundToInt() != 0) Text("  重置", fontSize = 13.sp, color = MiuixTheme.colorScheme.primary,
+                if (db.roundToInt() != 0) Text(tr("  重置"), fontSize = 13.sp, color = MiuixTheme.colorScheme.primary,
                     modifier = Modifier.clickable { vm.setGain(mode, 0f) })
             }
             Slider(value = db, onValueChange = { vm.setGain(mode, it.roundToInt().toFloat()) },
                 valueRange = com.taocrypt.micmask.GAIN_MIN..com.taocrypt.micmask.GAIN_MAX, steps = 29)
-            Text("对方听着太小声就调高；声音发炸、破音就调低。开着变声也能实时调。", fontSize = 12.sp, color = Summary)
+            Text(tr("对方听着太小声就调高；声音发炸、破音就调低。开着变声也能实时调。"), fontSize = 12.sp, color = Summary)
 }
 
 /** AI 实时变声「高级」：默认折叠 */
@@ -641,15 +643,15 @@ private fun AiAdvanced(vm: MainViewModel, st: UiState) {
     var open by rememberSaveable { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().padding(top = 14.dp).clip(RoundedCornerShape(8.dp)).clickable { open = !open }.padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically) {
-        Text("高级", Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+        Text(tr("高级"), Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
         val custom = st.aiTier != 0 || st.aiGate != -50f || st.aiFeatTh != 3 || st.aiSynTh != 4
-        if (!open && custom) Text("已自定义  ", fontSize = 13.sp, color = MiuixTheme.colorScheme.primary)
-        Text(if (open) "收起 ▴" else "展开 ▾", fontSize = 13.sp, color = Summary)
+        if (!open && custom) Text(tr("已自定义  "), fontSize = 13.sp, color = MiuixTheme.colorScheme.primary)
+        Text(if (open) tr("收起 ▴") else tr("展开 ▾"), fontSize = 13.sp, color = Summary)
     }
     if (!open) return
-    Text("档位", Modifier.padding(top = 8.dp), fontSize = 14.sp)
+    Text(tr("档位"), Modifier.padding(top = 8.dp), fontSize = 14.sp)
     Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        listOf("自动", "标准 0.3s", "省电 0.5s").forEachIndexed { i, t ->
+        listOf(tr("自动"), tr("标准 0.3s"), tr("省电 0.5s")).forEachIndexed { i, t ->
             val on = st.aiTier == i
             Box(Modifier.weight(1f).height(34.dp).clip(RoundedCornerShape(10.dp))
                 .background(if (on) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.secondaryContainer)
@@ -659,24 +661,24 @@ private fun AiAdvanced(vm: MainViewModel, st: UiState) {
             }
         }
     }
-    Text(when (st.aiTier) { 1 -> "延迟最低；手机跟不上会断音，且不会自动降档"; 2 -> "延迟多约 0.2 秒，算力省约 40%，发热少"; else -> "按测速选能跑稳的最低延迟档，频繁断音时自动降到省电" },
+    Text(when (st.aiTier) { 1 -> tr("延迟最低；手机跟不上会断音，且不会自动降档"); 2 -> tr("延迟多约 0.2 秒，算力省约 40%，发热少"); else -> tr("按测速选能跑稳的最低延迟档，频繁断音时自动降到省电") },
         fontSize = 12.sp, color = Summary, modifier = Modifier.padding(top = 6.dp))
 
-    Row(Modifier.padding(top = 14.dp)) { Text("静音门限", Modifier.weight(1f), fontSize = 14.sp); Text("${st.aiGate.roundToInt()} dB", color = Summary) }
+    Row(Modifier.padding(top = 14.dp)) { Text(tr("静音门限"), Modifier.weight(1f), fontSize = 14.sp); Text("${st.aiGate.roundToInt()} dB", color = Summary) }
     Slider(value = st.aiGate, onValueChange = { vm.setAiTune(gate = it.roundToInt().toFloat()) }, valueRange = -70f..-30f, steps = 39,
         onValueChangeFinished = { vm.commitAiTune() })
-    Text("低于它的声音不送进模型（省电、去底噪）。开头字被吞就调低，环境吵、有杂音就调高。默认 -50", fontSize = 12.sp, color = Summary)
+    Text(tr("低于它的声音不送进模型（省电、去底噪）。开头字被吞就调低，环境吵、有杂音就调高。默认 -50"), fontSize = 12.sp, color = Summary)
 
     val cores = Runtime.getRuntime().availableProcessors()
-    Row(Modifier.padding(top = 14.dp)) { Text("特征线程", Modifier.weight(1f), fontSize = 14.sp); Text("${st.aiFeatTh}", color = Summary) }
+    Row(Modifier.padding(top = 14.dp)) { Text(tr("特征线程"), Modifier.weight(1f), fontSize = 14.sp); Text("${st.aiFeatTh}", color = Summary) }
     Slider(value = st.aiFeatTh.toFloat(), onValueChange = { vm.setAiTune(feat = it.roundToInt()) }, valueRange = 1f..8f, steps = 6,
         onValueChangeFinished = { vm.commitAiTune() })
-    Row(Modifier.padding(top = 8.dp)) { Text("合成线程", Modifier.weight(1f), fontSize = 14.sp); Text("${st.aiSynTh}", color = Summary) }
+    Row(Modifier.padding(top = 8.dp)) { Text(tr("合成线程"), Modifier.weight(1f), fontSize = 14.sp); Text("${st.aiSynTh}", color = Summary) }
     Slider(value = st.aiSynTh.toFloat(), onValueChange = { vm.setAiTune(syn = it.roundToInt()) }, valueRange = 1f..8f, steps = 6,
         onValueChangeFinished = { vm.commitAiTune() })
-    Text("本机 $cores 核。两者同时在跑，加起来别超过大核数；默认 3 / 4。改档位或线程会重新测速加载，变声中会停顿几秒",
+    Text(tr("本机 {0} 核。两者同时在跑，加起来别超过大核数；默认 3 / 4。改档位或线程会重新测速加载，变声中会停顿几秒", cores),
         fontSize = 12.sp, color = Summary)
-    Text("恢复默认", Modifier.padding(top = 12.dp).clip(RoundedCornerShape(8.dp)).clickable { vm.resetAiTune() }.padding(vertical = 4.dp),
+    Text(tr("恢复默认"), Modifier.padding(top = 12.dp).clip(RoundedCornerShape(8.dp)).clickable { vm.resetAiTune() }.padding(vertical = 4.dp),
         fontSize = 14.sp, color = MiuixTheme.colorScheme.primary)
 }
 
@@ -687,12 +689,12 @@ private fun LazyListScope.aiPage(vm: MainViewModel, st: UiState, open: (String) 
     item {
         Card(Modifier.fillMaxWidth().padding(PagePad).padding(bottom = 6.dp)) {
             Column(Modifier.padding(16.dp)) {
-                Row { Text("音高偏移", Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
-                    Text("${if (st.aiSemis > 0) "+" else ""}${st.aiSemis.roundToInt()} 半音", color = Summary) }
+                Row { Text(tr("音高偏移"), Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                    Text(tr("{0}{1} 半音", if (st.aiSemis > 0) "+" else "", st.aiSemis.roundToInt()), color = Summary) }
                 Slider(value = st.aiSemis, onValueChange = { vm.setAiSemis(it.roundToInt().toFloat()) }, valueRange = -12f..12f, steps = 23)
                 // 一键预设：按「你的声音 → 音色」选，再用滑杆微调
                 Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("男声→女声" to 12f, "同性别" to 0f, "女声→男声" to -12f).forEach { (t, v) ->
+                    listOf(tr("男声→女声") to 12f, tr("同性别") to 0f, tr("女声→男声") to -12f).forEach { (t, v) ->
                         val on = st.aiSemis.roundToInt() == v.roundToInt()
                         Box(Modifier.weight(1f).height(34.dp).clip(RoundedCornerShape(10.dp))
                             .background(if (on) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.secondaryContainer)
@@ -704,11 +706,11 @@ private fun LazyListScope.aiPage(vm: MainViewModel, st: UiState, open: (String) 
                 }
                 val n = st.aiSemis.roundToInt()
                 Text(when {
-                    n >= 10 -> "适合男声用女声音色。声音偏低沉可 +12，偏尖可回到 +10"
-                    n >= 4 -> "介于两者之间，适合声线偏中性或想要少年/低沉女声的效果"
-                    n > -4 -> "音高基本不变，适合与音色同性别。听起来偏闷或偏尖时 ±1~3 微调"
-                    n > -10 -> "略降调，适合偏高的男声或想要低沉一些的效果"
-                    else -> "适合女声用男声音色"
+                    n >= 10 -> tr("适合男声用女声音色。声音偏低沉可 +12，偏尖可回到 +10")
+                    n >= 4 -> tr("介于两者之间，适合声线偏中性或想要少年/低沉女声的效果")
+                    n > -4 -> tr("音高基本不变，适合与音色同性别。听起来偏闷或偏尖时 ±1~3 微调")
+                    n > -10 -> tr("略降调，适合偏高的男声或想要低沉一些的效果")
+                    else -> tr("适合女声用男声音色")
                 }, fontSize = 12.sp, color = Summary, modifier = Modifier.padding(top = 8.dp))
                 Spacer(Modifier.height(18.dp))
                 GainBody(vm, 0, st.aiGain)
@@ -716,10 +718,10 @@ private fun LazyListScope.aiPage(vm: MainViewModel, st: UiState, open: (String) 
             }
         }
     }
-    item { SmallTitle("本地音色") }
+    item { SmallTitle(tr("本地音色")) }
     if (st.liveVoices.isEmpty()) item {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
-            Text("还没有音色。从下方仓库下载，或导入模型 zip。", Modifier.padding(16.dp), color = Summary)
+            Text(tr("还没有音色。从下方仓库下载，或导入模型 zip。"), Modifier.padding(16.dp), color = Summary)
         }
     }
     if (st.liveVoices.isNotEmpty()) item(key = "voices") {
@@ -728,26 +730,26 @@ private fun LazyListScope.aiPage(vm: MainViewModel, st: UiState, open: (String) 
     item { ImportRow(vm, st) }
     item {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            SmallTitle("模型仓库", Modifier.weight(1f))
+            SmallTitle(tr("模型仓库"), Modifier.weight(1f))
             IconButton(onClick = { vm.refreshRepo() }, enabled = !st.repoLoading, modifier = Modifier.padding(end = 12.dp)) {
-                Icon(MiuixIcons.Refresh, "刷新")
+                Icon(MiuixIcons.Refresh, tr("刷新"))
             }
         }
     }
     if (st.repoMsg.isNotEmpty() || st.repoLoading) item {
-        Text(if (st.repoLoading) "正在获取…" else st.repoMsg, Modifier.padding(horizontal = 28.dp, vertical = 4.dp), fontSize = 13.sp, color = Summary)
+        Text(if (st.repoLoading) tr("正在获取…") else st.repoMsg, Modifier.padding(horizontal = 28.dp, vertical = 4.dp), fontSize = 13.sp, color = Summary)
     }
     if (st.repoModels.isNotEmpty()) item { RepoTabs(vm, st) }
     val shown = repoFiltered(st).filter { it.gender == st.repoTab }
     if (st.repoModels.isNotEmpty() && shown.isEmpty()) item {
-        Text(if (st.repoQuery.isNotBlank()) "没有找到「${st.repoQuery.trim()}」" else "这个分类下还没有模型", Modifier.padding(horizontal = 28.dp, vertical = 8.dp), fontSize = 13.sp, color = Summary)
+        Text(if (st.repoQuery.isNotBlank()) tr("没有找到「{0}」", st.repoQuery.trim()) else tr("这个分类下还没有模型"), Modifier.padding(horizontal = 28.dp, vertical = 8.dp), fontSize = 13.sp, color = Summary)
     }
     items(shown, key = { "r_${it.id}" }) { m -> RepoItem(vm, st, m) }
-    item { SmallTitle("更多") }
+    item { SmallTitle(tr("更多")) }
     item {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
-            ArrowPreference(title = "文件变声", summary = "导入或录制音频整段转换，基于 RVC 合成", onClick = { open("file") })
-            ArrowPreference(title = "文字转语音", summary = "输入文字合成语音，基于 GPT-SoVITS 合成", onClick = { open("tts") })
+            ArrowPreference(title = tr("文件变声"), summary = tr("导入或录制音频整段转换，基于 RVC 合成"), onClick = { open("file") })
+            ArrowPreference(title = tr("文字转语音"), summary = tr("输入文字合成语音，基于 GPT-SoVITS 合成"), onClick = { open("tts") })
         }
     }
 }
@@ -764,14 +766,14 @@ private fun repoFiltered(st: UiState): List<com.taocrypt.micmask.repo.ModelRepo.
 /** 模型仓库：搜索框、按仓库筛选（多于一个仓库时）、女声 / 男声 / 其他分类（各带数量） */
 @Composable
 private fun RepoTabs(vm: MainViewModel, st: UiState) {
-    TextField(value = st.repoQuery, onValueChange = { vm.setRepoQuery(it) }, label = "搜索模型", singleLine = true,
+    TextField(value = st.repoQuery, onValueChange = { vm.setRepoQuery(it) }, label = tr("搜索模型"), singleLine = true,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp))
     val srcs = st.repoModels.map { it.repo }.distinct()
     if (srcs.size > 1) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         for (u in listOf("") + srcs) {
             val sel = st.repoFilter == u
-            val label = if (u.isEmpty()) "全部仓库" else st.repos.firstOrNull { it.url == u }?.label ?: u.substringAfter("://")
+            val label = if (u.isEmpty()) tr("全部仓库") else st.repos.firstOrNull { it.url == u }?.label ?: u.substringAfter("://")
             Text(label, Modifier.clip(RoundedCornerShape(12.dp))
                 .background(if (sel) MiuixTheme.colorScheme.primary.copy(alpha = 0.15f) else MiuixTheme.colorScheme.surfaceContainer)
                 .clickable { vm.setRepoFilter(u) }.padding(horizontal = 12.dp, vertical = 6.dp),
@@ -780,7 +782,7 @@ private fun RepoTabs(vm: MainViewModel, st: UiState) {
     }
     val base = repoFiltered(st)
     Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        for ((k, label) in listOf("male" to "男声", "female" to "女声", "anime" to "动漫", "other" to "其他")) {
+        for ((k, label) in listOf("male" to tr("男声"), "female" to tr("女声"), "anime" to tr("动漫"), "other" to tr("其他"))) {
             val sel = st.repoTab == k
             val n = base.count { it.gender == k }
             Text("$label $n", Modifier.weight(1f).clip(RoundedCornerShape(12.dp))
@@ -805,8 +807,8 @@ private fun ImportRow(vm: MainViewModel, st: UiState) {
         if (uris.isNotEmpty()) vm.importModelFiles(uris)
     }
     Row(Modifier.fillMaxWidth().padding(PagePad).padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        TextButton("导入模型", onClick = { picker.launch(arrayOf("*/*")) }, modifier = Modifier.weight(1f))
-        TextButton(if (st.liveBenching) "测试中…" else "性能测试", onClick = { vm.runLiveBench() },
+        TextButton(tr("导入模型"), onClick = { picker.launch(arrayOf("*/*")) }, modifier = Modifier.weight(1f))
+        TextButton(if (st.liveBenching) tr("测试中…") else tr("性能测试"), onClick = { vm.runLiveBench() },
             enabled = !st.liveBenching && !st.liveOn, modifier = Modifier.weight(1f))
     }
 }
@@ -829,33 +831,33 @@ private fun VoiceItem(vm: MainViewModel, st: UiState, v: String, handle: Modifie
             }
             Column(Modifier.weight(1f).padding(start = 12.dp)) {
                 Text(label, fontWeight = FontWeight.SemiBold, color = if (sel) primary else MiuixTheme.colorScheme.onSurface)
-                Text("${if (pinned) "已置顶 · " else ""}${if (sel) "使用中 · " else ""}%.1f MB".format(vm.voiceSizeMb(v)), fontSize = 12.sp, color = Summary)
+                Text("${if (pinned) tr("已置顶 · ") else ""}${if (sel) tr("使用中 · ") else ""}%.1f MB".format(vm.voiceSizeMb(v)), fontSize = 12.sp, color = Summary)
             }
-            Text(if (pinned) "取消置顶" else "置顶", Modifier.clip(RoundedCornerShape(8.dp)).clickable { vm.togglePinVoice(v) }
+            Text(if (pinned) tr("取消置顶") else tr("置顶"), Modifier.clip(RoundedCornerShape(8.dp)).clickable { vm.togglePinVoice(v) }
                 .padding(horizontal = 6.dp, vertical = 6.dp), fontSize = 13.sp, color = primary)
-            IconButton(onClick = { renaming = true }) { Icon(MiuixIcons.Edit, "编辑") }
-            IconButton(onClick = { deleting = true }) { Icon(MiuixIcons.Delete, "删除") }
+            IconButton(onClick = { renaming = true }) { Icon(MiuixIcons.Edit, tr("编辑")) }
+            IconButton(onClick = { deleting = true }) { Icon(MiuixIcons.Delete, tr("删除")) }
         }
     }
     if (renaming) {
         var text by remember(v) { mutableStateOf(vm.voiceLabel(v)) }
-        WindowDialog(show = true, title = "编辑音色名称", onDismissRequest = { renaming = false }) {
+        WindowDialog(show = true, title = tr("编辑音色名称"), onDismissRequest = { renaming = false }) {
             Column {
-                TextField(value = text, onValueChange = { text = it }, label = "显示名称", singleLine = true)
+                TextField(value = text, onValueChange = { text = it }, label = tr("显示名称"), singleLine = true)
                 Spacer(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton("取消", onClick = { renaming = false }, modifier = Modifier.weight(1f))
-                    TextButton("保存", onClick = { vm.renameVoice(v, text); renaming = false }, modifier = Modifier.weight(1f),
+                    TextButton(tr("取消"), onClick = { renaming = false }, modifier = Modifier.weight(1f))
+                    TextButton(tr("保存"), onClick = { vm.renameVoice(v, text); renaming = false }, modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.textButtonColorsPrimary())
                 }
             }
         }
     }
     if (deleting) {
-        WindowDialog(show = true, title = "删除音色", summary = "删除「${vm.voiceLabel(v)}」的全部模型文件？", onDismissRequest = { deleting = false }) {
+        WindowDialog(show = true, title = tr("删除音色"), summary = tr("删除「{0}」的全部模型文件？", vm.voiceLabel(v)), onDismissRequest = { deleting = false }) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton("取消", onClick = { deleting = false }, modifier = Modifier.weight(1f))
-                TextButton("删除", onClick = { vm.deleteVoice(v); deleting = false }, modifier = Modifier.weight(1f),
+                TextButton(tr("取消"), onClick = { deleting = false }, modifier = Modifier.weight(1f))
+                TextButton(tr("删除"), onClick = { vm.deleteVoice(v); deleting = false }, modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.textButtonColorsPrimary())
             }
         }
@@ -871,9 +873,9 @@ private class FxCtl(val label: String, val idx: Int, val min: Float, val max: Fl
     fun denorm(n: Float) = min + (max - min) * n
     fun show(v: Float): String = when (unit) {
         "dB" -> "${if (v > 0) "+" else ""}${v.roundToInt()}dB"
-        "Hz" -> if (v <= 25f) "关" else "${v.roundToInt()}Hz"
+        "Hz" -> if (v <= 25f) tr("关") else "${v.roundToInt()}Hz"
         "ms" -> "${v.roundToInt()}ms"
-        "gate" -> if (v <= -79f) "关" else "${v.roundToInt()}dB"
+        "gate" -> if (v <= -79f) tr("关") else "${v.roundToInt()}dB"
         else -> "${(norm(v) * 100).roundToInt()}"
     }
 }
@@ -935,30 +937,30 @@ private fun PresetRow(names: List<String>, selected: String, onPick: (Int) -> Un
 private fun FxSlider(vm: MainViewModel, st: UiState, c: FxCtl) {
     val v = st.fx[c.idx]
     Column(Modifier.padding(vertical = 6.dp)) {
-        Row { Text(c.label, Modifier.weight(1f), fontSize = 14.sp); Text(c.show(v), fontSize = 13.sp, color = Summary) }
+        Row { Text(tr(c.label), Modifier.weight(1f), fontSize = 14.sp); Text(c.show(v), fontSize = 13.sp, color = Summary) }
         Slider(value = c.norm(v), onValueChange = { vm.setFx(1, c.idx, c.denorm(it)) })
     }
 }
 
 private fun LazyListScope.pitchPage(vm: MainViewModel, st: UiState) {
     item { HeroCard(vm, st, 1) }
-    item { SectionHead("声线预设", vm, st) }
+    item { SectionHead(tr("声线预设"), vm, st) }
     item {
         PresetBar(vm, st, 1, pitchPresets.map { it.name }) { i ->
             val p = pitchPresets[i]; vm.setPitchSemis(p.semis); vm.applyFxPreset(1, p.name, p.fx)
         }
     }
-    item { SmallTitle("音调与音量") }
+    item { SmallTitle(tr("音调与音量")) }
     item {
         Card(Modifier.fillMaxWidth().padding(PagePad).animateContentSize()) {
             Column(Modifier.padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("音调", Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
-                    Text("${if (st.pitchSemis > 0) "+" else ""}${st.pitchSemis.roundToInt()} 半音", color = Summary)
+                    Text(tr("音调"), Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                    Text(tr("{0}{1} 半音", if (st.pitchSemis > 0) "+" else "", st.pitchSemis.roundToInt()), color = Summary)
                     // 重置回当前预设的音调（内置或自建预设），没有对应预设时回 0
                     val baseSemis = pitchPresets.firstOrNull { it.name == st.fxPreset }?.semis
                         ?: st.userPresets[1].orEmpty().firstOrNull { it.name == st.fxPreset }?.semis ?: 0f
-                    if (st.pitchSemis.roundToInt() != baseSemis.roundToInt()) Text("  重置", fontSize = 13.sp, color = MiuixTheme.colorScheme.primary,
+                    if (st.pitchSemis.roundToInt() != baseSemis.roundToInt()) Text(tr("  重置"), fontSize = 13.sp, color = MiuixTheme.colorScheme.primary,
                         modifier = Modifier.clickable { vm.setPitchSemis(baseSemis) })
                 }
                 Slider(value = st.pitchSemis, onValueChange = { vm.setPitchSemis(it.roundToInt().toFloat()) }, valueRange = -12f..12f, steps = 23)
@@ -967,18 +969,18 @@ private fun LazyListScope.pitchPage(vm: MainViewModel, st: UiState) {
             }
         }
     }
-    item { SmallTitle("音色") }
+    item { SmallTitle(tr("音色")) }
     item {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
             Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
-                FxSlider(vm, st, FxCtl("厚度（低频）", FxChain.P_LOW, -12f, 12f, "dB"))
-                FxSlider(vm, st, FxCtl("清晰度（中频）", FxChain.P_MID, -12f, 12f, "dB"))
-                FxSlider(vm, st, FxCtl("明亮度（高频）", FxChain.P_HIGH, -12f, 12f, "dB"))
-                FxSlider(vm, st, FxCtl("去闷（低切）", FxChain.P_LOWCUT, 20f, 400f, "Hz"))
-                FxSlider(vm, st, FxCtl("沙哑（激励）", FxChain.P_DRIVE, 0f, 1f))
-                FxSlider(vm, st, FxCtl("空间感（混响）", FxChain.P_REVERB, 0f, 1f))
-                FxSlider(vm, st, FxCtl("底噪抑制（噪声门）", FxChain.P_GATE, -80f, -30f, "gate"))
-                Text("当前：${st.fxPreset}。只作用于普通变声模式，和声卡、AI 变声互不影响。", fontSize = 12.sp, color = Summary)
+                FxSlider(vm, st, FxCtl(tr("厚度（低频）"), FxChain.P_LOW, -12f, 12f, "dB"))
+                FxSlider(vm, st, FxCtl(tr("清晰度（中频）"), FxChain.P_MID, -12f, 12f, "dB"))
+                FxSlider(vm, st, FxCtl(tr("明亮度（高频）"), FxChain.P_HIGH, -12f, 12f, "dB"))
+                FxSlider(vm, st, FxCtl(tr("去闷（低切）"), FxChain.P_LOWCUT, 20f, 400f, "Hz"))
+                FxSlider(vm, st, FxCtl(tr("沙哑（激励）"), FxChain.P_DRIVE, 0f, 1f))
+                FxSlider(vm, st, FxCtl(tr("空间感（混响）"), FxChain.P_REVERB, 0f, 1f))
+                FxSlider(vm, st, FxCtl(tr("底噪抑制（噪声门）"), FxChain.P_GATE, -80f, -30f, "gate"))
+                Text(tr("当前：{0}。只作用于普通变声模式，和声卡、AI 变声互不影响。", tr(st.fxPreset)), fontSize = 12.sp, color = Summary)
             }
         }
     }
@@ -991,11 +993,11 @@ private fun LazyListScope.soundCardPage(vm: MainViewModel, st: UiState) {
         item {
             Card(Modifier.fillMaxWidth().padding(PagePad).padding(top = 4.dp, bottom = 12.dp)) {
                 Column(Modifier.padding(18.dp)) {
-                    Text("声卡需要 Shizuku", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                    Text("当前是外放模式：没有 Shizuku 授权时，变声和语音改为扬声器外放，声卡效果不可用。授权 Shizuku 后即可使用。",
+                    Text(tr("声卡需要 Shizuku"), fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    Text(tr("当前是外放模式：没有 Shizuku 授权时，变声和语音改为扬声器外放，声卡效果不可用。授权 Shizuku 后即可使用。"),
                         fontSize = 13.sp, color = Summary)
                     Spacer(Modifier.height(10.dp))
-                    TextButton("授权 Shizuku", onClick = { vm.requestShizuku() }, modifier = Modifier.fillMaxWidth(),
+                    TextButton(tr("授权 Shizuku"), onClick = { vm.requestShizuku() }, modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.textButtonColorsPrimary())
                 }
             }
@@ -1009,38 +1011,38 @@ private fun LazyListScope.soundCardPage(vm: MainViewModel, st: UiState) {
 @Composable
 private fun KnobRow(vm: MainViewModel, st: UiState, ctls: List<FxCtl>) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-        ctls.forEach { c -> Knob(c.label, c.norm(st.fxCard[c.idx]), size = if (ctls.size > 3) 56.dp else 64.dp, text = c.show(st.fxCard[c.idx]), reset = c.norm(FxChain.neutral()[c.idx])) { vm.setFx(2, c.idx, c.denorm(it)) } }
+        ctls.forEach { c -> Knob(tr(c.label), c.norm(st.fxCard[c.idx]), size = if (ctls.size > 3) 56.dp else 64.dp, text = c.show(st.fxCard[c.idx]), reset = c.norm(FxChain.neutral()[c.idx])) { vm.setFx(2, c.idx, c.denorm(it)) } }
     }
 }
 
 @Composable
 private fun SoundCardRack(vm: MainViewModel, st: UiState) {
     Column {
-        SectionHead("场景预设", vm, st)
+        SectionHead(tr("场景预设"), vm, st)
         PresetBar(vm, st, 2, cardPresets.map { it.first }) { i -> vm.applyFxPreset(2, cardPresets[i].first, cardPresets[i].second) }
-        SmallTitle("空间")
+        SmallTitle(tr("空间"))
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
             Column(Modifier.padding(vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 KnobRow(vm, st, listOf(ctlReverb, ctlRoom, ctlChorus))
                 KnobRow(vm, st, listOf(ctlEcho, ctlEchoMs, ctlEchoFb))
             }
         }
-        SmallTitle("动态")
+        SmallTitle(tr("动态"))
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
             Column(Modifier.padding(vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 KnobRow(vm, st, listOf(ctlComp, ctlDrive, ctlSub, ctlPre))
                 KnobRow(vm, st, listOf(ctlGate, ctlLowCut, ctlCrush))
             }
         }
-        SmallTitle("均衡 / 总线")
+        SmallTitle(tr("均衡 / 总线"))
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
             Row(Modifier.fillMaxWidth().padding(vertical = 16.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
                 listOf(ctlLow, ctlMid, ctlHigh, ctlOut).forEach { c ->
-                    Fader(c.label, c.norm(st.fxCard[c.idx]), text = c.show(st.fxCard[c.idx]), reset = c.norm(FxChain.neutral()[c.idx])) { vm.setFx(2, c.idx, c.denorm(it)) }
+                    Fader(tr(c.label), c.norm(st.fxCard[c.idx]), text = c.show(st.fxCard[c.idx]), reset = c.norm(FxChain.neutral()[c.idx])) { vm.setFx(2, c.idx, c.denorm(it)) }
                 }
             }
         }
-        Text("双击旋钮或推子复位。耳返开关在设置里，外放会啸叫，请戴耳机。", Modifier.padding(horizontal = 24.dp, vertical = 8.dp), fontSize = 12.sp, color = Summary)
+        Text(tr("双击旋钮或推子复位。耳返开关在设置里，外放会啸叫，请戴耳机。"), Modifier.padding(horizontal = 24.dp, vertical = 8.dp), fontSize = 12.sp, color = Summary)
     }
 }
 
@@ -1051,11 +1053,11 @@ private fun LazyListScope.soundBoardPage(vm: MainViewModel, st: UiState, open: (
     item(key = "sfx_head") { SfxHeader(vm, st, open) }
     val fx = st.sfxTab == 0
     val mine = st.sounds.filter { com.taocrypt.micmask.SoundBoard.isFx(it) == fx }
-    item(key = "sfx_title_$fx") { SectionHead(if (fx) "音效包" else "本地音频", vm, st) }
+    item(key = "sfx_title_$fx") { SectionHead(if (fx) tr("音效包") else tr("本地音频"), vm, st) }
     st.sfxSel?.let { sel -> item(key = "sfx_selbar") { SfxSelBar(vm, st, sel, mine) } }
     if (mine.isEmpty()) item(key = "sfx_empty") {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
-            Text(if (fx) "音效包是空的。添加 mp3 音效、导入 .mim3 音效包，或从下方仓库下载。" else "还没有本地音频。导入手机里的音乐或录音。", Modifier.padding(16.dp), color = Summary)
+            Text(if (fx) tr("音效包是空的。添加 mp3 音效、导入 .mim3 音效包，或从下方仓库下载。") else tr("还没有本地音频。导入手机里的音乐或录音。"), Modifier.padding(16.dp), color = Summary)
         }
     }
     mine.groupBy { it.pack }.forEach { (pack, list) ->
@@ -1065,29 +1067,29 @@ private fun LazyListScope.soundBoardPage(vm: MainViewModel, st: UiState, open: (
                 // 二级标题：分组名用正文色加粗小字 + 左侧色条 + 数量，和上面的「音效包」大标题区分
                 Row(Modifier.weight(1f).padding(start = 28.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(width = 3.dp, height = 14.dp).clip(RoundedCornerShape(2.dp)).background(MiuixTheme.colorScheme.primary))
-                    Text((if (pack == com.taocrypt.micmask.SoundBoard.PACK_FX) "预设音效" else pack), Modifier.padding(start = 8.dp),
+                    Text((if (pack == com.taocrypt.micmask.SoundBoard.PACK_FX) tr("预设音效") else pack), Modifier.padding(start = 8.dp),
                         fontSize = 14.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, color = MiuixTheme.colorScheme.onBackground)
-                    Text(" ${list.size} 个" + (info?.author?.takeIf { it.isNotBlank() }?.let { " · by $it" } ?: ""), fontSize = 12.sp, color = Summary, maxLines = 1)
+                    Text(tr(" {0} 个", list.size) + (info?.author?.takeIf { it.isNotBlank() }?.let { " · by $it" } ?: ""), fontSize = 12.sp, color = Summary, maxLines = 1)
                 }
                 var askDel by remember(pack) { mutableStateOf(false) }
                 // 预设音效分组：只有用户自己加进来的才可删，全是预设时不显示「删除」
                 val delCount = list.count { !com.taocrypt.micmask.SoundBoard.isPreset(it) }
-                if (delCount > 0) Text("删除", Modifier.clip(RoundedCornerShape(10.dp)).clickable(enabled = st.sfxBusy.isEmpty()) { askDel = true }
+                if (delCount > 0) Text(tr("删除"), Modifier.clip(RoundedCornerShape(10.dp)).clickable(enabled = st.sfxBusy.isEmpty()) { askDel = true }
                     .padding(horizontal = 8.dp, vertical = 4.dp), fontSize = 13.sp, color = Color(0xFFE5484D))
-                if (askDel) WindowDialog(show = true, title = "删除分组", summary = "「${if (pack == com.taocrypt.micmask.SoundBoard.PACK_FX) "预设音效" else pack}」里的 ${delCount} 个音效会全部删除，不能恢复。" + if (delCount < list.size) "预设音效保留。" else "",
+                if (askDel) WindowDialog(show = true, title = tr("删除分组"), summary = tr("「{0}」里的 {1} 个音效会全部删除，不能恢复。", if (pack == com.taocrypt.micmask.SoundBoard.PACK_FX) tr("预设音效") else pack, delCount) + if (delCount < list.size) tr("预设音效保留。") else "",
                     onDismissRequest = { askDel = false }) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton("取消", onClick = { askDel = false }, modifier = Modifier.weight(1f))
-                        TextButton("删除", onClick = { vm.deleteGroup(pack); askDel = false }, modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary())
+                        TextButton(tr("取消"), onClick = { askDel = false }, modifier = Modifier.weight(1f))
+                        TextButton(tr("删除"), onClick = { vm.deleteGroup(pack); askDel = false }, modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary())
                     }
                 }
-                Text("导出音效包", Modifier.clip(RoundedCornerShape(10.dp)).clickable(enabled = st.sfxBusy.isEmpty()) { vm.exportGroup(pack) }
+                Text(tr("导出音效包"), Modifier.clip(RoundedCornerShape(10.dp)).clickable(enabled = st.sfxBusy.isEmpty()) { vm.exportGroup(pack) }
                     .padding(horizontal = 8.dp, vertical = 4.dp), fontSize = 13.sp, color = MiuixTheme.colorScheme.primary)
                 // 开关：关闭后不在悬浮窗显示（App 内照常可播）
                 top.yukonga.miuix.kmp.basic.Switch(checked = pack !in st.packsOff, onCheckedChange = { vm.togglePack(pack, it) },
                     modifier = Modifier.padding(start = 4.dp, end = 24.dp))
             }
-            if (pack in st.packsOff) Text("已关闭，不在悬浮窗显示", Modifier.padding(horizontal = 28.dp).padding(bottom = 4.dp), fontSize = 12.sp, color = Summary)
+            if (pack in st.packsOff) Text(tr("已关闭，不在悬浮窗显示"), Modifier.padding(horizontal = 28.dp).padding(bottom = 4.dp), fontSize = 12.sp, color = Summary)
             info?.description?.takeIf { it.isNotBlank() }?.let { Text(it, Modifier.padding(horizontal = 28.dp).padding(bottom = 4.dp), fontSize = 12.sp, color = Summary) }
         }
         item(key = "sfx_grid_${pack}_${st.gridLayout}") { SoundTiles(vm, st, list) }
@@ -1095,12 +1097,12 @@ private fun LazyListScope.soundBoardPage(vm: MainViewModel, st: UiState, open: (
     if (!fx) return
     item(key = "sfx_repo_title") {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            SmallTitle("仓库素材", Modifier.weight(1f))
-            IconButton(onClick = { vm.refreshRepo() }, enabled = !st.repoLoading, modifier = Modifier.padding(end = 12.dp)) { Icon(MiuixIcons.Refresh, "刷新") }
+            SmallTitle(tr("仓库素材"), Modifier.weight(1f))
+            IconButton(onClick = { vm.refreshRepo() }, enabled = !st.repoLoading, modifier = Modifier.padding(end = 12.dp)) { Icon(MiuixIcons.Refresh, tr("刷新")) }
         }
     }
     if (st.repoSounds.isEmpty()) item(key = "sfx_repo_empty") {
-        Text(if (st.repoLoading) "正在获取…" else if (st.repoUrl.isBlank()) "先在设置里填仓库地址" else "仓库里还没有素材（清单 sounds 字段）",
+        Text(if (st.repoLoading) tr("正在获取…") else if (st.repoUrl.isBlank()) tr("先在设置里填仓库地址") else tr("仓库里还没有素材（清单 sounds 字段）"),
             Modifier.padding(horizontal = 28.dp, vertical = 4.dp), fontSize = 13.sp, color = Summary)
     }
     items(st.repoSounds, key = { "sfxr_${it.id}" }) { r ->
@@ -1109,11 +1111,11 @@ private fun LazyListScope.soundBoardPage(vm: MainViewModel, st: UiState, open: (
             Row(Modifier.padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(r.name, fontWeight = FontWeight.SemiBold)
-                    Text(listOfNotNull(r.pack, if (r.size > 0) "%.1f MB".format(r.size / 1048576f) else null, if (have) "已下载" else null).joinToString(" · "),
+                    Text(listOfNotNull(r.pack, if (r.size > 0) "%.1f MB".format(r.size / 1048576f) else null, if (have) tr("已下载") else null).joinToString(" · "),
                         fontSize = 12.sp, color = Summary)
                 }
                 IconButton(onClick = { vm.downloadRepoSound(r) }, enabled = st.sfxBusy.isEmpty()) {
-                    Icon(if (have) MiuixIcons.Refresh else MiuixIcons.Download, "下载")
+                    Icon(if (have) MiuixIcons.Refresh else MiuixIcons.Download, tr("下载"))
                 }
             }
         }
@@ -1125,7 +1127,7 @@ private fun SfxTabs(vm: MainViewModel, st: UiState) {
     val primary = MiuixTheme.colorScheme.primary
     Row(Modifier.fillMaxWidth().padding(PagePad).padding(top = 4.dp, bottom = 4.dp)
         .clip(RoundedCornerShape(16.dp)).background(MiuixTheme.colorScheme.secondaryContainer).padding(4.dp)) {
-        listOf("音效包", "本地音频").forEachIndexed { i, n ->
+        listOf(tr("音效包"), tr("本地音频")).forEachIndexed { i, n ->
             val sel = st.sfxTab == i
             val bg by animateColorAsState(if (sel) primary else Color.Transparent, tween(260), label = "sfxseg$i")
             Box(Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).background(bg).clickable { vm.setSfxTab(i) }.padding(vertical = 10.dp),
@@ -1146,21 +1148,21 @@ private fun SfxHeader(vm: MainViewModel, st: UiState, open: (String) -> Unit) {
     val addPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris -> if (uris.isNotEmpty()) pendingAdd = uris }
     if (pendingAdd.isNotEmpty()) {
         val groups = remember { vm.fxGroups() }
-        var g by remember { mutableStateOf(groups.firstOrNull { it != com.taocrypt.micmask.SoundBoard.PACK_FX } ?: "我的音效") }
-        WindowDialog(show = true, title = "添加 ${pendingAdd.size} 个音效到分组", onDismissRequest = { pendingAdd = emptyList() }) {
+        var g by remember { mutableStateOf(groups.firstOrNull { it != com.taocrypt.micmask.SoundBoard.PACK_FX } ?: tr("我的音效")) }
+        WindowDialog(show = true, title = tr("添加 {0} 个音效到分组", pendingAdd.size), onDismissRequest = { pendingAdd = emptyList() }) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (groups.isNotEmpty()) Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     groups.forEach { x ->
-                        val label = if (x == com.taocrypt.micmask.SoundBoard.PACK_FX) "预设音效" else x
+                        val label = if (x == com.taocrypt.micmask.SoundBoard.PACK_FX) tr("预设音效") else x
                         TextButton(label, onClick = { g = x }, colors = if (g == x) ButtonDefaults.textButtonColorsPrimary() else ButtonDefaults.textButtonColors())
                     }
                 }
-                TextField(value = if (g == com.taocrypt.micmask.SoundBoard.PACK_FX) "预设音效" else g,
-                    onValueChange = { g = it.take(40) }, label = "分组名（填新名字即新建分组）", singleLine = true)
+                TextField(value = if (g == com.taocrypt.micmask.SoundBoard.PACK_FX) tr("预设音效") else g,
+                    onValueChange = { g = it.take(40) }, label = tr("分组名（填新名字即新建分组）"), singleLine = true)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton("取消", onClick = { pendingAdd = emptyList() }, modifier = Modifier.weight(1f))
-                    TextButton("添加", onClick = {
-                        val target = if (g == "预设音效") com.taocrypt.micmask.SoundBoard.PACK_FX else g
+                    TextButton(tr("取消"), onClick = { pendingAdd = emptyList() }, modifier = Modifier.weight(1f))
+                    TextButton(tr("添加"), onClick = {
+                        val target = if (g == tr("预设音效")) com.taocrypt.micmask.SoundBoard.PACK_FX else g
                         vm.importToGroup(pendingAdd, target); pendingAdd = emptyList()
                     }, enabled = g.isNotBlank(), modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary())
                 }
@@ -1172,30 +1174,30 @@ private fun SfxHeader(vm: MainViewModel, st: UiState, open: (String) -> Unit) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             val sending = st.sounds.firstOrNull { it.id == st.sfxPlaying }
             Text(when {
-                sending != null -> "正在送进麦克风：${sending.name}"
-                st.sfxPreview != null -> "试听中（扬声器）：${st.sounds.firstOrNull { it.id == st.sfxPreview }?.name.orEmpty()}"
-                else -> "点卡片试听（扬声器），点「送麦」播给对方"
+                sending != null -> tr("正在送进麦克风：{0}", sending.name)
+                st.sfxPreview != null -> tr("试听中（扬声器）：{0}", st.sounds.firstOrNull { it.id == st.sfxPreview }?.name.orEmpty())
+                else -> tr("点卡片试听（扬声器），点「送麦」播给对方")
             }, fontWeight = FontWeight.SemiBold)
-            Text("送麦会叠加在变声之后，没在变声时自动用声卡模式打开麦克风通道。悬浮窗里点素材也是送麦。", fontSize = 12.sp, color = Summary)
-            Row { Text("音量", Modifier.weight(1f), fontSize = 14.sp); Text("${(st.sfxGain * 100).roundToInt()}%", fontSize = 13.sp, color = Summary) }
+            Text(tr("送麦会叠加在变声之后，没在变声时自动用声卡模式打开麦克风通道。悬浮窗里点素材也是送麦。"), fontSize = 12.sp, color = Summary)
+            Row { Text(tr("音量"), Modifier.weight(1f), fontSize = 14.sp); Text("${(st.sfxGain * 100).roundToInt()}%", fontSize = 13.sp, color = Summary) }
             Slider(value = st.sfxGain, onValueChange = { vm.setSfxGain((it * 20).roundToInt() / 20f) }, valueRange = 0f..1.5f)
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("送麦时循环", Modifier.weight(1f), fontSize = 14.sp)
+                Text(tr("送麦时循环"), Modifier.weight(1f), fontSize = 14.sp)
                 top.yukonga.miuix.kmp.basic.Switch(checked = st.sfxLoop, onCheckedChange = { vm.setSfxLoop(it) })
             }
             if (fx) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton("制作音效包", onClick = { open("mim3") }, enabled = st.sfxBusy.isEmpty(), modifier = Modifier.weight(1f))
-                TextButton(if (st.sfxBusy.isNotEmpty()) st.sfxBusy else "导入音效包", onClick = { fxPicker.launch(arrayOf("*/*")) },
+                TextButton(tr("制作音效包"), onClick = { open("mim3") }, enabled = st.sfxBusy.isEmpty(), modifier = Modifier.weight(1f))
+                TextButton(if (st.sfxBusy.isNotEmpty()) st.sfxBusy else tr("导入音效包"), onClick = { fxPicker.launch(arrayOf("*/*")) },
                     enabled = st.sfxBusy.isEmpty(), modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary())
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (fx) TextButton("添加音效", onClick = { addPicker.launch(arrayOf("audio/*")) }, enabled = st.sfxBusy.isEmpty(), modifier = Modifier.weight(1f))
-                else TextButton(if (st.sfxBusy.isNotEmpty()) st.sfxBusy else "导入本地音频", onClick = { localPicker.launch(arrayOf("audio/*")) },
+                if (fx) TextButton(tr("添加音效"), onClick = { addPicker.launch(arrayOf("audio/*")) }, enabled = st.sfxBusy.isEmpty(), modifier = Modifier.weight(1f))
+                else TextButton(if (st.sfxBusy.isNotEmpty()) st.sfxBusy else tr("导入本地音频"), onClick = { localPicker.launch(arrayOf("audio/*")) },
                     enabled = st.sfxBusy.isEmpty(), modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary())
-                TextButton("全部停止", onClick = { vm.stopPreview(); vm.stopSound() }, enabled = st.sfxPlaying != null || st.sfxPreview != null, modifier = Modifier.weight(1f))
+                TextButton(tr("全部停止"), onClick = { vm.stopPreview(); vm.stopSound() }, enabled = st.sfxPlaying != null || st.sfxPreview != null, modifier = Modifier.weight(1f))
             }
-            Text(if (fx) "音效包为 .mim3 文件：「制作音效包」把手机里的音频打包成 .mim3，「导入音效包」导入别人分享的 .mim3；「添加音效」支持 mp3 等常见音频，可自选分组；每个分组标题右侧「导出音效包」可打包分享。"
-                else "支持 mp3、m4a、wav、ogg、flac 等常见音频。", fontSize = 12.sp, color = Summary)
+            Text(if (fx) tr("音效包为 .mim3 文件：「制作音效包」把手机里的音频打包成 .mim3，「导入音效包」导入别人分享的 .mim3；「添加音效」支持 mp3 等常见音频，可自选分组；每个分组标题右侧「导出音效包」可打包分享。")
+                else tr("支持 mp3、m4a、wav、ogg、flac 等常见音频。"), fontSize = 12.sp, color = Summary)
         }
     }
 }
@@ -1207,23 +1209,23 @@ private fun SfxSelBar(vm: MainViewModel, st: UiState, sel: Set<String>, all: Lis
     val ids = all.filterNot { com.taocrypt.micmask.SoundBoard.isPreset(it) }.map { it.id }.toSet()
     Card(Modifier.fillMaxWidth().padding(PagePad).padding(bottom = 8.dp)) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("已选 ${sel.size} 个", fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 4.dp))
+            Text(tr("已选 {0} 个", sel.size), fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 4.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(if (sel.containsAll(ids) && ids.isNotEmpty()) "全不选" else "全选",
+                TextButton(if (sel.containsAll(ids) && ids.isNotEmpty()) tr("全不选") else tr("全选"),
                     onClick = { vm.sfxSelSet(if (sel.containsAll(ids)) emptySet() else ids) }, modifier = Modifier.weight(1f))
-                TextButton("重命名", enabled = sel.size == 1, onClick = { vm.sfxRename(sel.first()) }, modifier = Modifier.weight(1f))
+                TextButton(tr("重命名"), enabled = sel.size == 1, onClick = { vm.sfxRename(sel.first()) }, modifier = Modifier.weight(1f))
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton("完成", onClick = { vm.sfxSelEnd() }, modifier = Modifier.weight(1f))
-                TextButton("删除 ${sel.size}", enabled = sel.isNotEmpty(), onClick = { ask = true }, modifier = Modifier.weight(1f),
+                TextButton(tr("完成"), onClick = { vm.sfxSelEnd() }, modifier = Modifier.weight(1f))
+                TextButton(tr("删除 {0}", sel.size), enabled = sel.isNotEmpty(), onClick = { ask = true }, modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.textButtonColorsPrimary())
             }
         }
     }
-    if (ask) WindowDialog(show = true, title = "删除 ${sel.size} 个音效", summary = "删除后不能恢复。", onDismissRequest = { ask = false }) {
+    if (ask) WindowDialog(show = true, title = tr("删除 {0} 个音效", sel.size), summary = tr("删除后不能恢复。"), onDismissRequest = { ask = false }) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton("取消", onClick = { ask = false }, modifier = Modifier.weight(1f))
-            TextButton("删除", onClick = { vm.deleteSelectedSounds(); ask = false }, modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary())
+            TextButton(tr("取消"), onClick = { ask = false }, modifier = Modifier.weight(1f))
+            TextButton(tr("删除"), onClick = { vm.deleteSelectedSounds(); ask = false }, modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary())
         }
     }
 }
@@ -1241,26 +1243,26 @@ private fun SoundTiles(vm: MainViewModel, st: UiState, list: List<com.taocrypt.m
             val on = s.id in sel
             Tile((if (on) "✓ " else "") + s.name, on, sub = "%d:%02d".format(d / 60, d % 60), onLong = { vm.sfxSelToggle(s.id) }) { vm.sfxSelToggle(s.id) }
         } else
-        Tile((if (prev) "▶ " else "") + s.name, prev, sub = if (send) "送麦中" else "%d:%02d".format(d / 60, d % 60), onLong = { vm.sfxSelStart(s.id) },
+        Tile((if (prev) "▶ " else "") + s.name, prev, sub = if (send) tr("送麦中") else "%d:%02d".format(d / 60, d % 60), onLong = { vm.sfxSelStart(s.id) },
             action = {
-                Text(if (send) "■ 停止" else "送麦", Modifier.clip(RoundedCornerShape(10.dp))
+                Text(if (send) tr("■ 停止") else tr("送麦"), Modifier.clip(RoundedCornerShape(10.dp))
                     .background(if (send) Color(0xFFE5484D) else primary.copy(alpha = 0.15f))
                     .clickable { vm.playSound(s.id) }.padding(horizontal = 10.dp, vertical = 4.dp),
                     fontSize = 12.sp, color = if (send) Color.White else if (prev) MiuixTheme.colorScheme.onPrimary else primary)
             }) { vm.previewSound(s.id) }
     }
     TileGroup(tiles, st.gridLayout)
-    if (sel == null && (st.gridLayout || list.isNotEmpty())) Text("长按进入多选（删除、重命名）", Modifier.padding(horizontal = 24.dp), fontSize = 11.sp, color = Summary)
+    if (sel == null && (st.gridLayout || list.isNotEmpty())) Text(tr("长按进入多选（删除、重命名）"), Modifier.padding(horizontal = 24.dp), fontSize = 11.sp, color = Summary)
     LaunchedEffect(st.sfxRename) { st.sfxRename?.let { id -> list.firstOrNull { it.id == id }?.let { edit = it; vm.sfxRenameDone() } } }
     edit?.let { s ->
         var text by remember(s.id) { mutableStateOf(s.name) }
-        WindowDialog(show = true, title = "编辑素材", onDismissRequest = { edit = null }) {
+        WindowDialog(show = true, title = tr("编辑素材"), onDismissRequest = { edit = null }) {
             Column {
-                TextField(value = text, onValueChange = { text = it.take(40) }, label = "名称", singleLine = true)
+                TextField(value = text, onValueChange = { text = it.take(40) }, label = tr("名称"), singleLine = true)
                 Spacer(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton("取消", onClick = { edit = null }, modifier = Modifier.weight(1f))
-                    TextButton("保存", onClick = { vm.renameSound(s, text); edit = null }, modifier = Modifier.weight(1f),
+                    TextButton(tr("取消"), onClick = { edit = null }, modifier = Modifier.weight(1f))
+                    TextButton(tr("保存"), onClick = { vm.renameSound(s, text); edit = null }, modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.textButtonColorsPrimary())
                 }
             }
@@ -1284,17 +1286,17 @@ private fun FloatLookSettings() {
             Row(Modifier.padding(top = 6.dp)) { Text(t, Modifier.weight(1f), fontSize = 14.sp); Text(v, fontSize = 13.sp, color = Summary) }
             Slider(value = value, onValueChange = on, valueRange = range, onValueChangeFinished = done)
         }
-        row("悬浮球大小", "${ball.roundToInt()} dp", ball, 32f..80f, { ball = it.roundToInt().toFloat() }) { sp.edit().putInt("lf_ball_dp", ball.roundToInt()).apply() }
-        row("悬浮球不透明度", "${(ballA * 100).roundToInt()}%", ballA, 0.2f..1f, { ballA = (it * 20).roundToInt() / 20f }) { sp.edit().putFloat("lf_ball_alpha", ballA).apply() }
-        row("控制窗内容缩放", "${(scale * 100).roundToInt()}%", scale, 0.7f..1.5f, { scale = (it * 20).roundToInt() / 20f }) { sp.edit().putFloat("lf_panel_scale", scale).apply() }
-        row("控制窗不透明度", "${(panelA * 100).roundToInt()}%", panelA, 0.3f..1f, { panelA = (it * 20).roundToInt() / 20f }) { sp.edit().putFloat("lf_panel_alpha", panelA).apply() }
+        row(tr("悬浮球大小"), "${ball.roundToInt()} dp", ball, 32f..80f, { ball = it.roundToInt().toFloat() }) { sp.edit().putInt("lf_ball_dp", ball.roundToInt()).apply() }
+        row(tr("悬浮球不透明度"), "${(ballA * 100).roundToInt()}%", ballA, 0.2f..1f, { ballA = (it * 20).roundToInt() / 20f }) { sp.edit().putFloat("lf_ball_alpha", ballA).apply() }
+        row(tr("控制窗内容缩放"), "${(scale * 100).roundToInt()}%", scale, 0.7f..1.5f, { scale = (it * 20).roundToInt() / 20f }) { sp.edit().putFloat("lf_panel_scale", scale).apply() }
+        row(tr("控制窗不透明度"), "${(panelA * 100).roundToInt()}%", panelA, 0.3f..1f, { panelA = (it * 20).roundToInt() / 20f }) { sp.edit().putFloat("lf_panel_alpha", panelA).apply() }
         var ah by remember { mutableStateOf(sp.getBoolean("lf_autohide", true)) }
         Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) { Text("收起后自动贴边半隐藏", fontSize = 14.sp); Text("3 秒不操作，悬浮球缩进屏幕边缘一半", fontSize = 12.sp, color = Summary) }
+            Column(Modifier.weight(1f)) { Text(tr("收起后自动贴边半隐藏"), fontSize = 14.sp); Text(tr("3 秒不操作，悬浮球缩进屏幕边缘一半"), fontSize = 12.sp, color = Summary) }
             Switch(checked = ah, onCheckedChange = { ah = it; sp.edit().putBoolean("lf_autohide", it).apply() })
         }
-        Text("点模式按钮启动，再点一次停止；拖动悬浮球可贴边。控制窗右下角「⤡」长按后拖动，可自由调宽和高；双击「⤡」恢复默认大小。", fontSize = 12.sp, color = Summary, modifier = Modifier.padding(vertical = 6.dp))
-        Text("恢复默认", Modifier.clip(RoundedCornerShape(8.dp)).clickable {
+        Text(tr("点模式按钮启动，再点一次停止；拖动悬浮球可贴边。控制窗右下角「⤡」长按后拖动，可自由调宽和高；双击「⤡」恢复默认大小。"), fontSize = 12.sp, color = Summary, modifier = Modifier.padding(vertical = 6.dp))
+        Text(tr("恢复默认"), Modifier.clip(RoundedCornerShape(8.dp)).clickable {
             // 一次性写入，悬浮窗只重建一次；窗口宽高也一并恢复
             sp.edit().remove("lf_ball_dp").remove("lf_ball_alpha").remove("lf_panel_scale").remove("lf_panel_alpha")
                 .remove("lf_autohide").remove("lf_panel_w").remove("lf_panel_h").apply()
@@ -1304,37 +1306,37 @@ private fun FloatLookSettings() {
 }
 
 private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (String) -> Unit) {
-    item { SmallTitle("变声设置") }
+    item { SmallTitle(tr("变声设置")) }
     item {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
             val n = vm.whitelist().size
-            ArrowPreference(title = "目标应用", summary = if (st.liveOn) "变声中不可修改，先关闭变声" else if (n == 0) "未选择，只做本机试听" else "已选 $n 个应用",
-                enabled = !st.liveOn, onClick = { if (st.liveOn) vm.toast("请先关闭变声，再修改目标应用") else open("whitelist") })
-            SwitchPreference(checked = st.liveAec, onCheckedChange = { if (it != st.liveAec) vm.toggleLiveAecAnywhere() }, title = "降噪模式",
-                summary = (if (st.liveAec) "已开：回声消除 + 降噪" else "已关：原始麦克风，音质优先") + if (st.liveOn) "（切换会重启变声）" else "")
-            SwitchPreference(checked = st.liveMonitor, onCheckedChange = { vm.setLiveMonitor(it) }, title = "实时耳返",
-                summary = "变声后的声音送到耳机")
-            SwitchPreference(checked = st.liveFloat, onCheckedChange = { vm.setLiveFloat(it) }, title = "悬浮窗开关",
-                summary = "单击展开 · 双击打开 App · 长按关闭")
+            ArrowPreference(title = tr("目标应用"), summary = if (st.liveOn) tr("变声中不可修改，先关闭变声") else if (n == 0) tr("未选择，只做本机试听") else tr("已选 {0} 个应用", n),
+                enabled = !st.liveOn, onClick = { if (st.liveOn) vm.toast(tr("请先关闭变声，再修改目标应用")) else open("whitelist") })
+            SwitchPreference(checked = st.liveAec, onCheckedChange = { if (it != st.liveAec) vm.toggleLiveAecAnywhere() }, title = tr("降噪模式"),
+                summary = (if (st.liveAec) tr("已开：回声消除 + 降噪") else tr("已关：原始麦克风，音质优先")) + if (st.liveOn) tr("（切换会重启变声）") else "")
+            SwitchPreference(checked = st.liveMonitor, onCheckedChange = { vm.setLiveMonitor(it) }, title = tr("实时耳返"),
+                summary = tr("变声后的声音送到耳机"))
+            SwitchPreference(checked = st.liveFloat, onCheckedChange = { vm.setLiveFloat(it) }, title = tr("悬浮窗开关"),
+                summary = tr("单击展开 · 双击打开 App · 长按关闭"))
             if (st.liveFloat) FloatLookSettings()
         }
     }
-    item { SmallTitle("权限模式") }
+    item { SmallTitle(tr("权限")) }
     item { PermModeCard(vm, st) }
-    item { SmallTitle("外观") }
+    item { SmallTitle(tr("外观")) }
     item {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
-            ArrowPreference(title = "外观", summary = "深浅色、莫奈取色、液态玻璃", onClick = { open("theme") })
+            ArrowPreference(title = tr("外观"), summary = tr("深浅色、莫奈取色、液态玻璃"), onClick = { open("theme") })
         }
     }
-    item { SmallTitle("模型仓库") }
+    item { SmallTitle(tr("模型仓库")) }
     item { RepoSetting(vm, st) }
-    item { SmallTitle("日志与其他") }
+    item { SmallTitle(tr("日志与其他")) }
     item {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
-            ArrowPreference(title = "日志", summary = "实时查看、筛选、复制，导出到 下载/MicMask", onClick = { open("logs") })
-            ArrowPreference(title = "音频还原", summary = "某个应用突然没声音时点这里：停止变声、还原麦克风，并恢复被禁止播放声音的应用", onClick = { vm.repairAudio() })
-            ArrowPreference(title = "关于 MicMask", summary = "v${com.taocrypt.micmask.BuildConfig.VERSION_NAME} · 检查更新、交流群、致谢", onClick = { open("about") })
+            ArrowPreference(title = tr("日志"), summary = tr("实时查看、筛选、复制，导出到 下载/MicMask"), onClick = { open("logs") })
+            ArrowPreference(title = tr("音频还原"), summary = tr("某个应用突然没声音时点这里：停止变声、还原麦克风，并恢复被禁止播放声音的应用"), onClick = { vm.repairAudio() })
+            ArrowPreference(title = tr("关于 MicMask"), summary = tr("v{0} · 检查更新、交流群、致谢", com.taocrypt.micmask.BuildConfig.VERSION_NAME), onClick = { open("about") })
         }
     }
 }
@@ -1345,7 +1347,7 @@ private fun RepoSetting(vm: MainViewModel, st: UiState) {
     var editing by remember { mutableStateOf<String?>(null) }
     Card(Modifier.fillMaxWidth().padding(PagePad)) {
         Column(Modifier.padding(vertical = 8.dp)) {
-            if (st.repos.isEmpty()) Text("还没有模型仓库。仓库为社区维护，请只添加你信任、有权使用的仓库。",
+            if (st.repos.isEmpty()) Text(tr("还没有模型仓库。仓库为社区维护，请只添加你信任、有权使用的仓库。"),
                 Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontSize = 13.sp, color = Summary)
             ReorderList(st.repos, key = { it.url }, onMove = { a, b -> vm.moveRepo(a, b) }) { r, handle, dragging ->
                 Row(Modifier.fillMaxWidth()
@@ -1363,11 +1365,11 @@ private fun RepoSetting(vm: MainViewModel, st: UiState) {
                     Switch(checked = r.on, onCheckedChange = { vm.toggleRepo(r.url, it) })
                 }
             }
-            Text("按住 ⋮⋮ 拖动排序，靠上的仓库优先；点一项可改备注名或删除。", Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+            Text(tr("按住 ⋮⋮ 拖动排序，靠上的仓库优先；点一项可改备注名或删除。"), Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                 fontSize = 12.sp, color = Summary)
             Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton("刷新全部", onClick = { vm.refreshRepo() }, enabled = st.repos.any { it.on } && !st.repoLoading, modifier = Modifier.weight(1f))
-                TextButton("添加仓库", onClick = { editing = "" }, modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary())
+                TextButton(tr("刷新全部"), onClick = { vm.refreshRepo() }, enabled = st.repos.any { it.on } && !st.repoLoading, modifier = Modifier.weight(1f))
+                TextButton(tr("添加仓库"), onClick = { editing = "" }, modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary())
             }
             if (st.repoMsg.isNotBlank()) Text(st.repoMsg, fontSize = 12.sp, color = Summary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
         }
@@ -1376,17 +1378,17 @@ private fun RepoSetting(vm: MainViewModel, st: UiState) {
         val cur = st.repos.firstOrNull { it.url == old }
         var url by remember(old) { mutableStateOf(cur?.url.orEmpty()) }
         var name by remember(old) { mutableStateOf(cur?.name.orEmpty()) }
-        WindowDialog(show = true, title = if (cur == null) "添加模型仓库" else "编辑模型仓库",
-            summary = "仓库为社区维护，请只添加你信任、有权使用的仓库", onDismissRequest = { editing = null }) {
+        WindowDialog(show = true, title = if (cur == null) tr("添加模型仓库") else tr("编辑模型仓库"),
+            summary = tr("仓库为社区维护，请只添加你信任、有权使用的仓库"), onDismissRequest = { editing = null }) {
             Column {
-                TextField(value = name, onValueChange = { name = it.take(20) }, label = "备注名（可空）", singleLine = true)
+                TextField(value = name, onValueChange = { name = it.take(20) }, label = tr("备注名（可空）"), singleLine = true)
                 Spacer(Modifier.height(8.dp))
-                TextField(value = url, onValueChange = { url = it }, label = "cnb / GitHub 仓库地址或 models.json 链接", singleLine = true)
+                TextField(value = url, onValueChange = { url = it }, label = tr("仓库地址或 models.json 链接"), singleLine = true)
                 Spacer(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (cur != null) TextButton("删除", onClick = { vm.removeRepo(old); editing = null }, modifier = Modifier.weight(1f))
-                    else TextButton("取消", onClick = { editing = null }, modifier = Modifier.weight(1f))
-                    TextButton("保存", onClick = { vm.saveRepo(cur?.url, url, name); editing = null }, enabled = url.isNotBlank(),
+                    if (cur != null) TextButton(tr("删除"), onClick = { vm.removeRepo(old); editing = null }, modifier = Modifier.weight(1f))
+                    else TextButton(tr("取消"), onClick = { editing = null }, modifier = Modifier.weight(1f))
+                    TextButton(tr("保存"), onClick = { vm.saveRepo(cur?.url, url, name); editing = null }, enabled = url.isNotBlank(),
                         modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary())
                 }
             }
@@ -1396,22 +1398,36 @@ private fun RepoSetting(vm: MainViewModel, st: UiState) {
 
 @Composable
 private fun ThemePage(ui: UiPrefs) {
+    val ctx = LocalContext.current
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        SmallTitle("主题")
+        SmallTitle(tr("语言") + if (com.taocrypt.micmask.I18n.english) "" else " / Language")
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
-            WindowDropdownPreference(items = listOf("跟随系统", "浅色", "深色"), selectedIndex = ui.mode, title = "深浅色",
-                onSelectedIndexChange = { ui.mode = it; ui.save() })
-            SwitchPreference(checked = ui.monet, onCheckedChange = { ui.monet = it; ui.save() }, title = "莫奈取色",
-                summary = "按壁纸或所选主色生成整套配色")
-            if (ui.monet) WindowDropdownPreference(items = KeyColors.map { it.first }, selectedIndex = ui.key, title = "主色",
-                onSelectedIndexChange = { ui.key = it; ui.save() })
-            SwitchPreference(checked = ui.oled, onCheckedChange = { ui.oled = it; ui.save() }, title = "纯黑背景",
-                summary = "深色模式下背景改为纯黑，OLED 屏更省电", enabled = ui.mode != 1)
+            WindowDropdownPreference(items = listOf("跟随系统 / Follow system", "简体中文", "English"),
+                selectedIndex = com.taocrypt.micmask.I18n.lang.coerceIn(0, 2), title = tr("界面语言"),
+                summary = tr("日志始终为中文"),
+                onSelectedIndexChange = { v ->
+                    if (v != com.taocrypt.micmask.I18n.lang) {
+                        com.taocrypt.micmask.I18n.set(ctx, v)
+                        com.taocrypt.micmask.LiveService.refresh(ctx)
+                        (ctx as? android.app.Activity)?.recreate()
+                    }
+                })
         }
-        SmallTitle("底栏")
+        SmallTitle(tr("主题"))
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
-            SwitchPreference(checked = ui.glass, onCheckedChange = { ui.glass = it; ui.save() }, title = "液态玻璃",
-                summary = if (Build.VERSION.SDK_INT >= 33) "关闭后改用高斯模糊" else "需要 Android 13 及以上",
+            WindowDropdownPreference(items = listOf(tr("跟随系统"), tr("浅色"), tr("深色")), selectedIndex = ui.mode, title = tr("深浅色"),
+                onSelectedIndexChange = { ui.mode = it; ui.save() })
+            SwitchPreference(checked = ui.oled, onCheckedChange = { ui.oled = it; ui.save() }, title = tr("纯黑背景"),
+                summary = tr("深色模式下背景改为纯黑，OLED 屏更省电"), enabled = ui.mode != 1)
+            SwitchPreference(checked = ui.monet, onCheckedChange = { ui.monet = it; ui.save() }, title = tr("莫奈取色"),
+                summary = tr("按壁纸或所选主色生成整套配色"))
+            if (ui.monet) WindowDropdownPreference(items = KeyColors.map { it.first }, selectedIndex = ui.key, title = tr("主色"),
+                onSelectedIndexChange = { ui.key = it; ui.save() })
+        }
+        SmallTitle(tr("底栏"))
+        Card(Modifier.fillMaxWidth().padding(PagePad)) {
+            SwitchPreference(checked = ui.glass, onCheckedChange = { ui.glass = it; ui.save() }, title = tr("液态玻璃"),
+                summary = if (Build.VERSION.SDK_INT >= 33) tr("关闭后改用高斯模糊") else tr("需要 Android 13 及以上"),
                 enabled = Build.VERSION.SDK_INT >= 33)
         }
     }
@@ -1426,19 +1442,19 @@ private fun RepoItem(vm: MainViewModel, st: UiState, m: ModelRepo.RModel) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(m.name, fontWeight = FontWeight.SemiBold)
-                    val meta = listOfNotNull(m.author.takeIf { it.isNotBlank() }?.let { "作者 $it" },
+                    val meta = listOfNotNull(m.author.takeIf { it.isNotBlank() }?.let { tr("作者 {0}", it) },
                         if (m.totalSize > 0) "%.0f MB".format(m.totalSize / 1048576f) else null,
-                        if (installed) "已安装" else null,
+                        if (installed) tr("已安装") else null,
                         // 多仓库时标出来源
                         st.repos.takeIf { r -> r.count { it.on } > 1 }?.firstOrNull { it.url == m.repo }?.label).joinToString(" · ")
                     if (meta.isNotEmpty()) Text(meta, fontSize = 12.sp, color = Summary)
                 }
                 IconButton(onClick = { vm.downloadRepoModel(m) }, enabled = st.dlId == null && !st.liveOn) {
-                    Icon(if (installed) MiuixIcons.Refresh else MiuixIcons.Download, if (installed) "重新下载" else "下载")
+                    Icon(if (installed) MiuixIcons.Refresh else MiuixIcons.Download, if (installed) tr("重新下载") else tr("下载"))
                 }
             }
             if (m.desc.isNotBlank()) Text(m.desc, fontSize = 13.sp, color = Summary)
-            if (m.license.isNotBlank()) Text("授权：${m.license}", fontSize = 12.sp, color = Summary)
+            if (m.license.isNotBlank()) Text(tr("授权：{0}", m.license), fontSize = 12.sp, color = Summary)
             if (busy) {
                 Spacer(Modifier.height(8.dp))
                 LinearProgressIndicator(progress = st.dlProgress, modifier = Modifier.padding(end = 8.dp))
@@ -1540,12 +1556,12 @@ private fun WhitelistPage(vm: MainViewModel) {
     }
     val collator = remember { java.text.Collator.getInstance(java.util.Locale.CHINA) }
     Column(Modifier.fillMaxSize()) {
-        TextField(value = q, onValueChange = { q = it }, label = "搜索应用", singleLine = true,
+        TextField(value = q, onValueChange = { q = it }, label = tr("搜索应用"), singleLine = true,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp))
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             val primary = MiuixTheme.colorScheme.primary
             Row(Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).background(MiuixTheme.colorScheme.secondaryContainer).padding(3.dp)) {
-                listOf("名称", "安装时间").forEachIndexed { i, t ->
+                listOf(tr("名称"), tr("安装时间")).forEachIndexed { i, t ->
                     val on = sort == i
                     val bg by animateColorAsState(if (on) primary else Color.Transparent, label = "wlsort")
                     Box(Modifier.weight(1f).height(34.dp).clip(RoundedCornerShape(10.dp)).background(bg)
@@ -1563,11 +1579,11 @@ private fun WhitelistPage(vm: MainViewModel) {
                 .clickable { showSys = !showSys; prefs.edit().putBoolean("wlSystem", showSys).apply() }.padding(6.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(state = ToggleableState(showSys), onClick = { showSys = !showSys; prefs.edit().putBoolean("wlSystem", showSys).apply() })
-                Text("系统应用", fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp))
+                Text(tr("系统应用"), fontSize = 13.sp, modifier = Modifier.padding(start = 6.dp))
             }
         }
         val src = all
-        if (src == null) Text("正在读取应用列表…", Modifier.padding(24.dp))
+        if (src == null) Text(tr("正在读取应用列表…"), Modifier.padding(24.dp))
         else {
             val asc: Comparator<AppInfo> = if (sort == 1) compareBy { it.installed }
                 else Comparator { x, y -> collator.compare(x.label, y.label) }
@@ -1577,7 +1593,7 @@ private fun WhitelistPage(vm: MainViewModel) {
                     (q.isBlank() || it.label.contains(q, true) || it.pkg.contains(q, true)) }
                 .sortedWith(compareBy<AppInfo> { it.pkg !in sel }.then(byOrder))
             val fmt = remember { java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.CHINA) }
-            Text("${list.size} 个应用" + if (sel.isNotEmpty()) " · 已选 ${sel.size} 个置顶" else "", fontSize = 12.sp, color = Summary,
+            Text(tr("{0} 个应用", list.size) + if (sel.isNotEmpty()) tr(" · 已选 {0} 个置顶", sel.size) else "", fontSize = 12.sp, color = Summary,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
             LazyColumn(Modifier.weight(1f)) {
                 items(list, key = { it.pkg }) { a ->
@@ -1585,7 +1601,7 @@ private fun WhitelistPage(vm: MainViewModel) {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                         if (a.icon != null) Image(a.icon, null, Modifier.size(40.dp)) else Spacer(Modifier.size(40.dp))
                         Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                            Text(a.label + if (a.system) " · 系统" else "", fontWeight = FontWeight.Medium)
+                            Text(a.label + if (a.system) tr(" · 系统") else "", fontWeight = FontWeight.Medium)
                             Text("${a.pkg} · ${fmt.format(java.util.Date(a.installed))}", fontSize = 11.sp, color = Summary, maxLines = 1)
                         }
                         Checkbox(state = ToggleableState(on), onClick = {
@@ -1614,15 +1630,15 @@ private fun Mim3Page(vm: MainViewModel, st: UiState) {
         uris.forEach { u -> if (items.none { it.uri == u }) items += com.taocrypt.micmask.SoundBoard.PackItem(u, com.taocrypt.micmask.SoundBoard.safe(com.taocrypt.micmask.SoundBoard.displayName(ctx, u)), com.taocrypt.micmask.SoundBoard.audioExt(ctx, u)) }
     }
     LazyColumn(Modifier.fillMaxSize()) {
-        item { SmallTitle("包信息") }
+        item { SmallTitle(tr("包信息")) }
         item {
             Card(Modifier.fillMaxWidth().padding(PagePad)) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextField(value = group, onValueChange = { group = it.take(40) }, label = "分组名（导入后显示的分组）", singleLine = true)
-                    TextField(value = author, onValueChange = { author = it.take(40) }, label = "创作者", singleLine = true)
-                    TextField(value = desc, onValueChange = { desc = it.take(200) }, label = "简介（可选）")
+                    TextField(value = group, onValueChange = { group = it.take(40) }, label = tr("分组名（导入后显示的分组）"), singleLine = true)
+                    TextField(value = author, onValueChange = { author = it.take(40) }, label = tr("创作者"), singleLine = true)
+                    TextField(value = desc, onValueChange = { desc = it.take(200) }, label = tr("简介（可选）"))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("打包后同时导入本机", Modifier.weight(1f), fontSize = 14.sp)
+                        Text(tr("打包后同时导入本机"), Modifier.weight(1f), fontSize = 14.sp)
                         top.yukonga.miuix.kmp.basic.Switch(checked = alsoImport, onCheckedChange = { alsoImport = it })
                     }
                 }
@@ -1630,12 +1646,12 @@ private fun Mim3Page(vm: MainViewModel, st: UiState) {
         }
         item {
             Row(Modifier.padding(top = 16.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                SmallTitle("音效 ${items.size} 个", Modifier.weight(1f))
-                TextButton("添加音频", onClick = { picker.launch(arrayOf("audio/*")) }, modifier = Modifier.padding(end = 12.dp))
+                SmallTitle(tr("音效 {0} 个", items.size), Modifier.weight(1f))
+                TextButton(tr("添加音频"), onClick = { picker.launch(arrayOf("audio/*")) }, modifier = Modifier.padding(end = 12.dp))
             }
         }
         if (items.isEmpty()) item {
-            Text("点「添加音频」选择多个 mp3（也支持 ogg/m4a/wav/flac），文件原样打包不转码。", Modifier.padding(horizontal = 28.dp, vertical = 4.dp), fontSize = 13.sp, color = Summary)
+            Text(tr("点「添加音频」选择多个 mp3（也支持 ogg/m4a/wav/flac），文件原样打包不转码。"), Modifier.padding(horizontal = 28.dp, vertical = 4.dp), fontSize = 13.sp, color = Summary)
         }
         items(items.size, key = { items[it].uri.toString() }) { i ->
             val it0 = items[i]
@@ -1643,19 +1659,19 @@ private fun Mim3Page(vm: MainViewModel, st: UiState) {
                 Row(Modifier.padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.weight(1f)) {
                         TextField(value = it0.name, onValueChange = { v -> val k = items.indexOfFirst { x -> x.uri == it0.uri }; if (k >= 0) items[k] = it0.copy(name = v.take(40)) },
-                            label = "名称 · .${it0.ext}", singleLine = true)
+                            label = tr("名称 · .{0}", it0.ext), singleLine = true)
                     }
-                    IconButton(onClick = { items.removeAll { x -> x.uri == it0.uri } }) { Icon(MiuixIcons.Delete, "移除") }
+                    IconButton(onClick = { items.removeAll { x -> x.uri == it0.uri } }) { Icon(MiuixIcons.Delete, tr("移除")) }
                 }
             }
         }
         item {
             Column(Modifier.padding(PagePad).padding(vertical = 12.dp)) {
-                TextButton(if (st.sfxBusy.isNotEmpty()) st.sfxBusy else "打包为音效包",
+                TextButton(if (st.sfxBusy.isNotEmpty()) st.sfxBusy else tr("打包为音效包"),
                     onClick = { vm.buildMim3(group, author, desc, items.toList(), alsoImport) },
                     enabled = st.sfxBusy.isEmpty() && items.isNotEmpty() && group.isNotBlank(), modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.textButtonColorsPrimary())
-                Text("保存到 Download/MicMask/<分组名>.mim3，可直接发给别人导入。",
+                Text(tr("保存到 Download/MicMask/<分组名>.mim3，可直接发给别人导入。"),
                     Modifier.padding(horizontal = 12.dp, vertical = 8.dp), fontSize = 12.sp, color = Summary)
             }
         }
@@ -1667,13 +1683,15 @@ private fun Mim3Page(vm: MainViewModel, st: UiState) {
 @Composable
 private fun PermModeCard(vm: MainViewModel, st: UiState) {
     val primary = MiuixTheme.colorScheme.primary
-    val permitted = com.taocrypt.micmask.inject.MicInjector.shizukuPermitted()
-    val normal = st.forceNormal
+    // 授权状态变化后 refreshInjectState 会更新 qqShizuku / speakerMode，以此作为 key 重新读取
+    val permitted = remember(st.qqShizuku, st.speakerMode, st.forceNormal) { com.taocrypt.micmask.inject.MicInjector.shizukuPermitted() }
+    // 未授权 Shizuku 时实际按普通模式工作，选中态也显示为普通模式
+    val effNormal = st.forceNormal || !permitted
     Card(Modifier.fillMaxWidth().padding(PagePad)) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                listOf(false to "Shizuku", true to "普通").forEach { (isNormal, name) ->
-                    val sel = normal == isNormal
+                listOf(false to tr("Shizuku 模式"), true to tr("普通模式")).forEach { (isNormal, name) ->
+                    val sel = effNormal == isNormal
                     val bg by animateColorAsState(if (sel) primary else MiuixTheme.colorScheme.surfaceContainer, label = "perm")
                     val fg = if (sel) MiuixTheme.colorScheme.onPrimary else MiuixTheme.colorScheme.onSurface
                     Column(Modifier.weight(1f).clip(RoundedCornerShape(14.dp)).background(bg)
@@ -1681,15 +1699,15 @@ private fun PermModeCard(vm: MainViewModel, st: UiState) {
                         .padding(vertical = 14.dp, horizontal = 12.dp),
                         horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(name, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = fg)
-                        Text(if (isNormal) "扬声器外放" else if (permitted) "已授权" else "未授权", fontSize = 12.sp, color = fg.copy(alpha = 0.75f))
+                        Text(if (isNormal) tr("无需授权") else if (permitted) tr("已授权") else tr("未授权"), fontSize = 12.sp, color = fg.copy(alpha = 0.75f))
                     }
                 }
             }
             Text(when {
-                st.liveOn -> "变声中不能切换，先关闭变声。"
-                normal -> "普通模式：不使用 Shizuku。变声和音效从扬声器外放，AI/普通变声为「录一句再放」的录播方式，声卡不可用；对方可能听到原声。"
-                permitted -> "Shizuku 模式：把变声直接送进目标应用的麦克风，支持实时 AI 变声、普通变声和虚拟声卡。"
-                else -> "Shizuku 模式：需要先安装并启动 Shizuku，再点上方按钮授权；未授权时自动按普通模式工作。\n" + st.qqShizuku.lineSequence().firstOrNull().orEmpty()
+                st.liveOn -> tr("变声中不能切换，先关闭变声。")
+                effNormal -> tr("普通模式：不使用 Shizuku。变声和音效从扬声器外放，AI/普通变声为「录一句再放」的录播方式，声卡不可用；对方可能听到原声。") +
+                    if (!st.forceNormal && !permitted) tr("\nShizuku 未授权，点上方「Shizuku 模式」申请。") else ""
+                else -> tr("Shizuku 模式：把变声直接送进目标应用的麦克风，支持实时 AI 变声、普通变声和虚拟声卡。")
             }, fontSize = 12.sp, color = Summary)
         }
     }

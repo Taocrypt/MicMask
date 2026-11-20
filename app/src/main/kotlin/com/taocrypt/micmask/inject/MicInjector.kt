@@ -1,5 +1,7 @@
 package com.taocrypt.micmask.inject
 
+import com.taocrypt.micmask.tr
+
 import android.content.ComponentName
 import android.content.Context
 import android.content.ServiceConnection
@@ -68,7 +70,7 @@ object MicInjector {
      * 返回给用户看的结果。需要 Shizuku。
      */
     fun repairAudio(app: Context): String {
-        if (!shizukuRunning() || Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) return "需要 Shizuku 授权才能还原"
+        if (!shizukuRunning() || Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) return tr("需要 Shizuku 授权才能还原")
         runCatching { stopLive() }
         val m = mutedByAppOps()
         L.i("音频还原：PLAY_AUDIO 被禁止的应用 ${m.ifEmpty { null }?.joinToString { "${it.first}=${it.second}" } ?: "无"}")
@@ -81,9 +83,9 @@ object MicInjector {
         }
         val names = { l: List<String> -> l.joinToString("、") { p -> runCatching { app.packageManager.getApplicationLabel(app.packageManager.getApplicationInfo(p, 0)).toString() }.getOrDefault(p) } }
         return when {
-            m.isEmpty() -> "已停止变声并还原麦克风；没有应用被禁止播放声音"
-            failed.isEmpty() -> "已恢复 ${names(fixed)} 的声音，请把它们彻底关掉再打开"
-            else -> "已恢复 ${names(fixed).ifEmpty { "无" }}；${names(failed)} 改不回来，请在系统设置里检查"
+            m.isEmpty() -> tr("已停止变声并还原麦克风；没有应用被禁止播放声音")
+            failed.isEmpty() -> tr("已恢复 {0} 的声音，请把它们彻底关掉再打开", names(fixed))
+            else -> tr("已恢复 {0}；{1} 改不回来，请在系统设置里检查", names(fixed).ifEmpty { tr("无") }, names(failed))
         }
     }
 
@@ -126,7 +128,7 @@ object MicInjector {
         }
         override fun onServiceDisconnected(name: ComponentName?) {
             binder = null
-            setPhase(Phase.IDLE, "注入服务断开")
+            setPhase(Phase.IDLE, tr("注入服务断开"))
         }
     }
 
@@ -140,12 +142,12 @@ object MicInjector {
     private fun ensureBound(ctx: Context, then: () -> Unit) {
         if (binder?.pingBinder() == true) { then(); return }
         if (!shizukuPermitted()) {
-            setPhase(Phase.ERROR, if (shizukuRunning()) "还没授权 Shizuku" else "Shizuku 没有运行")
+            setPhase(Phase.ERROR, if (shizukuRunning()) tr("还没授权 Shizuku") else tr("Shizuku 没有运行"))
             return
         }
         val first = synchronized(pendingAfterBind) { pendingAfterBind.add(then); pendingAfterBind.size == 1 }
         if (!first) return   // 已在连接中，排队
-        setPhase(Phase.CONNECTING, "正在启动注入服务…")
+        setPhase(Phase.CONNECTING, tr("正在启动注入服务…"))
         bindAttempt = 0; selfLaunched = false
         val app = ctx.applicationContext
         appCtx = app
@@ -240,7 +242,7 @@ object MicInjector {
         val attempt = ++bindAttempt
         L.i("MicInjector 绑定注入服务 第${attempt}次 version=${BuildConfig.VERSION_CODE}")
         runCatching { Shizuku.bindUserService(args(app), conn) }
-            .onFailure { L.e("bindUserService", it); setPhase(Phase.ERROR, "启动注入服务失败：${it.message}"); return }
+            .onFailure { L.e("bindUserService", it); setPhase(Phase.ERROR, tr("启动注入服务失败：{0}", it.message)); return }
         // 新装/升级后第一次起 shell 进程要编译校验整个 APK 的 dex，可能远超 5 s。
         // 1.15~1.17 每 5 s 就 remove 重来，等于把正在启动的进程反复杀掉 → 永远连不上。
         // 现在：只要进程在就一直等（最多 40 s）；连进程都没有才重绑。
@@ -257,7 +259,7 @@ object MicInjector {
                         waited >= 30 || (ps.isEmpty() && waited >= 12 && selfLaunched) -> {
                             L.w("MicInjector 注入服务没连上（第${attempt}次，${waited}s）")
                             synchronized(pendingAfterBind) { pendingAfterBind.clear() }
-                            setPhase(Phase.ERROR, "注入服务连不上：请在 Shizuku 里停止再启动服务后重试")
+                            setPhase(Phase.ERROR, tr("注入服务连不上：请在 Shizuku 里停止再启动服务后重试"))
                             Thread { val sl = shell("tail -n 40 /data/local/tmp/micmask-models/shellmain.log"); L.w("MicInjector 自启日志：$sl"); val spid = Regex("pid=(\\d+)").find(sl)?.groupValues?.get(1); if (spid != null) L.w("MicInjector 自启进程系统日志：\n" + shell("logcat -d -t 2000 | grep -E ' $spid |$spid\\]|pid=$spid|pid $spid|\\($spid\\)' | tail -n 60")); L.w("MicInjector 系统日志：\n" + shell("logcat -d -t 400 | grep -i -E 'shizuku|micmask|injector|app_process|UserService|AndroidRuntime' | tail -n 80")) }.start()
                         }
                         ps.isEmpty() && waited >= 4 && !selfLaunched -> {
@@ -268,7 +270,7 @@ object MicInjector {
                             main.postDelayed({ check(n + 1) }, 2500)
                         }
                         else -> {
-                            if (n == 1) setPhase(Phase.CONNECTING, "首次启动注入服务较慢，请稍等…")
+                            if (n == 1) setPhase(Phase.CONNECTING, tr("首次启动注入服务较慢，请稍等…"))
                             main.postDelayed({ check(n + 1) }, 2500)
                         }
                     }
@@ -293,21 +295,21 @@ object MicInjector {
         val app = ctx.applicationContext
         val pkgs = targetPkg.split(',', ' ', ';').map { it.trim() }.filter { it.isNotEmpty() }
         val uids = pkgs.map { uidOf(app, it) }.filter { it >= 0 }.distinct().toIntArray()
-        if (uids.isEmpty()) { setPhase(Phase.ERROR, "没找到目标 App：$targetPkg"); return }
+        if (uids.isEmpty()) { setPhase(Phase.ERROR, tr("没找到目标 App：{0}", targetPkg)); return }
         ensureBound(app) {
             Thread {
                 try {
                     val raw = toPcm48kStereo(app, wav)
                     val loaded = loadPcm(raw)
                     raw.delete()
-                    if (loaded <= 0) { setPhase(Phase.ERROR, "语音装载失败"); return@Thread }
+                    if (loaded <= 0) { setPhase(Phase.ERROR, tr("语音装载失败")); return@Thread }
                     val err = arm(uids, timeoutMs, auto = true)
                     if (err != null) { setPhase(Phase.ERROR, err); return@Thread }
-                    setPhase(Phase.WAITING, "已接管麦克风（${uids.size} 个 App），现在去按住说话")
+                    setPhase(Phase.WAITING, tr("已接管麦克风（{0} 个 App），现在去按住说话", uids.size))
                     pollUntilIdle()
                 } catch (t: Throwable) {
                     L.e("MicInjector 注入失败", t)
-                    setPhase(Phase.ERROR, "注入失败：${t.message}")
+                    setPhase(Phase.ERROR, tr("注入失败：{0}", t.message))
                 }
             }.start()
         }
@@ -323,8 +325,8 @@ object MicInjector {
         val app = ctx.applicationContext
         val uids = targetPkg.split(',', ' ', ';').map { it.trim() }.filter { it.isNotEmpty() }
             .map { uidOf(app, it) }.filter { it >= 0 }.distinct().toIntArray()
-        if (uids.isEmpty()) { status("没找到目标 App：$targetPkg"); return }
-        if (!shizukuGranted()) { status(if (shizukuRunning()) "还没授权 Shizuku" else "Shizuku 没有运行"); return }
+        if (uids.isEmpty()) { status(tr("没找到目标 App：{0}", targetPkg)); return }
+        if (!shizukuGranted()) { status(if (shizukuRunning()) tr("还没授权 Shizuku") else tr("Shizuku 没有运行")); return }
         ensureBound(app) {
             Thread {
                 val err = runCatching {
@@ -333,10 +335,10 @@ object MicInjector {
                         it.writeFloat(semis); it.writeInt(source); it.writeInt(if (external) 1 else 0); it.writeInt(primeMs); it.writeInt(if (rvcInShell) 1 else 0)
                         writeTune(it)
                     }) { r -> r.readString() }
-                }.getOrElse { it.message ?: "调用失败" }
-                if (err != null) { main.post { status("启动失败：$err") }; setPhase(Phase.ERROR, "实时变声启动失败：$err"); return@Thread }
+                }.getOrElse { it.message ?: tr("调用失败") }
+                if (err != null) { main.post { status(tr("启动失败：{0}", err)) }; setPhase(Phase.ERROR, tr("实时变声启动失败：{0}", err)); return@Thread }
                 liveOn = true
-                setPhase(Phase.LIVE, "实时变声中")
+                setPhase(Phase.LIVE, tr("实时变声中"))
                 while (liveOn) {
                     val s = status()
                     val kv = s.split("|").mapNotNull { p -> p.split("=", limit = 2).takeIf { it.size == 2 } }
@@ -344,11 +346,11 @@ object MicInjector {
                     if (kv["phase"] != "LIVE") {
                         liveOn = false
                         val e = kv["err"].orEmpty()
-                        main.post { status(if (e.isNotEmpty()) "已停止：$e" else "已停止") }
-                        setPhase(if (e.isNotEmpty()) Phase.ERROR else Phase.IDLE, if (e.isNotEmpty()) e else "实时变声已停止")
+                        main.post { status(if (e.isNotEmpty()) tr("已停止：{0}", e) else tr("已停止")) }
+                        setPhase(if (e.isNotEmpty()) Phase.ERROR else Phase.IDLE, if (e.isNotEmpty()) e else tr("实时变声已停止"))
                         break
                     }
-                    main.post { status((modeLabel ?: if (external) "AI 变声" else "普通变声") + " · 麦电平 ${kv["live"]} · 目标在录=${kv["recs"]} · 缓冲 ${(kv["outBuf"]?.toIntOrNull() ?: 0) / 48} ms · 断流 ${kv["under"]}" + (kv["eng"]?.takeIf { it.isNotEmpty() }?.let { " · $it" } ?: statusExtra?.invoke()?.let { " · $it" } ?: "")) }
+                    main.post { status((modeLabel ?: if (external) tr("AI 变声") else tr("普通变声")) + tr(" · 麦电平 {0} · 目标在录={1} · 缓冲 {2} ms · 断流 {3}", kv["live"], kv["recs"], (kv["outBuf"]?.toIntOrNull() ?: 0) / 48, kv["under"]) + (kv["eng"]?.takeIf { it.isNotEmpty() }?.let { " · $it" } ?: statusExtra?.invoke()?.let { " · $it" } ?: "")) }
                     Thread.sleep(300)
                 }
             }.start()
@@ -363,8 +365,8 @@ object MicInjector {
     /** 把模型文件描述符交给 shell 进程（它读不了 App 私有目录），shell 侧 mmap */
     fun sendLiveModels(ctx: Context, names: List<String>): String? {
         val files = names.mapNotNull { n -> com.taocrypt.micmask.ModelStore.locate(ctx, n)?.let { n to it } }
-        if (files.isEmpty()) return "没有模型"
-        var err: String? = "未连接"
+        if (files.isEmpty()) return tr("没有模型")
+        var err: String? = tr("未连接")
         val done = java.util.concurrent.CountDownLatch(1)
         ensureBound(ctx.applicationContext) { Thread {
             err = runCatching {
@@ -374,11 +376,11 @@ object MicInjector {
                         p.writeInt(pfds.size); pfds.forEach { (n, fd) -> p.writeString(com.taocrypt.micmask.ModelStore.canonicalName(n)); p.writeFileDescriptor(fd.fileDescriptor) }
                     }) { r -> r.readString() }
                 } finally { pfds.forEach { runCatching { it.second.close() } } }
-            }.getOrElse { it.message ?: "调用失败" }
+            }.getOrElse { it.message ?: tr("调用失败") }
             done.countDown()
         }.start() }
         // 首次要把约 360 MB 模型拷进 shell 目录
-        if (!done.await(90, java.util.concurrent.TimeUnit.SECONDS)) return "传模型超时"
+        if (!done.await(90, java.util.concurrent.TimeUnit.SECONDS)) return tr("传模型超时")
         return err
     }
 
@@ -456,22 +458,22 @@ object MicInjector {
     fun stopLive() {
         liveOn = false
         runCatching { call(InjectorService.TX_DISARM) { } }
-        setPhase(Phase.IDLE, "实时变声已停止，真麦克风已还原")
+        setPhase(Phase.IDLE, tr("实时变声已停止，真麦克风已还原"))
     }
 
     fun stop() {
         runCatching { call(InjectorService.TX_DISARM) { } }
-        setPhase(Phase.IDLE, "已还原真麦克风")
+        setPhase(Phase.IDLE, tr("已还原真麦克风"))
     }
 
     val active: Boolean get() = phase == Phase.WAITING || phase == Phase.PLAYING || phase == Phase.CONNECTING
 
     fun ping(): String = runCatching {
-        call(InjectorService.TX_PING) { r -> "uid=${r.readInt()} 路由权限=${if (r.readInt() == 1) "有" else "无"}" }
-    }.getOrElse { "未连接" }
+        call(InjectorService.TX_PING) { r -> tr("uid={0} 路由权限={1}", r.readInt(), if (r.readInt() == 1) tr("有") else tr("无")) }
+    }.getOrElse { tr("未连接") }
 
     fun status(): String = runCatching { call(InjectorService.TX_STATUS) { it.readString() ?: "" } }
-        .getOrElse { "未连接" }
+        .getOrElse { tr("未连接") }
 
     // ------------------------------------------------------------ 内部
 
@@ -482,15 +484,15 @@ object MicInjector {
             val kv = s.split("|").mapNotNull { p -> p.split("=", limit = 2).takeIf { it.size == 2 } }
                 .associate { it[0] to it[1] }
             when (kv["phase"]) {
-                "PLAYING", "LEAD" -> if (phase != Phase.PLAYING) setPhase(Phase.PLAYING, "正在注入…")
+                "PLAYING", "LEAD" -> if (phase != Phase.PLAYING) setPhase(Phase.PLAYING, tr("正在注入…"))
                 // 语音已放完，目标还在录：继续垫底噪保持接管，等用户松手；UI 视为播完
-                "TAIL" -> if (phase != Phase.TAIL) setPhase(Phase.TAIL, "播放完毕，可以松手发送了")
+                "TAIL" -> if (phase != Phase.TAIL) setPhase(Phase.TAIL, tr("播放完毕，可以松手发送了"))
                 "WAITING" -> {}
                 else -> {
                     val err = kv["err"].orEmpty()
-                    if (err.isNotEmpty()) setPhase(Phase.ERROR, "注入中断：$err")
-                    else setPhase(Phase.IDLE, if (kv["seenRec"] == "1") "已注入（触发=${kv["trig"]}），真麦克风已还原"
-                        else "等了 60 秒没看到目标录音，已还原（recs=${kv["recs"]}）")
+                    if (err.isNotEmpty()) setPhase(Phase.ERROR, tr("注入中断：{0}", err))
+                    else setPhase(Phase.IDLE, if (kv["seenRec"] == "1") tr("已注入（触发={0}），真麦克风已还原", kv["trig"])
+                        else tr("等了 60 秒没看到目标录音，已还原（recs={0}）", kv["recs"]))
                     return
                 }
             }
@@ -512,20 +514,20 @@ object MicInjector {
     fun selfTest(ctx: Context, done: (String) -> Unit) {
         val app = ctx.applicationContext
         if (app.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            done("自检需要录音权限，先在「变声」页录一次音授权"); return
+            done(tr("自检需要录音权限，先在「变声」页录一次音授权")); return
         }
-        if (!shizukuPermitted()) { done(if (shizukuRunning()) "还没授权 Shizuku" else "Shizuku 没有运行"); return }
-        main.postDelayed({ if (binder == null) done("注入服务 10 秒没连上（Shizuku 拉起失败）") }, 10_000)
+        if (!shizukuPermitted()) { done(if (shizukuRunning()) tr("还没授权 Shizuku") else tr("Shizuku 没有运行")); return }
+        main.postDelayed({ if (binder == null) done(tr("注入服务 10 秒没连上（Shizuku 拉起失败）")) }, 10_000)
         ensureBound(app) {
             Thread {
                 val sb = StringBuilder()
-                sb.append("服务：").append(ping()).append('\n')
+                sb.append(tr("服务：")).append(ping()).append('\n')
                 for ((name, src) in listOf(
                     "VOICE_COMMUNICATION" to android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION,
                     "MIC" to android.media.MediaRecorder.AudioSource.MIC,
                 )) {
                     sb.append(name).append("：").append(runCatching { testOnce(app, src) }
-                        .getOrElse { "出错 ${it.message}" }).append('\n')
+                        .getOrElse { tr("出错 {0}", it.message) }).append('\n')
                 }
                 runCatching { call(InjectorService.TX_DISARM) { } }
                 phase = Phase.IDLE
@@ -549,7 +551,7 @@ object MicInjector {
         val f = File(app.cacheDir, "selftest.pcm").apply { writeBytes(pcm) }
         loadPcm(f); f.delete()
         val err = arm(intArrayOf(android.os.Process.myUid()), 8000L, auto = true)
-        if (err != null) return "ARM 失败：$err"
+        if (err != null) return tr("ARM 失败：{0}", err)
         Thread.sleep(200)
         val minBuf = android.media.AudioRecord.getMinBufferSize(sr,
             android.media.AudioFormat.CHANNEL_IN_MONO, android.media.AudioFormat.ENCODING_PCM_16BIT)
@@ -557,7 +559,7 @@ object MicInjector {
         val rec = android.media.AudioRecord(source, sr, android.media.AudioFormat.CHANNEL_IN_MONO,
             android.media.AudioFormat.ENCODING_PCM_16BIT, maxOf(minBuf, sr / 5 * 2))
         if (rec.state != android.media.AudioRecord.STATE_INITIALIZED) {
-            call(InjectorService.TX_DISARM) { }; return "AudioRecord 初始化失败"
+            call(InjectorService.TX_DISARM) { }; return tr("AudioRecord 初始化失败")
         }
         val buf = ShortArray(sr * 3)
         var got = 0
@@ -585,11 +587,11 @@ object MicInjector {
         val pTone = (s1 * s1 + s2 * s2 - k * s1 * s2) * 2 / cnt / cnt
         val ratio = if (e <= 0) 0.0 else (pTone / (e / cnt)).coerceIn(0.0, 1.0)
         val verdict = when {
-            db < -70 -> "录到静音 → 麦克风被接管了，但注入的声音没进来"
-            ratio > 0.4 -> "✅ 录到了测试音，注入可用"
-            else -> "❌ 录到的是真实环境声 → 没被接管"
+            db < -70 -> tr("录到静音 → 麦克风被接管了，但注入的声音没进来")
+            ratio > 0.4 -> tr("✅ 录到了测试音，注入可用")
+            else -> tr("❌ 录到的是真实环境声 → 没被接管")
         }
-        return "$verdict（%.0f dBFS，测试音占比 %.0f%%，设备 $dev，$st）".format(db, ratio * 100)
+        return tr("{0}（%.0f dBFS，测试音占比 %.0f%%，设备 {1}，{2}）", verdict, dev, st).format(db, ratio * 100)
     }
 
     private fun loadPcm(f: File): Int {
@@ -601,7 +603,7 @@ object MicInjector {
     private fun <T> call(code: Int, reader: (Parcel) -> T): T = call(code, {}, reader)
 
     private fun <T> call(code: Int, writer: (Parcel) -> Unit, reader: (Parcel) -> T): T {
-        val b = binder ?: throw IllegalStateException("注入服务未连接")
+        val b = binder ?: throw IllegalStateException(tr("注入服务未连接"))
         val d = Parcel.obtain(); val r = Parcel.obtain()
         try {
             writer(d)

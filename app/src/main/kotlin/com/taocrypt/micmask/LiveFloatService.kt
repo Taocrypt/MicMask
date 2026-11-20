@@ -46,7 +46,7 @@ class LiveFloatService : Service() {
             val i = Intent(ctx, LiveFloatService::class.java).setAction(if (on) "show" else "hide")
             runCatching { ctx.startService(i) }.onFailure { L.w("LiveFloatService：${it.message}") }
         }
-        private val MODES = listOf("AI", "普通", "声卡")
+        private val MODES get() = listOf("AI", tr("普通"), tr("声卡"))
         private const val ACCENT = 0xFF3482FF.toInt()
         private const val RING_OFF = 0x66FFFFFF
         val LOOK_KEYS = setOf("lf_ball_dp", "lf_ball_alpha", "lf_panel_scale", "lf_panel_alpha", "lf_autohide", "lf_panel_w", "lf_panel_h")
@@ -80,6 +80,7 @@ class LiveFloatService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        I18n.init(applicationContext)
         if (intent?.action == "hide") { Prefs.main(applicationContext).edit().putBoolean("lf_on", false).apply(); remove(); stopSelf(); return START_NOT_STICKY }
         // 不单独发通知：悬浮窗可见时进程本身算前台可感知；变声时由 LiveService 的常驻通知提供「开启悬浮窗」
         runCatching { getSystemService(NotificationManager::class.java).deleteNotificationChannel(CH) }
@@ -96,11 +97,11 @@ class LiveFloatService : Service() {
 
     private fun foreground() {
         val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(NotificationChannel(CH, "变声悬浮窗", NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) })
+        nm.createNotificationChannel(NotificationChannel(CH, tr("变声悬浮窗"), NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) })
         val hide = PendingIntent.getService(this, 2, Intent(this, LiveFloatService::class.java).setAction("hide"), PendingIntent.FLAG_IMMUTABLE)
         val n = Notification.Builder(this, CH).setSmallIcon(R.drawable.ic_notify)
-            .setContentTitle("变声悬浮窗").setContentText("点小球展开：切换模式、预设、看性能")
-            .addAction(Notification.Action.Builder(null, "关闭悬浮窗", hide).build()).setOngoing(true).build()
+            .setContentTitle(tr("变声悬浮窗")).setContentText(tr("点小球展开：切换模式、预设、看性能"))
+            .addAction(Notification.Action.Builder(null, tr("关闭悬浮窗"), hide).build()).setOngoing(true).build()
         if (Build.VERSION.SDK_INT >= 29) startForeground(NID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK) else startForeground(NID, n)
     }
 
@@ -115,7 +116,8 @@ class LiveFloatService : Service() {
         lp = WindowManager.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            // SPLIT_TOUCH：别的 App 里正按住按钮（如长按微信录音）时，第二根手指也能点到悬浮窗
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or WindowManager.LayoutParams.FLAG_SPLIT_TOUCH,
             PixelFormat.TRANSLUCENT).apply { gravity = Gravity.TOP or Gravity.START; x = p.getInt("lf_x", dp(8)); y = p.getInt("lf_y", dp(200)) }
 
         dockRight = p.getBoolean("lf_right", false); homeY = lp.y
@@ -132,7 +134,7 @@ class LiveFloatService : Service() {
                 setImageResource(R.drawable.float_logo); scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
             }, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         }
-        stat = TextView(this).apply { setTextColor(0xFFAAAAAA.toInt()); textSize = 10f * ps; typeface = Typeface.MONOSPACE; text = "读取中…" }
+        stat = TextView(this).apply { setTextColor(0xFFAAAAAA.toInt()); textSize = 10f * ps; typeface = Typeface.MONOSPACE; text = tr("读取中…") }
         modeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         presetRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         sfxRow = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -153,7 +155,7 @@ class LiveFloatService : Service() {
             orientation = LinearLayout.VERTICAL
             addView(modeRow)
             addView(space(8)); addView(HorizontalScrollView(this@LiveFloatService).apply { isHorizontalScrollBarEnabled = false; addView(presetRow) })
-            addView(space(8)); addView(TextView(this@LiveFloatService).apply { text = "音效包"; setTextColor(0xFF999999.toInt()); textSize = 11f * ps })
+            addView(space(8)); addView(TextView(this@LiveFloatService).apply { text = tr("音效包"); setTextColor(0xFF999999.toInt()); textSize = 11f * ps })
             addView(space(2)); addView(sfxRow)
         }
         bodyScroll = android.widget.ScrollView(this).apply { isVerticalScrollBarEnabled = false; isFillViewport = false; addView(body) }
@@ -200,7 +202,7 @@ class LiveFloatService : Service() {
             if (n != ps) Prefs.main(applicationContext).edit().putFloat("lf_panel_scale", n).apply()
             scaleToast?.cancel()
             scaleToast = android.widget.Toast.makeText(applicationContext,
-                "内容缩放 ${Math.round(n * 100)}%" + (if (n == ps) (if (step > 0) "（已最大）" else "（已最小）") else ""), android.widget.Toast.LENGTH_SHORT).also { it.show() }
+                tr("内容缩放 {0}%", Math.round(n * 100)) + (if (n == ps) (if (step > 0) tr("（已最大）") else tr("（已最小）")) else ""), android.widget.Toast.LENGTH_SHORT).also { it.show() }
         }
     }
 
@@ -226,7 +228,7 @@ class LiveFloatService : Service() {
             c.drawLine(cx + r, cy + r, cx + r - a, cy + r, pen); c.drawLine(cx + r, cy + r, cx + r, cy + r - a, pen)
         }
     }.apply {
-        contentDescription = "调整窗口大小"
+        contentDescription = tr("调整窗口大小")
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = sdp(2) }
         var armed = false; var sx = 0f; var sy = 0f; var w0 = 0; var h0 = 0; var lastTap = 0L
         setOnClickListener {
@@ -442,10 +444,10 @@ class LiveFloatService : Service() {
         }
         // 耳返（放在声卡后面）：只写「耳返」，颜色标识开关；戴耳机用，外放会啸叫
         val mon = st?.liveMonitor == true
-        modeRow.addView(chip("耳返", if (mon) ACCENT else 0x33FFFFFF, R1) { if (vm == null) openApp() else vm.setLiveMonitor(!mon) })
+        modeRow.addView(chip(tr("耳返"), if (mon) ACCENT else 0x33FFFFFF, R1) { if (vm == null) openApp() else vm.setLiveMonitor(!mon) })
         // 降噪（通话录音源，带回声消除/降噪）：变声中切换会自动重启一次
         val aec = st?.liveAec == true
-        modeRow.addView(chip("降噪", if (aec) ACCENT else 0x33FFFFFF, R1) { if (vm == null) openApp() else vm.toggleLiveAecAnywhere() })
+        modeRow.addView(chip(tr("降噪"), if (aec) ACCENT else 0x33FFFFFF, R1) { if (vm == null) openApp() else vm.toggleLiveAecAnywhere() })
         // 语音包
         val sk = "${st?.sfxPlaying}|${st?.sounds?.size}|${st?.sfxLoop}|${st?.packsOff}"
         if (force || sk != lastSfxKey) {
@@ -453,12 +455,12 @@ class LiveFloatService : Service() {
             sfxRow.removeAllViews()
             if (vm != null && st != null) {
                 val shown = st.sounds.filter { it.pack !in st.packsOff }
-                if (st.sounds.isNotEmpty() && shown.isEmpty()) sfxRow.addView(chip("音效包都已关闭，去 App 开启", 0x33FFFFFF) { openApp() })
-                if (st.sounds.isEmpty()) sfxRow.addView(chip("去 App 导入素材", 0x33FFFFFF) { openApp() })
-                if (st.sfxPlaying != null) sfxRow.addView(LinearLayout(this).apply { setPadding(0, sdp(2), 0, sdp(2)); addView(chip("■ 停止音效", 0xFFE5484D.toInt()) { vm.stopSound() }) })
+                if (st.sounds.isNotEmpty() && shown.isEmpty()) sfxRow.addView(chip(tr("音效包都已关闭，去 App 开启"), 0x33FFFFFF) { openApp() })
+                if (st.sounds.isEmpty()) sfxRow.addView(chip(tr("去 App 导入素材"), 0x33FFFFFF) { openApp() })
+                if (st.sfxPlaying != null) sfxRow.addView(LinearLayout(this).apply { setPadding(0, sdp(2), 0, sdp(2)); addView(chip(tr("■ 停止音效"), 0xFFE5484D.toInt()) { vm.stopSound() }) })
                 // 按分组展示：每组一个小标题 + 一行横向滚动
                 shown.groupBy { it.pack }.forEach { (pack, list) ->
-                    val title = when (pack) { SoundBoard.PACK_FX -> "预设音效"; SoundBoard.PACK_LOCAL -> "本地音频"; else -> pack }
+                    val title = when (pack) { SoundBoard.PACK_FX -> tr("预设音效"); SoundBoard.PACK_LOCAL -> tr("本地音频"); else -> pack }
                     sfxRow.addView(TextView(this).apply { text = "▍$title"; setTextColor(0xFFBBBBBB.toInt()); textSize = 10.5f * ps; setPadding(0, sdp(4), 0, sdp(3)) })
                     val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
                     list.forEach { so -> row.addView(chip((if (so.id == st.sfxPlaying) "▶ " else "") + so.name,
@@ -473,15 +475,15 @@ class LiveFloatService : Service() {
         if (force || key != lastPresetKey) {
             lastPresetKey = key
             presetRow.removeAllViews()
-            if (vm == null || st == null) { presetRow.addView(chip("先打开 App", 0x33FFFFFF) { openApp() }); return }
+            if (vm == null || st == null) { presetRow.addView(chip(tr("先打开 App"), 0x33FFFFFF) { openApp() }); return }
             when (mode) {
                 0 -> st.liveVoices.forEach { v -> presetRow.addView(chip(vm.voiceLabel(v), if (v == sel) ACCENT else 0x33FFFFFF) { vm.setLiveVoice(v) }) }
                 1 -> {
-                    pitchPresets.forEach { p -> presetRow.addView(chip(p.name, if (p.name == sel) ACCENT else 0x33FFFFFF) { vm.setPitchSemis(p.semis); vm.applyFxPreset(1, p.name, p.fx) }) }
+                    pitchPresets.forEach { p -> presetRow.addView(chip(tr(p.name), if (p.name == sel) ACCENT else 0x33FFFFFF) { vm.setPitchSemis(p.semis); vm.applyFxPreset(1, p.name, p.fx) }) }
                     st.userPresets[1].orEmpty().forEach { p -> presetRow.addView(chip("★" + p.name, if (p.name == sel) ACCENT else 0x33FFFFFF) { vm.applyUserPreset(p) }) }
                 }
                 else -> {
-                    cardPresets.forEach { (n, fx) -> presetRow.addView(chip(n, if (n == sel) ACCENT else 0x33FFFFFF) { vm.applyFxPreset(2, n, fx) }) }
+                    cardPresets.forEach { (n, fx) -> presetRow.addView(chip(tr(n), if (n == sel) ACCENT else 0x33FFFFFF) { vm.applyFxPreset(2, n, fx) }) }
                     st.userPresets[2].orEmpty().forEach { p -> presetRow.addView(chip("★" + p.name, if (p.name == sel) ACCENT else 0x33FFFFFF) { vm.applyUserPreset(p) }) }
                 }
             }
@@ -495,11 +497,11 @@ class LiveFloatService : Service() {
         val bat = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1) ?: -1
         val ss = if (MicInjector.liveOn) MicInjector.sysStat() else null
         val cpu = ss?.cpu?.takeIf { it >= 0 }?.let { "%.0f%%".format(it) } ?: "—"
-        val temp = ss?.temp?.takeIf { it > 0 }?.let { "%.0f℃".format(it) } ?: if (bat > 0) "电池%.0f℃".format(bat / 10f) else "—"
+        val temp = ss?.temp?.takeIf { it > 0 }?.let { "%.0f℃".format(it) } ?: if (bat > 0) tr("电池%.0f℃").format(bat / 10f) else "—"
         val rss = ss?.rssMb?.takeIf { it > 0 }?.let { "${it}M" } ?: "—"
         // 一行显示：段内不断行（不换行空格），宽度不够时才在段与段之间换行
-        val segs = mutableListOf("CPU $cpu", temp, "内存 %.1f/%.1fG".format(avail / 1024f, total / 1024f) + if (mi.lowMemory) " ⚠" else "")
-        if (ss != null) { segs += "进程 $rss"; segs += "断流 ${ss.underruns}" } else segs += "未开始变声"
+        val segs = mutableListOf("CPU $cpu", temp, tr("内存 %.1f/%.1fG").format(avail / 1024f, total / 1024f) + if (mi.lowMemory) " ⚠" else "")
+        if (ss != null) { segs += tr("进程 {0}", rss); segs += tr("断流 {0}", ss.underruns) } else segs += tr("未开始变声")
         // 每段内部用不换行空格 + 词连接符（U+2060）粘住，只在段与段之间换行，避免「进/程624M」这种拆字
         return segs.joinToString("  ") { seg -> seg.replace(' ', '\u00A0').toList().joinToString("\u2060") }
     }

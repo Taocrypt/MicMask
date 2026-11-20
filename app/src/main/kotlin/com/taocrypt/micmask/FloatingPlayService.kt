@@ -118,7 +118,7 @@ class FloatingPlayService : Service() {
                 if (ball == null) {
                     if (!canDraw(this)) {
                         L.w("FloatingPlayService 没有悬浮窗权限，无法显示")
-                        Toast.makeText(this, "请先授予「显示在其他应用上层」权限", Toast.LENGTH_LONG).show()
+                        Toast.makeText(this, tr("请先授予「显示在其他应用上层」权限"), Toast.LENGTH_LONG).show()
                         stopSelf()
                         return START_NOT_STICKY
                     }
@@ -142,7 +142,7 @@ class FloatingPlayService : Service() {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             nm.createNotificationChannel(
-                NotificationChannel(CH_ID, CH_NAME, NotificationManager.IMPORTANCE_LOW).apply {
+                NotificationChannel(CH_ID, tr(CH_NAME), NotificationManager.IMPORTANCE_LOW).apply {
                     setShowBadge(false)
                     enableLights(false)
                     enableVibration(false)
@@ -162,11 +162,11 @@ class FloatingPlayService : Service() {
         )
         val n = Notification.Builder(this, CH_ID)
             .setSmallIcon(R.drawable.ic_notify)
-            .setContentTitle("变声悬浮窗已开启")
-            .setContentText("点悬浮球播放待发语音；不用时点这里关闭")
+            .setContentTitle(tr("变声悬浮窗已开启"))
+            .setContentText(tr("点悬浮球播放待发语音；不用时点这里关闭"))
             .setContentIntent(open)
             .addAction(
-                Notification.Action.Builder(null, "关闭悬浮窗", stop).build()
+                Notification.Action.Builder(null, tr("关闭悬浮窗"), stop).build()
             )
             .setOngoing(true)
             .build()
@@ -260,7 +260,7 @@ class FloatingPlayService : Service() {
         runCatching { w.addView(container, params) }
             .onFailure {
                 L.e("FloatingPlayService 添加悬浮球失败", it)
-                Toast.makeText(this, "悬浮窗添加失败：${it.message}", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, tr("悬浮窗添加失败：{0}", it.message), Toast.LENGTH_LONG).show()
                 stopSelf()
                 return
             }
@@ -283,18 +283,18 @@ class FloatingPlayService : Service() {
             return
         }
         if (VoiceSender.pendingFile == null) {
-            Toast.makeText(this, "还没有待发送语音，先去「合成」或「变声」页生成一条", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, tr("还没有待发送语音，先去「合成」或「变声」页生成一条"), Toast.LENGTH_SHORT).show()
             return
         }
         val ok = VoiceSender.playNow(this)
         if (!ok) {
-            Toast.makeText(this, "播放失败，看日志确认原因", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, tr("播放失败，看日志确认原因"), Toast.LENGTH_SHORT).show()
             return
         }
         val msg = when (VoiceSender.route) {
-            VoiceSender.Route.INJECT -> "注入模式：现在按住 QQ 语音键"
-            VoiceSender.Route.HEADSET -> "耳机模式播放"
-            else -> "外放播放（注入开关没开）"
+            VoiceSender.Route.INJECT -> tr("注入模式：现在按住 QQ 语音键")
+            VoiceSender.Route.HEADSET -> tr("耳机模式播放")
+            else -> tr("外放播放（注入开关没开）")
         }
         Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
         label?.text = "■"
@@ -413,6 +413,7 @@ class FloatingPlayService : Service() {
     override fun onCreate() {
         super.onCreate()
         L.init(applicationContext)
+        I18n.init(applicationContext)
         running = true
     }
 }

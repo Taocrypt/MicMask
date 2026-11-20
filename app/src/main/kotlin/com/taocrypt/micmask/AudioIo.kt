@@ -46,7 +46,7 @@ object AudioIo {
     fun decodeTo16k(ctx: Context, uri: Uri): Decoded {
         val name = displayName(ctx, uri)
         val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-            ?: throw IllegalStateException("无法读取所选文件")
+            ?: throw IllegalStateException(tr("无法读取所选文件"))
 
         // 1) WAV 自己解，采样率原样保留
         val isWav = bytes.size > 12 &&
@@ -119,7 +119,7 @@ object AudioIo {
                 trackIndex = i; format = f; break
             }
         }
-        require(trackIndex >= 0 && format != null) { "文件里没有音频轨道" }
+        require(trackIndex >= 0 && format != null) { tr("文件里没有音频轨道") }
         extractor.selectTrack(trackIndex)
 
         val mime = format.getString(MediaFormat.KEY_MIME)!!
@@ -245,7 +245,7 @@ object AudioIo {
                 if (u != null) {
                     ctx.contentResolver.openOutputStream(u)?.use { it.write(bytes) }
                     uri = u
-                    display = "音乐/MicMask/$fileName"
+                    display = tr("音乐/MicMask/{0}", fileName)
                 }
             } catch (_: Exception) {
             }

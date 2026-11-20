@@ -104,6 +104,7 @@ class QqWatchService : AccessibilityService() {
 
     override fun onServiceConnected() {
         L.init(applicationContext)
+        I18n.init(applicationContext)
         super.onServiceConnected()
         running = true
         // 服务可能是由系统单独拉起的（App 进程已被回收），

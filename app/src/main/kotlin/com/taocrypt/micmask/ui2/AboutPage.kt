@@ -1,5 +1,7 @@
 package com.taocrypt.micmask.ui2
 
+import com.taocrypt.micmask.tr
+
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -75,19 +77,19 @@ object AboutLinks {
         "https://cdn.jsdelivr.net/gh/Taocrypt/MicMask@main/sponsors/sponsors.json",
     )
 
-    val REFS = listOf(
-        Triple("atri-vc", "本项目的起点，实时 RVC 安卓实现", "https://github.com/spider996/atri-vc"),
-        Triple("RVC WebUI", "Retrieval-based Voice Conversion 音色转换", "https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI"),
-        Triple("GPT-SoVITS", "文本转语音与语气参考", "https://github.com/RVC-Boss/GPT-SoVITS"),
-        Triple("ONNX Runtime", "端侧推理引擎", "https://github.com/microsoft/onnxruntime"),
-        Triple("Shizuku", "免 Root 获取 shell 权限，注入麦克风", "https://github.com/RikkaApps/Shizuku"),
-        Triple("Miuix", "界面组件库", "https://github.com/compose-miuix-ui/miuix"),
+    val REFS get() = listOf(
+        Triple("atri-vc", tr("本项目的起点，实时 RVC 安卓实现"), "https://github.com/spider996/atri-vc"),
+        Triple("RVC WebUI", tr("Retrieval-based Voice Conversion 音色转换"), "https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI"),
+        Triple("GPT-SoVITS", tr("文本转语音与语气参考"), "https://github.com/RVC-Boss/GPT-SoVITS"),
+        Triple("ONNX Runtime", tr("端侧推理引擎"), "https://github.com/microsoft/onnxruntime"),
+        Triple("Shizuku", tr("免 Root 获取 shell 权限，注入麦克风"), "https://github.com/RikkaApps/Shizuku"),
+        Triple("Miuix", tr("界面组件库"), "https://github.com/compose-miuix-ui/miuix"),
     )
 }
 
 private fun openUrl(ctx: Context, url: String) {
     runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-        .onFailure { Toast.makeText(ctx, "没有可打开链接的应用", Toast.LENGTH_SHORT).show() }
+        .onFailure { Toast.makeText(ctx, tr("没有可打开链接的应用"), Toast.LENGTH_SHORT).show() }
 }
 
 private fun openQqGroup(ctx: Context) {
@@ -116,23 +118,23 @@ fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit =
             if (icon != null) Image(icon, null, Modifier.size(88.dp).clip(RoundedCornerShape(22.dp)))
             Spacer(Modifier.height(12.dp))
             Text("MicMask", fontSize = 24.sp, fontWeight = FontWeight.Bold)
-            Text("安卓实时变声 · 直通游戏与通话麦克风", fontSize = 13.sp, color = summary, textAlign = TextAlign.Center)
+            Text(tr("安卓实时变声 · 直通游戏与通话麦克风"), fontSize = 13.sp, color = summary, textAlign = TextAlign.Center)
             Spacer(Modifier.height(8.dp))
             Text("v${BuildConfig.VERSION_NAME}", fontSize = 12.sp, color = MiuixTheme.colorScheme.onPrimary,
                 modifier = Modifier.clip(RoundedCornerShape(50)).background(MiuixTheme.colorScheme.primary).padding(horizontal = 10.dp, vertical = 3.dp))
         }
 
         // ---- 更新 ----
-        SmallTitle("更新")
+        SmallTitle(tr("更新"))
         Card(Modifier.fillMaxWidth().padding(pad)) {
             val (t, s) = when (val u = upd) {
-                Updater.State.Idle -> "检查更新" to "点此检查"
-                Updater.State.Checking -> "检查更新" to "正在检查…"
-                is Updater.State.Latest -> "已是最新版" to "最新发布 ${u.tag}"
-                is Updater.State.Newer -> "发现新版本 ${u.r.tag}" to "点此查看更新内容"
-                is Updater.State.Downloading -> "正在下载 ${u.r.tag}" to (if (u.total > 0) "${u.got * 100 / u.total}% · ${u.source}" else u.source)
-                is Updater.State.Downloaded -> "${u.r.tag} 已下载" to "点此安装"
-                is Updater.State.Fail -> "检查更新" to u.msg
+                Updater.State.Idle -> tr("检查更新") to tr("点此检查")
+                Updater.State.Checking -> tr("检查更新") to tr("正在检查…")
+                is Updater.State.Latest -> tr("已是最新版") to tr("最新发布 {0}", u.tag)
+                is Updater.State.Newer -> tr("发现新版本 {0}", u.r.tag) to tr("点此查看更新内容")
+                is Updater.State.Downloading -> tr("正在下载 {0}", u.r.tag) to (if (u.total > 0) "${u.got * 100 / u.total}% · ${u.source}" else u.source)
+                is Updater.State.Downloaded -> tr("{0} 已下载", u.r.tag) to tr("点此安装")
+                is Updater.State.Fail -> tr("检查更新") to u.msg
             }
             ArrowPreference(title = t, summary = s, onClick = {
                 when (upd) {
@@ -142,59 +144,59 @@ fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit =
                 }
             })
             var beta by remember { mutableStateOf(Updater.betaChannel(ctx)) }
-            SwitchPreference(checked = beta, onCheckedChange = { beta = it; Updater.setBetaChannel(ctx, it); Updater.check(ctx) }, title = "接收测试版",
-                summary = if (beta) "测试版通道：alpha / beta / rc 和正式版都会推送，新功能先到，可能不稳定" else "稳定版通道：只推送正式版")
-            SwitchPreference(checked = auto, onCheckedChange = { auto = it; Updater.setAutoCheck(ctx, it) }, title = "启动时检查更新",
-                summary = "关闭后仍会检查强制更新")
-            ArrowPreference(title = "下载镜像", summary = "GitHub 不通时自动测速选择镜像", onClick = openMirrors)
-            ArrowPreference(title = "全部版本", summary = "GitHub Releases", onClick = { openUrl(ctx, AboutLinks.RELEASES) })
+            SwitchPreference(checked = beta, onCheckedChange = { beta = it; Updater.setBetaChannel(ctx, it); Updater.check(ctx) }, title = tr("接收测试版"),
+                summary = if (beta) tr("测试版通道：alpha / beta / rc 和正式版都会推送，新功能先到，可能不稳定") else tr("稳定版通道：只推送正式版"))
+            SwitchPreference(checked = auto, onCheckedChange = { auto = it; Updater.setAutoCheck(ctx, it) }, title = tr("启动时检查更新"),
+                summary = tr("关闭后仍会检查强制更新"))
+            ArrowPreference(title = tr("下载镜像"), summary = tr("GitHub 不通时自动测速选择镜像"), onClick = openMirrors)
+            ArrowPreference(title = tr("全部版本"), summary = "GitHub Releases", onClick = { openUrl(ctx, AboutLinks.RELEASES) })
         }
 
         // ---- 版本信息 ----
-        SmallTitle("版本信息")
+        SmallTitle(tr("版本信息"))
         Card(Modifier.fillMaxWidth().padding(pad)) {
             Column(Modifier.padding(vertical = 8.dp)) {
-                InfoRow("版本", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
-                InfoRow("构建", if (BuildConfig.DEBUG) "测试版" else "正式版")
-                InfoRow("包名", ctx.packageName)
-                InfoRow("系统", "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
-                InfoRow("设备", "${Build.MANUFACTURER} ${Build.MODEL}")
-                InfoRow("架构", Build.SUPPORTED_ABIS.firstOrNull() ?: "-")
+                InfoRow(tr("版本"), "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+                InfoRow(tr("构建"), if (BuildConfig.DEBUG) tr("测试版") else tr("正式版"))
+                InfoRow(tr("包名"), ctx.packageName)
+                InfoRow(tr("系统"), "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+                InfoRow(tr("设备"), "${Build.MANUFACTURER} ${Build.MODEL}")
+                InfoRow(tr("架构"), Build.SUPPORTED_ABIS.firstOrNull() ?: "-")
             }
         }
 
         // ---- 项目 ----
-        SmallTitle("项目")
+        SmallTitle(tr("项目"))
         Card(Modifier.fillMaxWidth().padding(pad)) {
-            ArrowPreference(title = "项目主页", summary = "github.com/Taocrypt/MicMask", onClick = { openUrl(ctx, AboutLinks.HOME) })
-            ArrowPreference(title = "模型与素材仓库", summary = "cnb.build/taocrypt/MicMask", onClick = { openUrl(ctx, AboutLinks.MODEL_REPO) })
+            ArrowPreference(title = tr("项目主页"), summary = "github.com/Taocrypt/MicMask", onClick = { openUrl(ctx, AboutLinks.HOME) })
+            ArrowPreference(title = tr("模型与素材仓库"), summary = "cnb.build/taocrypt/MicMask", onClick = { openUrl(ctx, AboutLinks.MODEL_REPO) })
         }
 
         // ---- 反馈 ----
-        SmallTitle("反馈与交流")
+        SmallTitle(tr("反馈与交流"))
         Card(Modifier.fillMaxWidth().padding(pad)) {
-            ArrowPreference(title = "加入 QQ 群", summary = "【${AboutLinks.QQ_GROUP_NAME}】${AboutLinks.QQ_GROUP_NO}", onClick = { openQqGroup(ctx) })
-            ArrowPreference(title = "提交问题", summary = "GitHub Issues，附上日志更快定位", onClick = { openUrl(ctx, AboutLinks.ISSUES) })
-            ArrowPreference(title = "日志", summary = "查看并导出日志，反馈时一起发", onClick = openLogs)
+            ArrowPreference(title = tr("加入 QQ 群"), summary = "【${AboutLinks.QQ_GROUP_NAME}】${AboutLinks.QQ_GROUP_NO}", onClick = { openQqGroup(ctx) })
+            ArrowPreference(title = tr("提交问题"), summary = tr("GitHub Issues，附上日志更快定位"), onClick = { openUrl(ctx, AboutLinks.ISSUES) })
+            ArrowPreference(title = tr("日志"), summary = tr("查看并导出日志，反馈时一起发"), onClick = openLogs)
         }
 
         // ---- 赞赏 ----
-        SmallTitle("支持开发")
+        SmallTitle(tr("支持开发"))
         Card(Modifier.fillMaxWidth().padding(pad)) {
             val ready = AboutLinks.DONATE.isNotBlank()
-            ArrowPreference(title = "赞赏支持", summary = if (ready) "爱发电 · ¥5/月，请作者喝杯奶茶" else "即将开放，感谢关注",
+            ArrowPreference(title = tr("赞赏支持"), summary = if (ready) tr("爱发电 · ¥5/月，请作者喝杯奶茶") else tr("即将开放，感谢关注"),
                 enabled = ready, onClick = { if (ready) openUrl(ctx, AboutLinks.DONATE) })
         }
         SponsorWall()
 
         // ---- 参考项目 ----
-        SmallTitle("参考项目与致谢")
+        SmallTitle(tr("参考项目与致谢"))
         Card(Modifier.fillMaxWidth().padding(pad)) {
             AboutLinks.REFS.forEach { (name, desc, url) ->
                 ArrowPreference(title = name, summary = desc, onClick = { openUrl(ctx, url) })
             }
         }
-        Text("音色模型来自第三方，版权归原作者；请勿用于冒充他人、诈骗等违法用途。",
+        Text(tr("音色模型来自第三方，版权归原作者；请勿用于冒充他人、诈骗等违法用途。"),
             fontSize = 11.sp, color = summary, textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 20.dp))
     }

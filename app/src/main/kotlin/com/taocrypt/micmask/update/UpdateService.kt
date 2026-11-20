@@ -16,6 +16,7 @@ class UpdateService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        com.taocrypt.micmask.I18n.init(applicationContext)
         if (intent?.action == ACTION_CANCEL) {
             Updater.cancelDownload(applicationContext); return START_NOT_STICKY
         }

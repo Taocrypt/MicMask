@@ -36,7 +36,7 @@ class VcEngine(private val modelDirs: List<File>) {
         modelDirs.asSequence().map { File(it, name) }
             .firstOrNull { it.exists() && it.length() > 1024 }
             ?: throw IllegalStateException(
-                "找不到 $name；已查找：${modelDirs.joinToString(" | ") { it.absolutePath }}"
+                tr("找不到 {0}；已查找：{1}", name, modelDirs.joinToString(" | ") { it.absolutePath })
             )
 
     fun load(
@@ -89,17 +89,17 @@ class VcEngine(private val modelDirs: List<File>) {
         val t0 = System.currentTimeMillis()
 
         val fHubert = need(ModelStore.HUBERT)
-        onLog("加载 HuBERT ... ${fHubert.parentFile?.name}")
+        onLog(tr("加载 HuBERT ... {0}", fHubert.parentFile?.name))
         L.i("load hubert: ${fHubert.absolutePath} (${fHubert.length() / 1048576} MB)")
         hubert = env.createSession(fHubert.absolutePath, opts)
 
         val fRmvpe = need(ModelStore.RMVPE)
-        onLog("加载 RMVPE ...")
+        onLog(tr("加载 RMVPE ..."))
         L.i("load rmvpe: ${fRmvpe.absolutePath} (${fRmvpe.length() / 1048576} MB)")
         rmvpe = env.createSession(fRmvpe.absolutePath, opts)
 
         val fNetG = need(ModelStore.NET_G)
-        onLog("加载 net_g ...")
+        onLog(tr("加载 net_g ..."))
         L.i("load net_g: ${fNetG.absolutePath} (${fNetG.length() / 1048576} MB)")
         netG = env.createSession(fNetG.absolutePath, netGOpts)
 
@@ -107,13 +107,13 @@ class VcEngine(private val modelDirs: List<File>) {
             val idxFile = modelDirs.asSequence().map { File(it, ModelStore.INDEX) }
                 .firstOrNull { it.exists() && it.length() > 1024 }
             if (idxFile != null) {
-                onLog("加载检索索引 ...")
+                onLog(tr("加载检索索引 ..."))
                 L.i("load index: ${idxFile.absolutePath}")
                 try {
                     index = FaissIvfIndex.load(idxFile)
                 } catch (t: Throwable) {
                     L.e("index 加载失败，退化为不使用检索", t)
-                    onLog("索引加载失败，已跳过")
+                    onLog(tr("索引加载失败，已跳过"))
                     index = null
                 }
             } else {
@@ -123,7 +123,7 @@ class VcEngine(private val modelDirs: List<File>) {
 
         pipeline = RvcPipeline(env, netG!!, hubert!!, rmvpe!!, index) { _, _ -> }
         L.i("engine ready in ${System.currentTimeMillis() - t0} ms (index=${index != null})")
-        onLog("模型就绪")
+        onLog(tr("模型就绪"))
     }
 
     /**
@@ -145,7 +145,7 @@ class VcEngine(private val modelDirs: List<File>) {
     }
 
     fun convert(audio16k: FloatArray, cfg: RvcConfig, onProgress: (String, Float) -> Unit): FloatArray {
-        val p = pipeline ?: throw IllegalStateException("模型还没加载")
+        val p = pipeline ?: throw IllegalStateException(tr("模型还没加载"))
         val t0 = System.currentTimeMillis()
         val out = p.convert(audio16k, cfg.copy(captureDebug = false))
         L.i(
@@ -164,7 +164,7 @@ class VcEngine(private val modelDirs: List<File>) {
      * 但频谱/音高仍然一致。复用基准噪声后就能做「同输入 + 同噪声」的严格比对。
      */
     fun installRndFromReference(file: File): Int {
-        val p = pipeline ?: throw IllegalStateException("模型还没加载")
+        val p = pipeline ?: throw IllegalStateException(tr("模型还没加载"))
         val n = (file.length() / 4).toInt()
         val all = Wav.readF32(file, n)
         val per = 192 * p.blockFrames
@@ -178,7 +178,7 @@ class VcEngine(private val modelDirs: List<File>) {
 
     /** 抓取管线每一级中间产物并落盘（与 tools/android_ref/ 的基准逐级比对） */
     fun convertWithDebugDump(audio16k: FloatArray, cfg: RvcConfig, outDir: File): FloatArray {
-        val p = pipeline ?: throw IllegalStateException("模型还没加载")
+        val p = pipeline ?: throw IllegalStateException(tr("模型还没加载"))
         outDir.mkdirs()
         val out = p.convert(audio16k, cfg.copy(captureDebug = true))
         val names = ArrayList<String>()

@@ -1,5 +1,7 @@
 package com.taocrypt.micmask.ui2
 
+import com.taocrypt.micmask.tr
+
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -57,19 +59,19 @@ import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 private data class Lv(val c: Char, val name: String, val color: Color)
-private val LEVELS = listOf(
-    Lv('E', "错误", Color(0xFFE5484D)),
-    Lv('W', "警告", Color(0xFFF5A524)),
-    Lv('I', "信息", Color(0xFF3B82F6)),
-    Lv('D', "调试", Color(0xFF8B8B8B)),
-    Lv('M', "指标", Color(0xFF14B8A6)),
+private val LEVELS get() = listOf(
+    Lv('E', tr("错误"), Color(0xFFE5484D)),
+    Lv('W', tr("警告"), Color(0xFFF5A524)),
+    Lv('I', tr("信息"), Color(0xFF3B82F6)),
+    Lv('D', tr("调试"), Color(0xFF8B8B8B)),
+    Lv('M', tr("指标"), Color(0xFF14B8A6)),
 )
 private fun lvColor(c: Char) = LEVELS.firstOrNull { it.c == c }?.color ?: Color.Gray
 
 private fun copy(ctx: Context, text: String, what: String) {
     val cm = ctx.getSystemService(ClipboardManager::class.java)
-    cm.setPrimaryClip(ClipData.newPlainText("MicMask 日志", text))
-    Toast.makeText(ctx, "已复制$what", Toast.LENGTH_SHORT).show()
+    cm.setPrimaryClip(ClipData.newPlainText(tr("MicMask 日志"), text))
+    Toast.makeText(ctx, tr("已复制{0}", what), Toast.LENGTH_SHORT).show()
 }
 
 @Composable
@@ -114,7 +116,7 @@ fun LogPage(vm: MainViewModel) {
     val summary = MiuixTheme.colorScheme.onSurfaceVariantSummary
 
     Column(Modifier.fillMaxSize().navigationBarsPadding()) {
-        TextField(value = q, onValueChange = { q = it }, label = "搜索内容或线程", singleLine = true,
+        TextField(value = q, onValueChange = { q = it }, label = tr("搜索内容或线程"), singleLine = true,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp))
         // 级别：多选
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
@@ -136,12 +138,12 @@ fun LogPage(vm: MainViewModel) {
             horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             (listOf<String?>(null) + cats).forEach { c ->
                 val on = cat == c
-                Text(c ?: "全部", fontSize = 12.sp, color = if (on) MiuixTheme.colorScheme.onPrimary else MiuixTheme.colorScheme.onSecondaryContainer,
+                Text(c ?: tr("全部"), fontSize = 12.sp, color = if (on) MiuixTheme.colorScheme.onPrimary else MiuixTheme.colorScheme.onSecondaryContainer,
                     modifier = Modifier.clip(RoundedCornerShape(50)).background(if (on) primary else chipBg)
                         .clickable { cat = c }.padding(horizontal = 12.dp, vertical = 6.dp))
             }
         }
-        Text("${shown.size} / ${all.size} 条" + (if (paused) " · 已暂停" else " · 实时") + " · 点按展开，长按复制",
+        Text(tr("{0} / {1} 条", shown.size, all.size) + (if (paused) tr(" · 已暂停") else tr(" · 实时")) + tr(" · 点按展开，长按复制"),
             fontSize = 11.sp, color = summary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp))
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -152,7 +154,7 @@ fun LogPage(vm: MainViewModel) {
                         .pointerInput(e.seq) {
                             detectTapGestures(
                                 onTap = { expanded = if (open) expanded - e.seq else expanded + e.seq },
-                                onLongPress = { copy(ctx, e.line(), "这一条") })
+                                onLongPress = { copy(ctx, e.line(), tr("这一条")) })
                         }
                         .padding(horizontal = 12.dp, vertical = 4.dp)) {
                         Box(Modifier.padding(top = 3.dp).width(3.dp).height(if (open) 28.dp else 14.dp).clip(RoundedCornerShape(2.dp)).background(lvColor(e.level)))
@@ -167,7 +169,7 @@ fun LogPage(vm: MainViewModel) {
                 }
             }
             if (!follow && shown.isNotEmpty()) {
-                Text("↓ 回到最新", fontSize = 13.sp, color = MiuixTheme.colorScheme.onPrimary,
+                Text(tr("↓ 回到最新"), fontSize = 13.sp, color = MiuixTheme.colorScheme.onPrimary,
                     modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp).clip(RoundedCornerShape(50)).background(primary)
                         .clickable { follow = true }.padding(horizontal = 14.dp, vertical = 8.dp))
             }
@@ -175,23 +177,23 @@ fun LogPage(vm: MainViewModel) {
 
         // 底部操作
         Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-            Action(if (paused) "继续" else "暂停") { paused = !paused }
-            Action("复制") { copy(ctx, shown.takeLast(2000).joinToString("\n") { it.line() }, "${minOf(shown.size, 2000)} 条") }
-            Action("分享") {
+            Action(if (paused) tr("继续") else tr("暂停")) { paused = !paused }
+            Action(tr("复制")) { copy(ctx, shown.takeLast(2000).joinToString("\n") { it.line() }, tr("{0} 条", minOf(shown.size, 2000))) }
+            Action(tr("分享")) {
                 val text = shown.takeLast(3000).joinToString("\n") { it.line() }
                 runCatching {
                     ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
-                        .putExtra(Intent.EXTRA_SUBJECT, "MicMask 日志").putExtra(Intent.EXTRA_TEXT, text), "分享日志")
+                        .putExtra(Intent.EXTRA_SUBJECT, tr("MicMask 日志")).putExtra(Intent.EXTRA_TEXT, text), tr("分享日志"))
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                 }
             }
-            Action("导出") {
+            Action(tr("导出")) {
                 scope.launch {
-                    val m = withContext(Dispatchers.IO) { runCatching { "已导出到 " + L.exportToDownloads(ctx) }.getOrElse { "导出失败：${it.message}" } }
+                    val m = withContext(Dispatchers.IO) { runCatching { tr("已导出到 ") + L.exportToDownloads(ctx) }.getOrElse { tr("导出失败：{0}", it.message) } }
                     Toast.makeText(ctx, m, Toast.LENGTH_LONG).show()
                 }
             }
-            Action("清屏") { L.clearView(); expanded = emptySet() }
+            Action(tr("清屏")) { L.clearView(); expanded = emptySet() }
         }
     }
 }

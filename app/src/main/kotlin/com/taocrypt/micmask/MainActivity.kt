@@ -33,6 +33,7 @@ class MainActivity : ComponentActivity() {
         }
         enableEdgeToEdge()
         L.init(applicationContext)
+        I18n.init(applicationContext)
         handleIntent(intent)
         // 启动检查：开关关闭时也查，只为强制更新（Updater 内部只在强制时弹框）
         com.taocrypt.micmask.update.Updater.check(applicationContext, silent = true)

@@ -1,5 +1,7 @@
 package com.taocrypt.micmask.update
 
+import com.taocrypt.micmask.tr
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -86,8 +88,8 @@ fun UpdateDialog() {
     if (r == null || !(show || forcedRel != null)) return
     val forced = r.forces()
     val close = { if (!forced) Updater.dialog.value = false }
-    WindowDialog(show = true, title = "发现新版本 ${r.tag}",
-        summary = if (forced) "当前版本已停止支持，需要更新后才能继续使用" else "当前 v${com.taocrypt.micmask.BuildConfig.VERSION_NAME}",
+    WindowDialog(show = true, title = tr("发现新版本 {0}", r.tag),
+        summary = if (forced) tr("当前版本已停止支持，需要更新后才能继续使用") else tr("当前 v{0}", com.taocrypt.micmask.BuildConfig.VERSION_NAME),
         onDismissRequest = { close() }) {
         Column {
             if (r.notes.isNotBlank()) {
@@ -103,23 +105,23 @@ fun UpdateDialog() {
                         fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                     Spacer(Modifier.height(12.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton("取消下载", onClick = { Updater.cancelDownload(ctx) }, modifier = Modifier.weight(1f))
-                        if (!forced) TextButton("后台下载", onClick = { close() }, modifier = Modifier.weight(1f))
+                        TextButton(tr("取消下载"), onClick = { Updater.cancelDownload(ctx) }, modifier = Modifier.weight(1f))
+                        if (!forced) TextButton(tr("后台下载"), onClick = { close() }, modifier = Modifier.weight(1f))
                     }
                 }
                 is Updater.State.Downloaded -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (!forced) TextButton("稍后", onClick = { close() }, modifier = Modifier.weight(1f))
-                    TextButton("安装", onClick = { Updater.install(ctx, s.file) }, modifier = Modifier.weight(1f),
+                    if (!forced) TextButton(tr("稍后"), onClick = { close() }, modifier = Modifier.weight(1f))
+                    TextButton(tr("安装"), onClick = { Updater.install(ctx, s.file) }, modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.textButtonColorsPrimary())
                 }
                 else -> Column {
                     (st as? Updater.State.Fail)?.let {
-                        Text("下载失败：${it.msg}", fontSize = 12.sp, color = MiuixTheme.colorScheme.error)
+                        Text(tr("下载失败：{0}", it.msg), fontSize = 12.sp, color = MiuixTheme.colorScheme.error)
                         Spacer(Modifier.height(8.dp))
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (!forced) TextButton("跳过此版", onClick = { Updater.skip(ctx, r.tag) }, modifier = Modifier.weight(1f))
-                        TextButton(if (st is Updater.State.Fail) "重试" else "更新", onClick = { startDl(r) }, modifier = Modifier.weight(1f),
+                        if (!forced) TextButton(tr("跳过此版"), onClick = { Updater.skip(ctx, r.tag) }, modifier = Modifier.weight(1f))
+                        TextButton(if (st is Updater.State.Fail) tr("重试") else tr("更新"), onClick = { startDl(r) }, modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.textButtonColorsPrimary())
                     }
                 }
@@ -143,49 +145,49 @@ fun MirrorPage() {
     fun save(l: List<String>) { list = l; Updater.setUserMirrors(ctx, l) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding()) {
-        SmallTitle("下载方式")
+        SmallTitle(tr("下载方式"))
         Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
-            WindowDropdownPreference(items = listOf("自动（GitHub 不通时测速选镜像）", "始终直连 GitHub"), selectedIndex = mode, title = "镜像",
+            WindowDropdownPreference(items = listOf(tr("自动（GitHub 不通时测速选镜像）"), tr("始终直连 GitHub")), selectedIndex = mode, title = tr("镜像"),
                 onSelectedIndexChange = { mode = it; Updater.setMode(ctx, it) })
         }
-        Text("填了自定义镜像时优先按顺序使用它们，最后直连；都失败才会用内置镜像。镜像格式：https://example.com（会拼成 镜像/https://github.com/…）",
+        Text(tr("填了自定义镜像时优先按顺序使用它们，最后直连；都失败才会用内置镜像。镜像格式：https://example.com（会拼成 镜像/https://github.com/…）"),
             fontSize = 11.sp, color = summary, modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp))
 
-        SmallTitle("自定义镜像")
+        SmallTitle(tr("自定义镜像"))
         Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
             list.forEachIndexed { i, m ->
                 Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("${i + 1}. $m", fontSize = 14.sp, modifier = Modifier.weight(1f))
-                    if (i > 0) TextButton("上移", onClick = { save(list.toMutableList().apply { add(i - 1, removeAt(i)) }) })
-                    TextButton("删除", onClick = { save(list.filterIndexed { j, _ -> j != i }) })
+                    if (i > 0) TextButton(tr("上移"), onClick = { save(list.toMutableList().apply { add(i - 1, removeAt(i)) }) })
+                    TextButton(tr("删除"), onClick = { save(list.filterIndexed { j, _ -> j != i }) })
                 }
             }
             Column(Modifier.padding(12.dp)) {
-                TextField(value = input, onValueChange = { input = it; err = null }, label = "添加镜像，如 https://gh-proxy.com", singleLine = true)
+                TextField(value = input, onValueChange = { input = it; err = null }, label = tr("添加镜像，如 https://gh-proxy.com"), singleLine = true)
                 err?.let { Text(it, fontSize = 12.sp, color = MiuixTheme.colorScheme.error, modifier = Modifier.padding(top = 4.dp)) }
                 Spacer(Modifier.height(8.dp))
-                TextButton("添加", modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.textButtonColorsPrimary(), onClick = {
+                TextButton(tr("添加"), modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.textButtonColorsPrimary(), onClick = {
                     val m = Updater.normalizeMirror(input)
                     when {
-                        m == null -> err = "地址不对，需要 http(s)://域名[/路径]"
-                        m in list -> err = "已经有了"
+                        m == null -> err = tr("地址不对，需要 http(s)://域名[/路径]")
+                        m in list -> err = tr("已经有了")
                         else -> { save(list + m); input = "" }
                     }
                 })
             }
         }
 
-        SmallTitle("测速")
+        SmallTitle(tr("测速"))
         Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
-            ArrowPreference(title = if (testing) "正在测速…" else "测试全部下载源", summary = "直连、自定义镜像与内置镜像",
+            ArrowPreference(title = if (testing) tr("正在测速…") else tr("测试全部下载源"), summary = tr("直连、自定义镜像与内置镜像"),
                 enabled = !testing, onClick = {
                     testing = true
                     scope.launch { results = Updater.speedTestAll(ctx).sortedByDescending { if (it.ok) it.bps else -1.0 }; testing = false }
                 })
             results.forEach { r ->
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
-                    Text(r.base ?: "GitHub 直连", fontSize = 13.sp, modifier = Modifier.weight(1f))
-                    Text(if (r.ok) speed(r.bps) else "不可用", fontSize = 13.sp,
+                    Text(r.base ?: tr("GitHub 直连"), fontSize = 13.sp, modifier = Modifier.weight(1f))
+                    Text(if (r.ok) speed(r.bps) else tr("不可用"), fontSize = 13.sp,
                         color = if (r.ok) MiuixTheme.colorScheme.primary else summary)
                 }
             }

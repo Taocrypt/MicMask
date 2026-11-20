@@ -413,7 +413,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         viewModelScope.launch {
             _state.value = _state.value.copy(importing = true, importDone = 0,
-                importTotal = 0, importName = "正在准备…")
+                importTotal = 0, importName = tr("正在准备…"))
             val copied = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 runCatching {
                     val n1 = ModelStore.ensureExtractedFromAssets(ctx) { d, t, n ->
@@ -435,9 +435,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             refreshModels()
             refreshTtsModels()
             if (copied > 0) {
-                _state.value = _state.value.copy(toast = "模型已自动导入完成（$copied 个文件）")
+                _state.value = _state.value.copy(toast = tr("模型已自动导入完成（{0} 个文件）", copied))
             } else if (copied < 0) {
-                _state.value = _state.value.copy(error = "模型自动导入失败，请检查存储空间后重试")
+                _state.value = _state.value.copy(error = tr("模型自动导入失败，请检查存储空间后重试"))
             }
         }
     }
@@ -452,7 +452,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val known = object : AbstractSet<String>() { override val size get() = known0.size; override fun iterator() = known0.iterator(); override fun contains(element: String) = element in known0 || ModelStore.VOICE_RE.matches(element) }
         viewModelScope.launch {
             _state.value = _state.value.copy(importing = true, importDone = 0,
-                importTotal = known.size, importName = "正在读取…")
+                importTotal = known.size, importName = tr("正在读取…"))
             val result = kotlinx.coroutines.withContext(Dispatchers.IO) {
                 runCatching {
                     val dir = ModelStore.internalDir(ctx).also { it.mkdirs() }
@@ -463,7 +463,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         tmp.outputStream().use { input.copyTo(it, 1 shl 20) }
                         val dst = File(dir, name)
                         dst.delete()
-                        if (!tmp.renameTo(dst)) throw java.io.IOException("改名失败：$name")
+                        if (!tmp.renameTo(dst)) throw java.io.IOException(tr("改名失败：{0}", name))
                         ModelStore.externalDir(ctx).let { File(it, name).delete() }
                         n++
                         _state.value = _state.value.copy(importDone = n)
@@ -494,8 +494,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             refreshModels()
             _state.value = _state.value.copy(
                 toast = result.fold(
-                    { if (it > 0) "已导入 $it 个模型文件" else "没找到模型文件（要选模型 zip 或那几个 .onnx/.bin）" },
-                    { L.e("模型导入失败", it); "模型导入失败：${it.message}" },
+                    { if (it > 0) tr("已导入 {0} 个模型文件", it) else tr("没找到模型文件（要选模型 zip 或那几个 .onnx/.bin）") },
+                    { L.e("模型导入失败", it); tr("模型导入失败：{0}", it.message) },
                 )
             )
         }
@@ -511,7 +511,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (_state.value.importing) return
         viewModelScope.launch {
             _state.value = _state.value.copy(importing = true, importDone = 0,
-                importTotal = 0, importName = "正在准备…")
+                importTotal = 0, importName = tr("正在准备…"))
             val copied = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 runCatching {
                     ModelStore.ensureExtractedFromAssets(ctx) { d, t, n ->
@@ -527,7 +527,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             refreshModels()
             refreshTtsModels()
             _state.value = _state.value.copy(
-                toast = if (copied > 0) "已导入 $copied 个模型文件" else "模型已是最新"
+                toast = if (copied > 0) tr("已导入 {0} 个模型文件", copied) else tr("模型已是最新")
             )
         }
     }
@@ -620,15 +620,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshInjectState() {
         val inj = com.taocrypt.micmask.inject.MicInjector
         val txt = when {
-            !inj.shizukuRunning() -> "Shizuku 未运行（先装 Shizuku 并用无线调试启动）"
-            !inj.shizukuPermitted() -> "Shizuku 已运行，未授权本 App"
-            else -> "Shizuku 已授权" + (if (inj.binder != null) "，注入服务：" + inj.ping() else "")
+            !inj.shizukuRunning() -> tr("Shizuku 未运行（先装 Shizuku 并用无线调试启动）")
+            !inj.shizukuPermitted() -> tr("Shizuku 已运行，未授权本 App")
+            else -> tr("Shizuku 已授权") + (if (inj.binder != null) tr("，注入服务：") + inj.ping() else "")
         }
         val uids = _state.value.qqInjectTarget.split(',', ' ', ';').filter { it.isNotBlank() }
-            .joinToString { p -> val u = inj.uidOf(ctx, p.trim()); if (u < 0) "${p.trim()} 未安装" else "uid=$u" }
+            .joinToString { p -> val u = inj.uidOf(ctx, p.trim()); if (u < 0) tr("{0} 未安装", p.trim()) else "uid=$u" }
         _state.value = _state.value.copy(
             speakerMode = !inj.shizukuGranted(),
-            qqShizuku = txt + "\n目标：$uids" + "\nAndroid ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT}) ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}",
+            qqShizuku = txt + tr("\n目标：{0}", uids) + "\nAndroid ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT}) ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}",
             qqInjectMsg = VoiceSender.injectMessage,
         )
     }
@@ -641,7 +641,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         com.taocrypt.micmask.inject.MicInjector.stopLive()
         LiveService.stop(ctx)
         SpeakerSfx.stopSfx()
-        _state.value = _state.value.copy(liveOn = false, liveMsg = "已停止", sfxPlaying = null)
+        _state.value = _state.value.copy(liveOn = false, liveMsg = tr("已停止"), sfxPlaying = null)
         L.i("UI 停止（悬浮窗）")
     }
 
@@ -666,15 +666,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (!_state.value.recording) return
         val r = recorder.stop()
         _state.value = _state.value.copy(recording = false, recElapsedMs = 0L, recLevel = 0f)
-        if (r == null) { _state.value = _state.value.copy(toast = "太短了，按住多说一会儿"); return }
+        if (r == null) { _state.value = _state.value.copy(toast = tr("太短了，按住多说一会儿")); return }
         val st0 = _state.value
-        _state.value = st0.copy(clipBusy = true, clipStage = "读取录音", clipProgress = 0f)
+        _state.value = st0.copy(clipBusy = true, clipStage = tr("读取录音"), clipProgress = 0f)
         viewModelScope.launch {
             val res = kotlinx.coroutines.withContext(Dispatchers.Default) {
                 runCatching {
                     val x = SoundBoard.decode(null, r.file.absolutePath)
                     val y: ShortArray = if (mode == 0) {
-                        val voice = ModelStore.currentVoice(ctx) ?: throw IllegalStateException("还没有音色，先在变声页下载")
+                        val voice = ModelStore.currentVoice(ctx) ?: throw IllegalStateException(tr("还没有音色，先在变声页下载"))
                         val tu = _state.value
                         // 档位/线程变了要换新引擎（release 后执行器不可复用）
                         clipEngine?.let { if (clipEngineVoice == voice && it.tune(tu.aiTier, tu.aiGate, tu.aiFeatTh, tu.aiSynTh)) { it.release(); clipEngine = null } }
@@ -684,12 +684,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                                 .also { it.pickCache = File(ctx.filesDir, "pick_clip_$voice.txt"); it.tune(tu.aiTier, tu.aiGate, tu.aiFeatTh, tu.aiSynTh); clipEngine = it; clipEngineVoice = voice }
                         }
                         e.semis = prefs.getFloat("ai_semis", 0f).toInt()
-                        _state.value = _state.value.copy(clipStage = "加载模型")
+                        _state.value = _state.value.copy(clipStage = tr("加载模型"))
                         e.load({ m -> _state.value = _state.value.copy(clipStage = m) })
-                        _state.value = _state.value.copy(clipStage = "AI 变声")
+                        _state.value = _state.value.copy(clipStage = tr("AI 变声"))
                         e.offline(x) { p -> _state.value = _state.value.copy(clipProgress = p) }
                     } else {
-                        _state.value = _state.value.copy(clipStage = "变调")
+                        _state.value = _state.value.copy(clipStage = tr("变调"))
                         val sh = com.taocrypt.micmask.inject.PitchShifter(SoundBoard.SR)
                         val ratio = Math.pow(2.0, st0.pitchSemis / 12.0).toFloat()
                         val fx = com.taocrypt.micmask.inject.FxChain(SoundBoard.SR).also { it.set(st0.fx.toFloatArray()) }
@@ -717,10 +717,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 armQqPending(f)
                 L.i("录播 ${if (mode == 0) "AI" else "普通"} → ${f.name} %.1fs".format(sec))
                 _state.value = _state.value.copy(clipBusy = false, clipStage = "", clipFile = f, clipSeconds = sec,
-                    toast = "已设为待发送，到 QQ 按住说话前点悬浮球")
+                    toast = tr("已设为待发送，到 QQ 按住说话前点悬浮球"))
             }.onFailure {
                 L.e("录播转换失败", it)
-                _state.value = _state.value.copy(clipBusy = false, clipStage = "", toast = "转换失败：${it.message}")
+                _state.value = _state.value.copy(clipBusy = false, clipStage = "", toast = tr("转换失败：{0}", it.message))
             }
         }
     }
@@ -728,7 +728,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun toggleLive() {
         val inj = com.taocrypt.micmask.inject.MicInjector
         if (!inj.liveOn && !_state.value.liveOn && speakerMode()) {
-            _state.value = _state.value.copy(toast = if (_state.value.liveMode == 2) "外放模式下声卡不可用（需要 Shizuku）" else "未授权 Shizuku：当前为录播模式，在变声页按住按钮录一句")
+            _state.value = _state.value.copy(toast = if (_state.value.liveMode == 2) tr("外放模式下声卡不可用（需要 Shizuku）") else tr("未授权 Shizuku：当前为录播模式，在变声页按住按钮录一句"))
             return
         }
         if (inj.liveOn || _state.value.liveOn) {
@@ -736,23 +736,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             inj.stopLive()
             // 推理在 shell 进程，随 DISARM 停止
             LiveService.stop(ctx)
-            _state.value = _state.value.copy(liveOn = false, liveMsg = "已停止")
+            _state.value = _state.value.copy(liveOn = false, liveMsg = tr("已停止"))
             return
         }
         val src = if (_state.value.liveAec) android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION else android.media.MediaRecorder.AudioSource.MIC
         if (whitelist().isEmpty()) L.i("UI 白名单为空：只做本机试听（目标=自身）")
         Thread { runCatching { com.taocrypt.micmask.inject.MicInjector.auditPlayAudio() } }.start()
-        com.taocrypt.micmask.inject.MicInjector.modeLabel = listOf("AI 变声", "普通变声", "虚拟声卡").getOrNull(_state.value.liveMode)
+        com.taocrypt.micmask.inject.MicInjector.modeLabel = listOf(tr("AI 变声"), tr("普通变声"), tr("虚拟声卡")).getOrNull(_state.value.liveMode)
         L.i("UI 开始实时变声：模式=${com.taocrypt.micmask.inject.MicInjector.modeLabel} 录音=${if (_state.value.liveAec) "通话(回声消除)" else "原始麦克风"} 半音=${_state.value.liveSemis} 目标=${_state.value.qqInjectTarget}")
-        _state.value = _state.value.copy(liveOn = true, liveMsg = "启动中…")
+        _state.value = _state.value.copy(liveOn = true, liveMsg = tr("启动中…"))
         val cb: (String) -> Unit = { msg ->
-            val ended = msg.startsWith("已停止") || msg.contains("失败") || msg.startsWith("缺") || msg.startsWith("没找到") || msg.contains("Shizuku")
+            val ended = msg.startsWith("已停止") || msg.contains("失败") || msg.startsWith("缺") || msg.startsWith("没找到") || msg.contains("Shizuku") ||
+                msg.startsWith("Stopped") || msg.contains("fail", true) || msg.startsWith("Missing") || msg.startsWith("Not found") || msg.startsWith("Couldn't find")
             _state.value = _state.value.copy(liveOn = inj.liveOn || !ended, liveMsg = msg)
             if (ended && !inj.liveOn && !_state.value.liveAi) LiveService.stop(ctx)
         }
         if (_state.value.liveAi) {
             if (!LiveRvc.modelPresent(ctx)) {
-                _state.value = _state.value.copy(liveOn = false, liveMsg = "缺流式合成器模型，请先在模型页下载或导入实时模型包")
+                _state.value = _state.value.copy(liveOn = false, liveMsg = tr("缺流式合成器模型，请先在模型页下载或导入实时模型包"))
                 return
             }
             LiveService.onStop = { stopAll() }
@@ -786,10 +787,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun saveCurrentPreset(mode: Int, name: String) {
         val st = _state.value
-        val p = UserPreset(name.trim().ifEmpty { "我的预设" }, mode, if (mode == 1) st.pitchSemis else 0f, if (mode == 2) st.fxCard else st.fx)
+        val p = UserPreset(name.trim().ifEmpty { tr("我的预设") }, mode, if (mode == 1) st.pitchSemis else 0f, if (mode == 2) st.fxCard else st.fx)
         saveUserPresets(mode, (st.userPresets[mode].orEmpty().filter { it.name != p.name }) + p)
         if (mode == 2) _state.value = _state.value.copy(fxCardPreset = p.name) else _state.value = _state.value.copy(fxPreset = p.name)
-        _state.value = _state.value.copy(toast = "已保存「${p.name}」")
+        _state.value = _state.value.copy(toast = tr("已保存「{0}」", p.name))
     }
     fun deleteUserPreset(mode: Int, name: String) = saveUserPresets(mode, _state.value.userPresets[mode].orEmpty().filter { it.name != name })
     fun renameUserPreset(mode: Int, old: String, new: String) {
@@ -803,18 +804,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun sharePreset(p: UserPreset) {
         val code = p.toShareCode()
         val i = android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain")
-            .putExtra(android.content.Intent.EXTRA_TEXT, "【${if (p.mode == 2) "声卡场景" else "声线"}预设·${p.name}】复制整段后在 App 里点「导入」\n$code")
-        ctx.startActivity(android.content.Intent.createChooser(i, "分享预设").addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+            .putExtra(android.content.Intent.EXTRA_TEXT, tr("【{0}预设·{1}】复制整段后在 App 里点「导入」\n{2}", if (p.mode == 2) tr("声卡场景") else tr("声线"), p.name, code))
+        ctx.startActivity(android.content.Intent.createChooser(i, tr("分享预设")).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
     }
     /** 从剪贴板导入；返回导入到的模式（失败 -1） */
     fun importPresetFromClipboard(): Int {
         val cm = ctx.getSystemService(android.content.ClipboardManager::class.java)
         val text = cm?.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(ctx)?.toString().orEmpty()
         val p = UserPreset.fromShareCode(text)
-        if (p == null) { _state.value = _state.value.copy(toast = "剪贴板里没有预设分享码"); return -1 }
+        if (p == null) { _state.value = _state.value.copy(toast = tr("剪贴板里没有预设分享码")); return -1 }
         saveUserPresets(p.mode, _state.value.userPresets[p.mode].orEmpty().filter { it.name != p.name } + p)
         applyUserPreset(p)
-        _state.value = _state.value.copy(toast = "已导入「${p.name}」到${if (p.mode == 2) "声卡" else "普通变声"}")
+        _state.value = _state.value.copy(toast = tr("已导入「{0}」到{1}", p.name, if (p.mode == 2) tr("声卡") else tr("普通变声")))
         return p.mode
     }
 
@@ -891,7 +892,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun resetAiTune() { setAiTune(0, -50f, 3, 4); commitAiTune() }
     /** 按模式开始/停止；运行中切到别的模式会先停再按新模式重启 */
     fun startMode(mode: Int) {
-        if (mode == 2 && !com.taocrypt.micmask.inject.MicInjector.liveOn && speakerMode()) { _state.value = _state.value.copy(toast = "外放模式下声卡不可用（需要 Shizuku）"); return }
+        if (mode == 2 && !com.taocrypt.micmask.inject.MicInjector.liveOn && speakerMode()) { _state.value = _state.value.copy(toast = tr("外放模式下声卡不可用（需要 Shizuku）")); return }
         val st = _state.value
         if (st.liveOn) {
             if (st.liveMode == mode) { toggleLive(); return }
@@ -899,7 +900,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             selectMode(mode)
             if (needRestart) { toggleLive(); viewModelScope.launch { kotlinx.coroutines.delay(900); toggleLive() } }
             else { com.taocrypt.micmask.inject.MicInjector.setLiveSemis(_state.value.liveSemis); com.taocrypt.micmask.inject.MicInjector.setFx(activeFx())
-                com.taocrypt.micmask.inject.MicInjector.modeLabel = listOf("AI 变声", "普通变声", "虚拟声卡").getOrNull(_state.value.liveMode); LiveService.refresh(ctx) }
+                com.taocrypt.micmask.inject.MicInjector.modeLabel = listOf(tr("AI 变声"), tr("普通变声"), tr("虚拟声卡")).getOrNull(_state.value.liveMode); LiveService.refresh(ctx) }
             return
         }
         selectMode(mode); toggleLive()
@@ -908,7 +909,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val semis = when (mode) { 0 -> prefs.getFloat("ai_semis", 0f); 1 -> _state.value.pitchSemis; else -> 0f }
         _state.value = _state.value.copy(liveMode = mode, liveAi = mode == 0, liveSemis = semis)
         prefs.edit().putInt("live_mode", mode).apply()
-        com.taocrypt.micmask.inject.MicInjector.modeLabel = listOf("AI 变声", "普通变声", "虚拟声卡").getOrNull(mode)
+        com.taocrypt.micmask.inject.MicInjector.modeLabel = listOf(tr("AI 变声"), tr("普通变声"), tr("虚拟声卡")).getOrNull(mode)
         L.i("UI 模式 → ${listOf("AI", "普通", "声卡")[mode]} 半音=$semis")
     }
 
@@ -929,16 +930,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (uris.isEmpty() || _state.value.sfxBusy.isNotEmpty()) return
         val ok0 = if (fx) uris.filter { SoundBoard.isMim3(ctx, it) } else uris
         val skipped = uris.size - ok0.size
-        if (ok0.isEmpty()) { _state.value = _state.value.copy(toast = "音效包只支持 .mim3 文件"); return }
+        if (ok0.isEmpty()) { _state.value = _state.value.copy(toast = tr("音效包只支持 .mim3 文件")); return }
         viewModelScope.launch {
             var ok = 0; var fail = ""
             ok0.forEachIndexed { i, u ->
-                _state.value = _state.value.copy(sfxBusy = "正在解码 ${i + 1}/${ok0.size}…")
+                _state.value = _state.value.copy(sfxBusy = tr("正在解码 {0}/{1}…", i + 1, ok0.size))
                 kotlinx.coroutines.withContext(Dispatchers.IO) { runCatching { if (fx) SoundBoard.importMim3Uri(ctx, u).size else { SoundBoard.importUri(ctx, u, SoundBoard.PACK_LOCAL); 1 } } }
-                    .onSuccess { ok += it }.onFailure { L.e("素材导入失败", it); fail = it.message ?: "未知错误" }
+                    .onSuccess { ok += it }.onFailure { L.e("素材导入失败", it); fail = it.message ?: tr("未知错误") }
             }
             _state.value = _state.value.copy(sfxBusy = "", sounds = SoundBoard.list(ctx),
-                toast = "已导入 $ok 个" + (if (skipped > 0) "，跳过 $skipped 个非 .mim3" else "") + if (fail.isNotEmpty()) "，失败：$fail" else "")
+                toast = tr("已导入 {0} 个", ok) + (if (skipped > 0) tr("，跳过 {0} 个非 .mim3", skipped) else "") + if (fail.isNotEmpty()) tr("，失败：{0}", fail) else "")
         }
     }
     /** 页面内试听：走扬声器，不进麦克风；再点同一个停止 */
@@ -948,25 +949,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(sfxPreview = id)
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { SoundPreview.play(s.file, _state.value.sfxGain) { if (_state.value.sfxPreview == id) _state.value = _state.value.copy(sfxPreview = null) } }
-                .onFailure { L.e("试听失败", it); _state.value = _state.value.copy(sfxPreview = null, toast = "试听失败") }
+                .onFailure { L.e("试听失败", it); _state.value = _state.value.copy(sfxPreview = null, toast = tr("试听失败")) }
         }
     }
     fun stopPreview() { SoundPreview.stop(); if (_state.value.sfxPreview != null) _state.value = _state.value.copy(sfxPreview = null) }
     fun downloadRepoSound(r: com.taocrypt.micmask.repo.ModelRepo.RSound) {
         if (_state.value.sfxBusy.isNotEmpty()) return
-        _state.value = _state.value.copy(sfxBusy = "正在下载 ${r.name}…")
+        _state.value = _state.value.copy(sfxBusy = tr("正在下载 {0}…", r.name))
         viewModelScope.launch {
             val res = kotlinx.coroutines.withContext(Dispatchers.IO) { runCatching { com.taocrypt.micmask.repo.ModelRepo.downloadSound(ctx, r) } }
             _state.value = _state.value.copy(sfxBusy = "", sounds = SoundBoard.list(ctx),
-                toast = res.fold({ "已加入音效包：${r.name}" }, { L.e("素材下载失败", it); "下载失败：${it.message}" }))
+                toast = res.fold({ tr("已加入音效包：{0}", r.name) }, { L.e("素材下载失败", it); tr("下载失败：{0}", it.message) }))
         }
     }
     /** 自定义分组：多个音频打包成 .mim3（原样不转码），可选同时导入本机 */
     fun buildMim3(group: String, author: String, desc: String, items: List<SoundBoard.PackItem>, alsoImport: Boolean) {
         if (_state.value.sfxBusy.isNotEmpty()) return
-        if (group.isBlank()) { _state.value = _state.value.copy(toast = "先填分组名"); return }
-        if (items.isEmpty()) { _state.value = _state.value.copy(toast = "先选音频"); return }
-        _state.value = _state.value.copy(sfxBusy = "正在打包…")
+        if (group.isBlank()) { _state.value = _state.value.copy(toast = tr("先填分组名")); return }
+        if (items.isEmpty()) { _state.value = _state.value.copy(toast = tr("先选音频")); return }
+        _state.value = _state.value.copy(sfxBusy = tr("正在打包…"))
         viewModelScope.launch {
             val r = kotlinx.coroutines.withContext(Dispatchers.IO) { runCatching {
                 val path = SoundBoard.buildMim3(ctx, group, author, desc, items)
@@ -983,70 +984,70 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 path to n
             } }
             _state.value = _state.value.copy(sfxBusy = "", sounds = SoundBoard.list(ctx), toast = r.fold(
-                { (p, n) -> "已打包到 $p" + if (n > 0) "，并导入 $n 个" else "" }, { L.e("mim3 打包失败", it); "打包失败：${it.message}" }))
+                { (p, n) -> tr("已打包到 {0}", p) + if (n > 0) tr("，并导入 {0} 个", n) else "" }, { L.e("mim3 打包失败", it); tr("打包失败：{0}", it.message) }))
         }
     }
     fun packInfo(group: String) = SoundBoard.packInfo(ctx, group)
     fun fxGroups() = SoundBoard.fxGroups(ctx)
     /** 文件变声结果加进音效包分组 */
     fun addFileToGroup(f: File, group: String, name: String) {
-        val g = SoundBoard.safe(group.ifBlank { "我的音效" })
-        if (g == SoundBoard.PACK_LOCAL) { _state.value = _state.value.copy(toast = "分组名不能叫「本地」"); return }
+        val g = SoundBoard.safe(group.ifBlank { tr("我的音效") })
+        if (g == SoundBoard.PACK_LOCAL) { _state.value = _state.value.copy(toast = tr("分组名不能叫「本地」")); return }
         viewModelScope.launch {
             val r = kotlinx.coroutines.withContext(Dispatchers.IO) { runCatching { SoundBoard.importFile(ctx, f, g, SoundBoard.safe(name.ifBlank { f.nameWithoutExtension }.take(40))) } }
             _state.value = _state.value.copy(sounds = SoundBoard.list(ctx),
-                toast = r.fold({ "已加入「${if (g == SoundBoard.PACK_FX) "预设音效" else g}」" }, { L.e("加入音效包失败", it); "加入失败：${it.message}" }))
+                toast = r.fold({ tr("已加入「{0}」", if (g == SoundBoard.PACK_FX) tr("预设音效") else g) }, { L.e("加入音效包失败", it); tr("加入失败：{0}", it.message) }))
         }
     }
     /** 文件变声结果：有 Shizuku 送麦，没有就设为待发送（交给变声页的悬浮球外放） */
     fun sendOrArm(f: File) {
-        if (speakerMode()) { armQqPending(f); _state.value = _state.value.copy(toast = "已设为待发送，到 QQ 按住说话前点悬浮球") }
+        if (speakerMode()) { armQqPending(f); _state.value = _state.value.copy(toast = tr("已设为待发送，到 QQ 按住说话前点悬浮球")) }
         else sendFileToMic(f, f.nameWithoutExtension)
     }
 
     /** 把单独的 mp3 等音频直接加进音效包的某个分组（新分组会自动创建） */
     fun importToGroup(uris: List<Uri>, group: String) {
-        val g = SoundBoard.safe(group.ifBlank { "我的音效" })
+        val g = SoundBoard.safe(group.ifBlank { tr("我的音效") })
         if (uris.isEmpty() || _state.value.sfxBusy.isNotEmpty()) return
-        if (g == SoundBoard.PACK_LOCAL) { _state.value = _state.value.copy(toast = "分组名不能叫「本地」"); return }
+        if (g == SoundBoard.PACK_LOCAL) { _state.value = _state.value.copy(toast = tr("分组名不能叫「本地」")); return }
         viewModelScope.launch {
             var ok = 0; var fail = ""
             uris.forEachIndexed { i, u ->
-                _state.value = _state.value.copy(sfxBusy = "正在添加 ${i + 1}/${uris.size}…")
+                _state.value = _state.value.copy(sfxBusy = tr("正在添加 {0}/{1}…", i + 1, uris.size))
                 kotlinx.coroutines.withContext(Dispatchers.IO) { runCatching { SoundBoard.importUri(ctx, u, g) } }
-                    .onSuccess { ok++ }.onFailure { fail = it.message ?: "解码失败"; L.e("添加音效失败", it) }
+                    .onSuccess { ok++ }.onFailure { fail = it.message ?: tr("解码失败"); L.e("添加音效失败", it) }
             }
             _state.value = _state.value.copy(sfxBusy = "", sounds = SoundBoard.list(ctx),
-                toast = "已添加 $ok 个到「${if (g == SoundBoard.PACK_FX) "预设音效" else g}」" + if (fail.isNotEmpty()) "，${uris.size - ok} 个失败：$fail" else "")
+                toast = tr("已添加 {0} 个到「{1}」", ok, if (g == SoundBoard.PACK_FX) tr("预设音效") else g) + if (fail.isNotEmpty()) tr("，{0} 个失败：{1}", uris.size - ok, fail) else "")
         }
     }
     /** 把音效包里一个分组导出成 .mim3 */
     fun exportGroup(group: String) {
         if (_state.value.sfxBusy.isNotEmpty()) return
-        _state.value = _state.value.copy(sfxBusy = "正在导出…")
+        _state.value = _state.value.copy(sfxBusy = tr("正在导出…"))
         viewModelScope.launch {
             val r = kotlinx.coroutines.withContext(Dispatchers.IO) { runCatching { SoundBoard.exportGroup(ctx, group) } }
-            _state.value = _state.value.copy(sfxBusy = "", toast = r.fold({ "已导出到 $it" }, { L.e("mim3 导出失败", it); "导出失败：${it.message}" }))
+            _state.value = _state.value.copy(sfxBusy = "", toast = r.fold({ tr("已导出到 {0}", it) }, { L.e("mim3 导出失败", it); tr("导出失败：{0}", it.message) }))
         }
     }
     /** 一键还原：把被设成 ignore/deny 的 PLAY_AUDIO 改回 allow，并清掉残留注入进程 */
     fun repairAudio() {
         if (_state.value.sfxBusy.isNotEmpty()) return
         stopAll()
-        _state.value = _state.value.copy(toast = "正在检查…")
+        _state.value = _state.value.copy(toast = tr("正在检查…"))
         viewModelScope.launch {
             val r = kotlinx.coroutines.withContext(Dispatchers.IO) { runCatching { com.taocrypt.micmask.inject.MicInjector.repairAudio(ctx) } }
-            _state.value = _state.value.copy(toast = r.getOrElse { L.e("音频还原失败", it); "还原失败：${it.message}" })
+            _state.value = _state.value.copy(toast = r.getOrElse { L.e("音频还原失败", it); tr("还原失败：{0}", it.message) })
         }
     }
     fun soundInstalled(r: com.taocrypt.micmask.repo.ModelRepo.RSound) = _state.value.sounds.any { it.id == r.id }
     private fun presetId(id: String) = _state.value.sounds.firstOrNull { it.id == id }?.let { SoundBoard.isPreset(it) } == true
     fun sfxSelStart(id: String) {
-        if (presetId(id)) { _state.value = _state.value.copy(toast = "预设音效不能删除或改名"); return }
+        if (presetId(id)) { _state.value = _state.value.copy(toast = tr("预设音效不能删除或改名")); return }
         _state.value = _state.value.copy(sfxSel = (_state.value.sfxSel ?: emptySet()) + id)
     }
     fun sfxSelToggle(id: String) {
-        if (presetId(id)) { _state.value = _state.value.copy(toast = "预设音效不能删除或改名"); return }
+        if (presetId(id)) { _state.value = _state.value.copy(toast = tr("预设音效不能删除或改名")); return }
         val c = _state.value.sfxSel ?: emptySet(); _state.value = _state.value.copy(sfxSel = if (id in c) c - id else c + id)
     }
     fun sfxSelSet(ids: Set<String>) { _state.value = _state.value.copy(sfxSel = ids.filterNot { presetId(it) }.toSet()) }
@@ -1060,7 +1061,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (del.any { it.id == _state.value.sfxPlaying }) stopSound()
         if (del.any { it.id == _state.value.sfxPreview }) stopPreview()
         del.forEach { SoundBoard.delete(it) }
-        _state.value = _state.value.copy(sfxSel = null, toast = "已删除 ${del.size} 个")
+        _state.value = _state.value.copy(sfxSel = null, toast = tr("已删除 {0} 个", del.size))
         L.i("多选删除素材 ${del.size} 个")
         refreshSounds()
     }
@@ -1071,12 +1072,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (del.any { it.id == _state.value.sfxPreview }) stopPreview()
         del.forEach { SoundBoard.delete(it) }
         if (pack != SoundBoard.PACK_FX) File(SoundBoard.dir(ctx), pack).takeIf { it.isDirectory }?.deleteRecursively()
-        _state.value = _state.value.copy(sfxSel = null, toast = "已删除分组（${del.size} 个）")
+        _state.value = _state.value.copy(sfxSel = null, toast = tr("已删除分组（{0} 个）", del.size))
         L.i("删除分组 $pack ${del.size} 个")
         refreshSounds()
     }
     fun deleteSound(s: SoundBoard.Sound) { if (_state.value.sfxPlaying == s.id) stopSound(); SoundBoard.delete(s); refreshSounds() }
-    fun renameSound(s: SoundBoard.Sound, n: String) { if (!SoundBoard.rename(s, n)) _state.value = _state.value.copy(toast = "重名或无法改名"); refreshSounds() }
+    fun renameSound(s: SoundBoard.Sound, n: String) { if (!SoundBoard.rename(s, n)) _state.value = _state.value.copy(toast = tr("重名或无法改名")); refreshSounds() }
     fun setSfxGain(v: Float) { _state.value = _state.value.copy(sfxGain = v); prefs.edit().putFloat("sfx_gain", v).apply() }
     fun setSfxLoop(v: Boolean) { _state.value = _state.value.copy(sfxLoop = v); prefs.edit().putBoolean("sfx_loop", v).apply() }
     private fun stopSoundLocal() { sfxJob?.cancel(); sfxJob = null; if (_state.value.sfxPlaying != null) _state.value = _state.value.copy(sfxPlaying = null) }
@@ -1087,10 +1088,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (_state.value.sfxPlaying == id) { stopSound(); return }
         val s = _state.value.sounds.firstOrNull { it.id == id } ?: SoundBoard.find(ctx, id) ?: return
         sfxJob?.cancel()
-        _state.value = _state.value.copy(sfxPlaying = id, toast = "外放：${s.name}")
+        _state.value = _state.value.copy(sfxPlaying = id, toast = tr("外放：{0}", s.name))
         sfxJob = viewModelScope.launch {
             val n = kotlinx.coroutines.withContext(Dispatchers.IO) { SpeakerSfx.playSfx(s.file, _state.value.sfxGain, _state.value.sfxLoop) }
-            if (n <= 0) { _state.value = _state.value.copy(sfxPlaying = null, toast = "播放失败"); return@launch }
+            if (n <= 0) { _state.value = _state.value.copy(sfxPlaying = null, toast = tr("播放失败")); return@launch }
             if (!_state.value.sfxLoop) { kotlinx.coroutines.delay(n * 1000L / SoundBoard.SR + 100); if (_state.value.sfxPlaying == id) _state.value = _state.value.copy(sfxPlaying = null) }
         }
     }
@@ -1105,19 +1106,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             if (!inj.liveOn && speakerMode()) {
                 // 外放模式：直接从扬声器放
                 val n = kotlinx.coroutines.withContext(Dispatchers.IO) { SpeakerSfx.playSfx(s.file, _state.value.sfxGain, _state.value.sfxLoop) }
-                if (n <= 0) { _state.value = _state.value.copy(sfxPlaying = null, toast = "播放失败"); return@launch }
+                if (n <= 0) { _state.value = _state.value.copy(sfxPlaying = null, toast = tr("播放失败")); return@launch }
                 if (!_state.value.sfxLoop) { kotlinx.coroutines.delay(n * 1000L / SoundBoard.SR + 100); if (_state.value.sfxPlaying == id) _state.value = _state.value.copy(sfxPlaying = null) }
                 return@launch
             }
             if (!inj.liveOn) {
-                if (!_state.value.liveOn) { _state.value = _state.value.copy(toast = "未在变声，已自动用声卡模式打开麦克风通道"); selectMode(2); toggleLive() }
+                if (!_state.value.liveOn) { _state.value = _state.value.copy(toast = tr("未在变声，已自动用声卡模式打开麦克风通道")); selectMode(2); toggleLive() }
                 var w = 0
                 while (!inj.liveOn && w < 150) { kotlinx.coroutines.delay(100); w++ }
-                if (!inj.liveOn) { _state.value = _state.value.copy(sfxPlaying = null, toast = "麦克风通道没打开，播放失败"); return@launch }
+                if (!inj.liveOn) { _state.value = _state.value.copy(sfxPlaying = null, toast = tr("麦克风通道没打开，播放失败")); return@launch }
                 kotlinx.coroutines.delay(300)
             }
             val n = kotlinx.coroutines.withContext(Dispatchers.IO) { inj.playSfx(s.file, _state.value.sfxGain, _state.value.sfxLoop) }
-            if (n <= 0) { _state.value = _state.value.copy(sfxPlaying = null, toast = "播放失败"); return@launch }
+            if (n <= 0) { _state.value = _state.value.copy(sfxPlaying = null, toast = tr("播放失败")); return@launch }
             if (!_state.value.sfxLoop) {
                 kotlinx.coroutines.delay(n * 1000L / SoundBoard.SR + 100)
                 if (_state.value.sfxPlaying == id) _state.value = _state.value.copy(sfxPlaying = null)
@@ -1126,7 +1127,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setLiveFloat(on: Boolean) {
-        if (on && !canFloat()) { _state.value = _state.value.copy(toast = "请先授予「显示在其他应用上层」权限"); requestFloatPermission(); return }
+        if (on && !canFloat()) { _state.value = _state.value.copy(toast = tr("请先授予「显示在其他应用上层」权限")); requestFloatPermission(); return }
         prefs.edit().putBoolean("lf_on", on).apply()
         LiveFloatService.toggle(ctx, on)
         _state.value = _state.value.copy(liveFloat = on)
@@ -1153,7 +1154,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun holdPreview(down: Boolean, cancel: Boolean = false) {
         val inj = com.taocrypt.micmask.inject.MicInjector
         if (down) {
-            if (!inj.liveOn) { _state.value = _state.value.copy(toast = "先开始变声，再按住录制预览"); return }
+            if (!inj.liveOn) { _state.value = _state.value.copy(toast = tr("先开始变声，再按住录制预览")); return }
             inj.capturePreview(30)
             recJob?.cancel()
             recJob = viewModelScope.launch {
@@ -1170,9 +1171,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun exportLogs() {
-        _state.value = _state.value.copy(logMsg = "正在导出…")
+        _state.value = _state.value.copy(logMsg = tr("正在导出…"))
         Thread {
-            val m = runCatching { "已导出到 " + L.exportToDownloads(ctx) }.getOrElse { "导出失败：${it.message}" }
+            val m = runCatching { tr("已导出到 ") + L.exportToDownloads(ctx) }.getOrElse { tr("导出失败：{0}", it.message) }
             _state.value = _state.value.copy(logMsg = m)
         }.start()
     }
@@ -1180,13 +1181,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** 性能测试：在本机实测各档合成器，选能稳定跑的最低延迟档，结果记住 */
     fun runLiveBench() {
         if (com.taocrypt.micmask.inject.MicInjector.liveOn || _state.value.liveBenching) return
-        if (!LiveRvc.modelPresent(ctx)) { _state.value = _state.value.copy(liveBench = "缺实时变声模型，先在模型页导入"); return }
-        _state.value = _state.value.copy(liveBenching = true, liveMsg = "性能测试中，约 20 秒…")
+        if (!LiveRvc.modelPresent(ctx)) { _state.value = _state.value.copy(liveBench = tr("缺实时变声模型，先在模型页导入")); return }
+        _state.value = _state.value.copy(liveBenching = true, liveMsg = tr("性能测试中，约 20 秒…"))
         Thread {
             val r = com.taocrypt.micmask.inject.MicInjector.liveBench(ctx, ModelStore.liveNames(ctx))
             L.i("UI 性能测试结果：$r")
             if (!r.startsWith("失败")) ctx.getSharedPreferences("live", 0).edit().putString("bench_" + _state.value.liveVoice, r).apply()
-            _state.value = _state.value.copy(liveBenching = false, liveBench = r, liveMsg = if (r.startsWith("失败")) r else "性能测试完成")
+            _state.value = _state.value.copy(liveBenching = false, liveBench = r, liveMsg = if (r.startsWith("失败")) r else tr("性能测试完成"))
         }.start()
     }
 
@@ -1258,18 +1259,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val urls = _state.value.repos.filter { it.on }.map { it.url }
         if (urls.isEmpty()) {
             repoManifest = null
-            _state.value = _state.value.copy(repoModels = emptyList(), repoSounds = emptyList(), repoTtsSize = 0L, repoMsg = if (_state.value.repos.isEmpty()) "还没填模型仓库地址（设置页）" else "模型仓库都已关闭（设置页）"); return
+            _state.value = _state.value.copy(repoModels = emptyList(), repoSounds = emptyList(), repoTtsSize = 0L, repoMsg = if (_state.value.repos.isEmpty()) tr("还没填模型仓库地址（设置页）") else tr("模型仓库都已关闭（设置页）")); return
         }
-        _state.value = _state.value.copy(repoLoading = true, repoMsg = "正在获取模型列表…")
+        _state.value = _state.value.copy(repoLoading = true, repoMsg = tr("正在获取模型列表…"))
         viewModelScope.launch {
             val r = kotlinx.coroutines.withContext(Dispatchers.IO) { runCatching { com.taocrypt.micmask.repo.ModelRepo.fetchAll(urls) } }
             r.onSuccess { repoManifest = it; _state.value = _state.value.copy(repoSounds = it.sounds, repoTtsSize = it.ttsSize) }
             _state.value = _state.value.copy(repoLoading = false,
                 repoModels = r.getOrNull()?.models ?: _state.value.repoModels,
                 // 多仓库时部分失败也照常显示能拿到的
-                repoMsg = r.fold({ m -> when { m.errors.isNotEmpty() && m.models.isEmpty() -> "获取失败：" + m.errors.joinToString("；")
-                    m.errors.isNotEmpty() -> "部分仓库获取失败：" + m.errors.joinToString("；"); m.models.isEmpty() -> "仓库里还没有模型"; else -> "" } },
-                    { L.e("模型仓库获取失败", it); "获取失败：${it.message}" }))
+                repoMsg = r.fold({ m -> when { m.errors.isNotEmpty() && m.models.isEmpty() -> tr("获取失败：") + m.errors.joinToString("；")
+                    m.errors.isNotEmpty() -> tr("部分仓库获取失败：") + m.errors.joinToString("；"); m.models.isEmpty() -> tr("仓库里还没有模型"); else -> "" } },
+                    { L.e("模型仓库获取失败", it); tr("获取失败：{0}", it.message) }))
         }
     }
 
@@ -1282,7 +1283,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 runCatching { com.taocrypt.micmask.repo.ModelRepo.download(ctx, man, m) { p, n -> _state.value = _state.value.copy(dlProgress = p, dlName = n) } }
             }
             _state.value = _state.value.copy(dlId = null, dlName = "",
-                toast = r.fold({ "已下载：${m.name}" }, { L.e("模型下载失败", it); "下载失败：${it.message}" }))
+                toast = r.fold({ tr("已下载：{0}", m.name) }, { L.e("模型下载失败", it); tr("下载失败：{0}", it.message) }))
             if (r.isSuccess && m.name.isNotBlank()) ModelStore.voices(ctx).firstOrNull { it == m.id }?.let { ModelStore.setVoiceAlias(ctx, it, m.name) }
             refreshModels()
         }
@@ -1292,14 +1293,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun downloadFileModel() {
         if (_state.value.dlId != null) return
         val man = repoManifest
-        if (man == null) { refreshRepo(); _state.value = _state.value.copy(toast = "正在获取仓库清单，稍后再点一次"); return }
+        if (man == null) { refreshRepo(); _state.value = _state.value.copy(toast = tr("正在获取仓库清单，稍后再点一次")); return }
         _state.value = _state.value.copy(dlId = "file", dlProgress = 0f, dlName = "")
         viewModelScope.launch {
             val r = kotlinx.coroutines.withContext(Dispatchers.IO) {
                 runCatching { com.taocrypt.micmask.repo.ModelRepo.downloadFileModel(ctx, man) { p, n -> _state.value = _state.value.copy(dlProgress = p, dlName = n) } }
             }
             _state.value = _state.value.copy(dlId = null, dlName = "",
-                toast = r.fold({ "句级模型已就绪" }, { L.e("句级模型下载失败", it); "下载失败：${it.message}" }))
+                toast = r.fold({ tr("句级模型已就绪") }, { L.e("句级模型下载失败", it); tr("下载失败：{0}", it.message) }))
             refreshModels()
         }
     }
@@ -1308,14 +1309,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun downloadTts() {
         if (_state.value.dlId != null) return
         val man = repoManifest
-        if (man == null) { refreshRepo(); _state.value = _state.value.copy(toast = "正在获取仓库清单，稍后再点一次"); return }
+        if (man == null) { refreshRepo(); _state.value = _state.value.copy(toast = tr("正在获取仓库清单，稍后再点一次")); return }
         _state.value = _state.value.copy(dlId = "tts", dlProgress = 0f, dlName = "")
         viewModelScope.launch {
             val r = kotlinx.coroutines.withContext(Dispatchers.IO) {
                 runCatching { com.taocrypt.micmask.repo.ModelRepo.downloadTts(man, TtsAssetStore.dir(ctx)) { p, n -> _state.value = _state.value.copy(dlProgress = p, dlName = n) } }
             }
             _state.value = _state.value.copy(dlId = null, dlName = "",
-                toast = r.fold({ "TTS 模型已就绪" }, { L.e("TTS 下载失败", it); "TTS 下载失败：${it.message}" }))
+                toast = r.fold({ tr("TTS 模型已就绪") }, { L.e("TTS 下载失败", it); tr("TTS 下载失败：{0}", it.message) }))
             refreshTtsModels()
         }
     }
@@ -1330,7 +1331,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             else -> null
         }
         viewModelScope.launch {
-            _state.value = _state.value.copy(importing = true, importDone = 0, importTotal = names.size + 5, importName = "正在读取…")
+            _state.value = _state.value.copy(importing = true, importDone = 0, importTotal = names.size + 5, importName = tr("正在读取…"))
             val res = kotlinx.coroutines.withContext(Dispatchers.IO) {
                 runCatching {
                     val dir = TtsAssetStore.dir(ctx)
@@ -1340,7 +1341,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         val dst = File(dir, rel).also { it.parentFile?.mkdirs() }
                         val tmp = File(dst.path + ".part")
                         tmp.outputStream().use { input.copyTo(it, 1 shl 20) }
-                        dst.delete(); if (!tmp.renameTo(dst)) throw java.io.IOException("改名失败：$rel")
+                        dst.delete(); if (!tmp.renameTo(dst)) throw java.io.IOException(tr("改名失败：{0}", rel))
                         n++; _state.value = _state.value.copy(importDone = n)
                     }
                     for (u in uris) {
@@ -1359,7 +1360,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
             _state.value = _state.value.copy(importing = false, importName = "",
-                toast = res.fold({ if (it > 0) "已导入 $it 个 TTS 文件" else "没找到 TTS 文件" }, { L.e("TTS 导入失败", it); "TTS 导入失败：${it.message}" }))
+                toast = res.fold({ if (it > 0) tr("已导入 {0} 个 TTS 文件", it) else tr("没找到 TTS 文件") }, { L.e("TTS 导入失败", it); tr("TTS 导入失败：{0}", it.message) }))
             refreshTtsModels()
         }
     }
@@ -1377,7 +1378,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
             r.onSuccess { s -> _state.value = _state.value.copy(sounds = SoundBoard.list(ctx)); playSound(s.id) }
-                .onFailure { L.e("送麦失败", it); _state.value = _state.value.copy(toast = "送麦失败：${it.message}") }
+                .onFailure { L.e("送麦失败", it); _state.value = _state.value.copy(toast = tr("送麦失败：{0}", it.message)) }
         }
     }
 
@@ -1392,11 +1393,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun deleteVoice(v: String) {
-        if (com.taocrypt.micmask.inject.MicInjector.liveOn) { _state.value = _state.value.copy(toast = "先停止实时变声再删除"); return }
+        if (com.taocrypt.micmask.inject.MicInjector.liveOn) { _state.value = _state.value.copy(toast = tr("先停止实时变声再删除")); return }
         val n = ModelStore.deleteVoice(ctx, v)
         L.i("UI 删除音色 $v（$n 个文件）")
         refreshModels()
-        _state.value = _state.value.copy(toast = "已删除 ${ModelStore.voiceLabel(v)}")
+        _state.value = _state.value.copy(toast = tr("已删除 {0}", ModelStore.voiceLabel(v)))
     }
 
     /** 白名单：已选包名集合（存成逗号分隔，沿用注入目标字段） */
@@ -1454,7 +1455,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun injectSelfTest() {
         if (_state.value.qqSelfTesting) return
-        _state.value = _state.value.copy(qqSelfTesting = true, qqSelfTest = "自检中，约 10 秒，别动手机…")
+        _state.value = _state.value.copy(qqSelfTesting = true, qqSelfTest = tr("自检中，约 10 秒，别动手机…"))
         com.taocrypt.micmask.inject.MicInjector.selfTest(ctx) { r ->
             _state.value = _state.value.copy(qqSelfTesting = false, qqSelfTest = r)
             refreshInjectState()
@@ -1463,7 +1464,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 设置页权限模式：true=普通模式（扬声器外放/录播），false=Shizuku 实时注入 */
     fun setNormalMode(normal: Boolean) {
-        if (com.taocrypt.micmask.inject.MicInjector.liveOn || _state.value.liveOn) { toast("请先关闭变声，再切换模式"); return }
+        if (com.taocrypt.micmask.inject.MicInjector.liveOn || _state.value.liveOn) { toast(tr("请先关闭变声，再切换模式")); return }
         prefs.edit().putBoolean("force_normal", normal).apply()
         com.taocrypt.micmask.inject.MicInjector.forceNormal = normal
         _state.value = _state.value.copy(forceNormal = normal)
@@ -1573,7 +1574,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun setFloating(on: Boolean) {
         if (on && !canFloat()) {
-            _state.value = _state.value.copy(toast = "请先授予「显示在其他应用上层」权限")
+            _state.value = _state.value.copy(toast = tr("请先授予「显示在其他应用上层」权限"))
             requestFloatPermission()
             return
         }
@@ -1610,7 +1611,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun useLibraryAsPending(e: TtsLibrary.Entry) {
         touchLibrary(e)
         armQqPending(e.file)
-        _state.value = _state.value.copy(toast = "已设为待发送：${e.preview}")
+        _state.value = _state.value.copy(toast = tr("已设为待发送：{0}", e.preview))
     }
 
     fun deleteLibrary(e: TtsLibrary.Entry) {
@@ -1637,7 +1638,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val s = _state.value
         if (s.recording) return
         if (!hasMicPermission()) {
-            _state.value = s.copy(error = "需要麦克风权限才能录音")
+            _state.value = s.copy(error = tr("需要麦克风权限才能录音"))
             return
         }
         val err = recorder.start()
@@ -1653,15 +1654,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (!s.recording) return
         val r = recorder.stop()
         if (r == null) {
-            _state.value = s.copy(toast = "录音太短（不足 0.3 秒），已丢弃")
+            _state.value = s.copy(toast = tr("录音太短（不足 0.3 秒），已丢弃"))
             return
         }
         pending16k = r.samples16k
         pendingSrc = null
         val desc = buildString {
-            append("录音 %.1f 秒 · %d Hz · 已重采样到 16 kHz".format(r.seconds, r.originRate))
-            if (r.clipped) append(" · 峰值偏大，可能削波")
-            if (r.tooQuiet) append(" · 几乎没有声音")
+            append(tr("录音 %.1f 秒 · %d Hz · 已重采样到 16 kHz").format(r.seconds, r.originRate))
+            if (r.clipped) append(tr(" · 峰值偏大，可能削波"))
+            if (r.tooQuiet) append(tr(" · 几乎没有声音"))
         }
         L.i("录音 → 变声输入：${r.file.absolutePath}")
         _state.value = s.copy(
@@ -1674,9 +1675,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             resultFile = null,
             error = null,
             toast = when {
-                r.tooQuiet -> "录到的几乎都是底噪，请检查麦克风后重录"
-                r.clipped -> "录音完成，但音量偏大，建议离麦克风远一点"
-                else -> "录音完成，已作为变声输入"
+                r.tooQuiet -> tr("录到的几乎都是底噪，请检查麦克风后重录")
+                r.clipped -> tr("录音完成，但音量偏大，建议离麦克风远一点")
+                else -> tr("录音完成，已作为变声输入")
             },
             ttsRefFile = s.ttsRefFile ?: r.file,
             ttsRefName = s.ttsRefName ?: r.file.name,
@@ -1690,7 +1691,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 把之前录的某一条回放素材设为变声输入（不进录音器，直接读 wav） */
     fun useRecordingAsInput(f: File) {
-        _state.value = _state.value.copy(busy = true, stage = "读取录音", progress = 0.05f, error = null)
+        _state.value = _state.value.copy(busy = true, stage = tr("读取录音"), progress = 0.05f, error = null)
         viewModelScope.launch(Dispatchers.Default) {
             try {
                 val raw = Wav.read(f)
@@ -1702,14 +1703,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _state.value = _state.value.copy(
                     busy = false,
                     srcName = f.name,
-                    srcInfo = "录音文件 · %.1f 秒 · %d Hz".format(
+                    srcInfo = tr("录音文件 · %.1f 秒 · %d Hz").format(
                         raw.samples.size.toFloat() / raw.sampleRate, raw.sampleRate
                     ),
                     resultFile = null,
                 )
             } catch (t: Throwable) {
                 L.e("读取录音失败", t)
-                _state.value = _state.value.copy(busy = false, error = "读取录音失败：${t.message}")
+                _state.value = _state.value.copy(busy = false, error = tr("读取录音失败：{0}", t.message))
             }
         }
     }
@@ -1719,7 +1720,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** 通过文件选择器把音频导入历史录音（解码成 16k wav 存到 recordings/） */
     fun importRecordings(uris: List<Uri>) {
         if (uris.isEmpty()) return
-        _state.value = _state.value.copy(busy = true, stage = "导入音频", progress = 0.02f, error = null)
+        _state.value = _state.value.copy(busy = true, stage = tr("导入音频"), progress = 0.02f, error = null)
         viewModelScope.launch(Dispatchers.Default) {
             var ok = 0; val fail = mutableListOf<String>()
             uris.forEachIndexed { i, u ->
@@ -1735,7 +1736,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             L.i("导入历史录音 $ok/${uris.size}")
             _state.value = _state.value.copy(busy = false, recCount = listRecordings().size,
-                toast = "已导入 $ok 条到历史录音" + if (fail.isNotEmpty()) "，${fail.size} 条失败：${fail.joinToString("、")}" else "")
+                toast = tr("已导入 {0} 条到历史录音", ok) + if (fail.isNotEmpty()) tr("，{0} 条失败：{1}", fail.size, fail.joinToString("、")) else "")
         }
     }
 
@@ -1748,7 +1749,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             recFile = s.recFile?.takeIf { it.exists() },
             ttsRefFile = s.ttsRefFile?.takeIf { it.exists() },
             ttsRefName = if (s.ttsRefFile?.exists() == false) null else s.ttsRefName,
-            toast = "已删除 $n 条录音")
+            toast = tr("已删除 {0} 条录音", n))
         if (_state.value.recFile == null) restoreLastRecording()
         L.i("删除录音 $n 条，剩 ${all.size}")
         return n
@@ -1846,15 +1847,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun useLatestRecordingAsRef() {
         val f = listRecordings().firstOrNull()
         if (f == null) {
-            _state.value = _state.value.copy(error = "还没有录过音，先去变声页录一段")
+            _state.value = _state.value.copy(error = tr("还没有录过音，先去变声页录一段"))
             return
         }
-        _state.value = _state.value.copy(ttsRefFile = f, ttsRefName = f.name, toast = "参考音频已设为 ${f.name}")
+        _state.value = _state.value.copy(ttsRefFile = f, ttsRefName = f.name, toast = tr("参考音频已设为 {0}", f.name))
     }
 
     /** 选一个文件当参考音频（拷进 tts_ref 目录，采样率统一到 16k） */
     fun importTtsRef(uri: Uri) {
-        _state.value = _state.value.copy(ttsBusy = true, ttsStage = "准备参考音频", ttsProgress = 0.1f, error = null)
+        _state.value = _state.value.copy(ttsBusy = true, ttsStage = tr("准备参考音频"), ttsProgress = 0.1f, error = null)
         viewModelScope.launch(Dispatchers.Default) {
             try {
                 val d = AudioIo.decodeTo16k(ctx, uri)
@@ -1863,11 +1864,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _state.value = _state.value.copy(
                     ttsBusy = false, ttsStage = "", ttsProgress = 0f,
                     ttsRefFile = f, ttsRefName = f.name,
-                    toast = "参考音频已导入（%.1f 秒）".format(d.samples.size / 16000f),
+                    toast = tr("参考音频已导入（%.1f 秒）").format(d.samples.size / 16000f),
                 )
             } catch (t: Throwable) {
                 L.e("导入参考音频失败", t)
-                _state.value = _state.value.copy(ttsBusy = false, ttsStage = "", error = "导入参考音频失败：${t.message}")
+                _state.value = _state.value.copy(ttsBusy = false, ttsStage = "", error = tr("导入参考音频失败：{0}", t.message))
             }
         }
     }
@@ -1887,19 +1888,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (s.ttsBusy) return
 
         if (s.ttsText.isBlank()) {
-            _state.value = s.copy(error = "请先输入要合成的文本")
+            _state.value = s.copy(error = tr("请先输入要合成的文本"))
             return
         }
         if (s.ttsMissing.isNotEmpty()) {
             _state.value = s.copy(
-                error = "合成模型未就位，缺少：" + s.ttsMissing.joinToString("、") +
-                    "\n放到 ${s.ttsDir}"
+                error = tr("合成模型未就位，缺少：") + s.ttsMissing.joinToString("、") +
+                    tr("\n放到 {0}", s.ttsDir)
             )
             return
         }
         if (s.ttsRefsReady.isEmpty()) {
             _state.value = s.copy(
-                error = "还没有参考特征。把 ref_*.refbin 放到 ${s.ttsDir}/ref/ 后重试"
+                error = tr("还没有参考特征。把 ref_*.refbin 放到 {0}/ref/ 后重试", s.ttsDir)
             )
             return
         }
@@ -1908,7 +1909,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val text = s.ttsText.trim()
         _state.value = s.copy(
             ttsBusy = true, ttsLog = "", error = null, ttsResultFile = null,
-            ttsStage = "加载引擎…", ttsProgress = 0f,
+            ttsStage = tr("加载引擎…"), ttsProgress = 0f,
             ttsArSteps = 0, ttsMsPerStep = 0.0, ttsRms = 0f,
         )
 
@@ -1923,19 +1924,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 refreshLibrary()
                 _state.value = _state.value.copy(
                     ttsBusy = false, ttsResultFile = file, ttsResultSeconds = info.seconds,
-                    ttsElapsedMs = info.totalMs, ttsStage = "完成",
+                    ttsElapsedMs = info.totalMs, ttsStage = tr("完成"),
                     ttsProgress = 1f, ttsLog = info.log,
                     ttsArSteps = info.steps, ttsMsPerStep = info.msPerStep,
-                    ttsRms = info.rms, toast = "合成完成（%s）".format(
-                        RefFeatureStore.LABELS[emo] ?: emo),
+                    ttsRms = info.rms, toast = tr("合成完成（%s）").format(
+                        RefFeatureStore.LABELS[emo]?.let { tr(it) } ?: emo),
                 )
             } catch (t: Throwable) {
                 L.e("合成失败", t)
                 // 带上异常类名：G2P 空、ONNX 形状不匹配、OOM 从 message 上很难区分
                 val kind = t.javaClass.simpleName
                 _state.value = _state.value.copy(
-                    ttsBusy = false, ttsStage = "失败",
-                    error = "合成失败（$kind）：${t.message ?: "无详细信息"}",
+                    ttsBusy = false, ttsStage = tr("失败"),
+                    error = tr("合成失败（{0}）：{1}", kind, t.message ?: tr("无详细信息")),
                 )
             }
         }
@@ -1957,23 +1958,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             runCatching { e?.close() }
             val ne = TtsEngine(TtsAssetStore.dir(ctx), TtsAssetStore.dir(ctx))
             val info = ne.load(threads = 4)
-            sb.append("引擎加载：").append(info).append('\n')
+            sb.append(tr("引擎加载：")).append(info).append('\n')
             L.i("TtsEngine $info")
             if (!ne.loaded) {
                 ne.close()
-                error("TTS 引擎加载失败：$info")
+                error(tr("TTS 引擎加载失败：{0}", info))
             }
             ttsEngine = ne
             e = ne
         }
-        _state.value = _state.value.copy(ttsStage = "读取参考特征…", ttsProgress = 0.1f)
+        _state.value = _state.value.copy(ttsStage = tr("读取参考特征…"), ttsProgress = 0.1f)
 
         val ref = RefFeatureStore.load(ctx, emo)
-            ?: error("读取参考特征失败：ref_$emo.refbin")
+            ?: error(tr("读取参考特征失败：ref_{0}.refbin", emo))
         val refText = RefFeatureStore.REF_TEXTS[emo] ?: ""
 
         _state.value = _state.value.copy(
-            ttsStage = "推理中（AR 循环）…", ttsProgress = 0.3f)
+            ttsStage = tr("推理中（AR 循环）…"), ttsProgress = 0.3f)
 
         // ⚠️ onStep 必须传：AR 循环在真机上要跑几十秒到两分钟，
         // 不回调的话进度条会一直停在一个值上，用户看到的就是「点下去没反应」，
@@ -1996,7 +1997,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     L.i("tts> AR 第 %d 步，已用 %.1f 秒".format(step, (System.currentTimeMillis() - tAr) / 1000f))
                 }
                 _state.value = _state.value.copy(
-                    ttsStage = "推理中（AR 第 %d 步，%.0f 秒）…".format(
+                    ttsStage = tr("推理中（AR 第 %d 步，%.0f 秒）…").format(
                         step, (System.currentTimeMillis() - tAr) / 1000f),
                     ttsProgress = p,
                     ttsArSteps = step,
@@ -2008,10 +2009,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         sb.append("BERT %d ms\n".format(tm.bertMs))
         sb.append("encoder %d ms\n".format(tm.encoderMs))
         sb.append("prefill %d ms\n".format(tm.prefillMs))
-        sb.append("AR %d 步 %.1f ms/帧 共 %d ms\n".format(
+        sb.append(tr("AR %d 步 %.1f ms/帧 共 %d ms\n").format(
             tm.arSteps, tm.msPerStep(), tm.arMs))
         sb.append("vits %d ms\n".format(tm.vitsMs))
-        sb.append("合计 %d ms\n".format(tm.totalMs))
+        sb.append(tr("合计 %d ms\n").format(tm.totalMs))
 
         // 归一化防削波，再落盘
         var peak = 0f
@@ -2023,7 +2024,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             sq += audio[i].toDouble() * audio[i]
         }
         val rms = Math.sqrt(sq / audio.size).toFloat()
-        sb.append("峰值 %.4f 增益 %.3f rms %.5f\n".format(peak, gain, rms))
+        sb.append(tr("峰值 %.4f 增益 %.3f rms %.5f\n").format(peak, gain, rms))
 
         if (peak > 0.999f) {
             L.w("合成削波（峰值 %.4f），已按 %.3f 归一化".format(peak, gain))
@@ -2036,10 +2037,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             ctx, audio, TtsEngine.SAMPLE_RATE, "tts", "tts_${emo}_$stamp",
             normalize = false,
         )
-        sb.append("输出 ").append(f.absolutePath).append('\n')
+        sb.append(tr("输出 ")).append(f.absolutePath).append('\n')
 
         val totalMs = System.currentTimeMillis() - t0
-        sb.append("墙钟 %d ms".format(totalMs))
+        sb.append(tr("墙钟 %d ms").format(totalMs))
 
         return f to SynthInfo(
             seconds = audio.size.toFloat() / TtsEngine.SAMPLE_RATE,
@@ -2050,10 +2051,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 取消加载：关闭文件变声引擎释放内存（转换中不允许） */
     fun unloadEngine() {
-        if (_state.value.busy || _state.value.loadingEngine) { _state.value = _state.value.copy(toast = "正在转换，完成后再释放"); return }
+        if (_state.value.busy || _state.value.loadingEngine) { _state.value = _state.value.copy(toast = tr("正在转换，完成后再释放")); return }
         val e = engine ?: run { _state.value = _state.value.copy(engineLoaded = false); return }
         engine = null
-        _state.value = _state.value.copy(engineLoaded = false, engineLog = "", toast = "已释放模型内存")
+        _state.value = _state.value.copy(engineLoaded = false, engineLog = "", toast = tr("已释放模型内存"))
         viewModelScope.launch(Dispatchers.Default) { runCatching { e.close() }.onFailure { L.e("释放模型失败", it) }; System.gc() }
         L.i("文件变声模型已卸载")
     }
@@ -2074,13 +2075,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 )
                 _state.value = _state.value.copy(
                     loadingEngine = false, engineLoaded = true,
-                    engineLog = _state.value.engineLog + "模型加载完成\n",
+                    engineLog = _state.value.engineLog + tr("模型加载完成\n"),
                 )
             } catch (t: Throwable) {
                 L.e("loadEngine 失败", t)
                 _state.value = _state.value.copy(
                     loadingEngine = false,
-                    error = "模型加载失败：${t.message}",
+                    error = tr("模型加载失败：{0}", t.message),
                 )
             }
         }
@@ -2110,14 +2111,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val f = found.firstOrNull()
         if (f == null) {
             val hint = ctx.getExternalFilesDir(null)?.absolutePath ?: ctx.filesDir.absolutePath
-            _state.value = _state.value.copy(error = "App 目录里没找到音频；把 wav/mp3 放到 $hint")
+            _state.value = _state.value.copy(error = tr("App 目录里没找到音频；把 wav/mp3 放到 {0}", hint))
             return
         }
         pickAudio(Uri.fromFile(f))
     }
 
     fun pickAudio(uri: Uri) {
-        _state.value = _state.value.copy(busy = true, stage = "解码音频", progress = 0.02f, error = null, resultFile = null)
+        _state.value = _state.value.copy(busy = true, stage = tr("解码音频"), progress = 0.02f, error = null, resultFile = null)
         viewModelScope.launch(Dispatchers.Default) {
             try {
                 val d = AudioIo.decodeTo16k(ctx, uri)
@@ -2128,11 +2129,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _state.value = _state.value.copy(
                     busy = false,
                     srcName = d.sourceName,
-                    srcInfo = "原始 ${d.originRate} Hz · %.1f 秒 · 已重采样到 16 kHz".format(sec),
+                    srcInfo = tr("原始 {0} Hz · %.1f 秒 · 已重采样到 16 kHz", d.originRate).format(sec),
                 )
             } catch (t: Throwable) {
                 L.e("音频解码失败", t)
-                _state.value = _state.value.copy(busy = false, error = "音频解码失败：${t.message}")
+                _state.value = _state.value.copy(busy = false, error = tr("音频解码失败：{0}", t.message))
             }
         }
     }
@@ -2142,7 +2143,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         pending16k = samples16k
         _state.value = _state.value.copy(
             srcName = name,
-            srcInfo = "已注入 16 kHz 音频 · %.1f 秒".format(samples16k.size / 16000f),
+            srcInfo = tr("已注入 16 kHz 音频 · %.1f 秒").format(samples16k.size / 16000f),
             resultFile = null, error = null,
         )
     }
@@ -2150,16 +2151,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun convert() {
         val audio = pending16k
         if (audio == null) {
-            _state.value = _state.value.copy(error = "先选一段音频")
+            _state.value = _state.value.copy(error = tr("先选一段音频"))
             return
         }
         if (!_state.value.engineLoaded) {
-            _state.value = _state.value.copy(error = "模型还没加载，先到「模型」页加载")
+            _state.value = _state.value.copy(error = tr("模型还没加载，先到「模型」页加载"))
             return
         }
         val s = _state.value
         if (s.busy) return
-        _state.value = s.copy(busy = true, stage = "准备", progress = 0f, error = null, resultFile = null)
+        _state.value = s.copy(busy = true, stage = tr("准备"), progress = 0f, error = null, resultFile = null)
         viewModelScope.launch(Dispatchers.Default) {
             try {
                 val cfg = RvcConfig(
@@ -2188,7 +2189,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     resultDisplay = saved.displayPath,
                     resultSeconds = out.size / 40000f,
                     elapsedMs = ms,
-                    toast = "转换完成（%.2f 秒音频用了 %.1f 秒，RTF=%.2f）".format(
+                    toast = tr("转换完成（%.2f 秒音频用了 %.1f 秒，RTF=%.2f）").format(
                         srcSec, ms / 1000.0, ms / 1000.0 / srcSec
                     ),
                 )
@@ -2196,7 +2197,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 L.e("转换失败", t)
                 _state.value = _state.value.copy(
                     busy = false, stage = "",
-                    error = "转换失败：${t.message}",
+                    error = tr("转换失败：{0}", t.message),
                 )
             }
         }

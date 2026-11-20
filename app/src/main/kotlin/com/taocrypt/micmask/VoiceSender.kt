@@ -264,7 +264,7 @@ object VoiceSender {
                 (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
                     it.type == AudioDeviceInfo.TYPE_BLE_HEADSET)
         }
-        bt?.productName?.toString() ?: "手机麦"
+        bt?.productName?.toString() ?: tr("手机麦")
     }.getOrDefault("")
 
     // ------------------------------------------------------------ 持久化
@@ -423,7 +423,7 @@ object VoiceSender {
             // ⚠️ start() 之后立刻调 getRoutedDevice() 常常返回 null —— 
             //    音频通路还没建好。所以短轮询几次，拿到就停。
             lastInputName = inputName(ctx)
-            lastOutputName = "未知"
+            lastOutputName = tr("未知")
             lastBlockedByHeadset = btBlocking
             mainHandler.post(object : Runnable {
                 var tries = 0
@@ -441,7 +441,7 @@ object VoiceSender {
 
             // 显式关掉系统音效（AEC / 降噪 / 自动增益），
             // 否则系统可能把我们自己放出来的声音再削一道，戴上耳机也白搭
-            val fxInfo = if (useHeadset) disableEffects(p.audioSessionId) else "外放模式未处理"
+            val fxInfo = if (useHeadset) disableEffects(p.audioSessionId) else tr("外放模式未处理")
 
             L.i("VoiceSender 实际输出=${lastOutputName} 输入=${lastInputName} 音效=$fxInfo")
 
@@ -498,12 +498,12 @@ object VoiceSender {
      * 返回值形如 `"AEC=关/无 NS=无 AGC=无"`，打到日志里便于排查。
      */
     private fun disableEffects(sessionId: Int): String {
-        if (sessionId == AudioManager.ERROR) return "session 无效"
+        if (sessionId == AudioManager.ERROR) return tr("session 无效")
         val parts = ArrayList<String>(3)
 
         fun off(name: String, created: AudioEffect?) {
             if (created == null) {
-                parts.add("$name=无")
+                parts.add(tr("{0}=无", name))
                 return
             }
             val r = runCatching {
@@ -511,7 +511,7 @@ object VoiceSender {
                 created.release()
                 true
             }.getOrDefault(false)
-            parts.add(if (r) "$name=关" else "$name=失败")
+            parts.add(if (r) tr("{0}=关", name) else tr("{0}=失败", name))
         }
 
         off("AEC", runCatching { AcousticEchoCanceler.create(sessionId) }.getOrNull())
@@ -528,14 +528,14 @@ object VoiceSender {
         val aec = runCatching { AcousticEchoCanceler.isAvailable() }.getOrDefault(false)
         val ns = runCatching { NoiseSuppressor.isAvailable() }.getOrDefault(false)
         val agc = runCatching { AutomaticGainControl.isAvailable() }.getOrDefault(false)
-        return "AEC=${if (aec) "支持" else "不支持"} NS=${if (ns) "支持" else "不支持"} " +
-            "AGC=${if (agc) "支持" else "不支持"}"
+        return "AEC=${if (aec) tr("支持") else tr("不支持")} NS=${if (ns) tr("支持") else tr("不支持")} " +
+            "AGC=${if (agc) tr("支持") else tr("不支持")}"
     }
 
     /** 注入模式：交给 MicInjector，状态映射回 onState / onFinished */
     private fun startInject(ctx: Context, f: File): Boolean {
         val inj = com.taocrypt.micmask.inject.MicInjector
-        lastOutputName = "注入 → $injectTarget"
+        lastOutputName = tr("注入 → {0}", injectTarget)
         lastBlockedByHeadset = false
         inj.onPhase = { p, msg ->
             injectMessage = msg

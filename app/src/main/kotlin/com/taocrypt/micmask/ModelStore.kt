@@ -54,7 +54,7 @@ object ModelStore {
     /** 发给 shell 时统一用标准名，shell 侧不用管音色 */
     fun canonicalName(file: String): String =
         VOICE_RE.matchEntire(file)?.let { DEFAULT_VOICE + file.removePrefix(it.groupValues[1]) } ?: file
-    fun voiceLabel(v: String) = if (v == DEFAULT_VOICE) "默认音色" else v
+    fun voiceLabel(v: String) = if (v == DEFAULT_VOICE) tr("默认音色") else v
     /** 用户给音色起的显示名（编辑），没起就用默认 */
     fun voiceLabel(ctx: Context, v: String): String =
         ctx.getSharedPreferences("live", 0).getString("alias_$v", null)?.takeIf { it.isNotBlank() } ?: voiceLabel(v)

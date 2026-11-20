@@ -1,5 +1,7 @@
 package com.taocrypt.micmask.ui2
 
+import com.taocrypt.micmask.tr
+
 import android.content.Context
 import android.media.MediaPlayer
 import android.widget.Toast
@@ -77,7 +79,7 @@ internal class ClipPlayer {
             p.setOnCompletionListener { if (playingKey == key) playingKey = null }
             p.start(); mp = p; playingKey = key
         } catch (t: Throwable) {
-            Toast.makeText(ctx, "播放失败：${t.message}", Toast.LENGTH_SHORT).show()
+            Toast.makeText(ctx, tr("播放失败：{0}", t.message), Toast.LENGTH_SHORT).show()
         }
     }
     fun isPlaying(key: String) = playingKey == key
@@ -112,12 +114,12 @@ internal fun TtsPage(vm: MainViewModel, st: UiState) {
         // ---- 模型状态 ----
         val dl = st.dlId == "tts"
         if (!st.ttsReady || dl) {
-            SmallTitle("模型")
+            SmallTitle(tr("模型"))
             Card(Modifier.fillMaxWidth().padding(Pad2)) {
                 Column(Modifier.padding(16.dp)) {
-                    Text("合成模型未就绪", fontWeight = FontWeight.SemiBold)
+                    Text(tr("合成模型未就绪"), fontWeight = FontWeight.SemiBold)
                     val miss = st.ttsMissing.size + (RefFeatureStore.EMOTIONS.size - st.ttsRefsReady.size)
-                    Text("还缺 $miss 个文件。从模型仓库一键下载（只下缺的），或导入模型 zip / 文件。", fontSize = 13.sp, color = Dim)
+                    Text(tr("还缺 {0} 个文件。从模型仓库一键下载（只下缺的），或导入模型 zip / 文件。", miss), fontSize = 13.sp, color = Dim)
                     if (dl) {
                         Spacer(Modifier.height(10.dp))
                         LinearProgressIndicator(progress = st.dlProgress)
@@ -126,10 +128,10 @@ internal fun TtsPage(vm: MainViewModel, st: UiState) {
                     Spacer(Modifier.height(10.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton(
-                            when { dl -> "下载中…"; st.repoTtsSize > 0 -> "从仓库下载（%.0f MB）".format(st.repoTtsSize / 1048576f); st.repoLoading -> "读取仓库…"; else -> "从仓库下载" },
+                            when { dl -> tr("下载中…"); st.repoTtsSize > 0 -> tr("从仓库下载（%.0f MB）").format(st.repoTtsSize / 1048576f); st.repoLoading -> tr("读取仓库…"); else -> tr("从仓库下载") },
                             onClick = { vm.downloadTts() }, enabled = st.dlId == null && !st.repoLoading,
                             modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary())
-                        TextButton(if (st.importing) "导入 ${st.importDone}…" else "从手机导入", onClick = { picker.launch(arrayOf("*/*")) },
+                        TextButton(if (st.importing) tr("导入 {0}…", st.importDone) else tr("从手机导入"), onClick = { picker.launch(arrayOf("*/*")) },
                             enabled = !st.importing && st.dlId == null, modifier = Modifier.weight(1f))
                     }
                 }
@@ -137,7 +139,7 @@ internal fun TtsPage(vm: MainViewModel, st: UiState) {
         }
 
         // ---- 文字 ----
-        SmallTitle("要读的文字")
+        SmallTitle(tr("要读的文字"))
         Card(Modifier.fillMaxWidth().padding(Pad2)) {
             Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
                 val onSurface = MiuixTheme.colorScheme.onSurface
@@ -148,21 +150,21 @@ internal fun TtsPage(vm: MainViewModel, st: UiState) {
                     minLines = 4, maxLines = 10, modifier = Modifier.fillMaxWidth(),
                     decorationBox = { inner ->
                         Box {
-                            if (st.ttsText.isEmpty()) Text("在这里输入要读的文字…", fontSize = 16.sp, color = Dim)
+                            if (st.ttsText.isEmpty()) Text(tr("在这里输入要读的文字…"), fontSize = 16.sp, color = Dim)
                             inner()
                         }
                     })
                 Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("仅支持中文，英文和数字会被忽略", Modifier.weight(1f), fontSize = 12.sp, color = Dim)
-                    if (st.ttsText.isNotEmpty()) Text("清空", Modifier.clip(RoundedCornerShape(10.dp)).clickable { vm.setTtsText("") }
+                    Text(tr("仅支持中文，英文和数字会被忽略"), Modifier.weight(1f), fontSize = 12.sp, color = Dim)
+                    if (st.ttsText.isNotEmpty()) Text(tr("清空"), Modifier.clip(RoundedCornerShape(10.dp)).clickable { vm.setTtsText("") }
                         .padding(horizontal = 8.dp, vertical = 2.dp), fontSize = 12.sp, color = MiuixTheme.colorScheme.primary)
-                    Text("${st.ttsText.count { !it.isWhitespace() }} 字", Modifier.padding(start = 8.dp), fontSize = 12.sp, color = Dim)
+                    Text(tr("{0} 字", st.ttsText.count { !it.isWhitespace() }), Modifier.padding(start = 8.dp), fontSize = 12.sp, color = Dim)
                 }
             }
         }
 
         // ---- 语气 / 语速 ----
-        SmallTitle("语气")
+        SmallTitle(tr("语气"))
         Card(Modifier.fillMaxWidth().padding(Pad2)) {
             Column(Modifier.padding(vertical = 12.dp)) {
                 val emos = RefFeatureStore.EMOTIONS
@@ -176,34 +178,34 @@ internal fun TtsPage(vm: MainViewModel, st: UiState) {
                         val bg by androidx.compose.animation.animateColorAsState(if (sel) primary else Color.Transparent, label = "emo")
                         Box(Modifier.weight(1f).height(38.dp).clip(RoundedCornerShape(11.dp)).background(bg)
                             .clickable(enabled = ok && !sel) { vm.setTtsEmotion(e) }, contentAlignment = Alignment.Center) {
-                            Text(RefFeatureStore.LABELS[e] ?: e, fontSize = 14.sp, maxLines = 1,
+                            Text(RefFeatureStore.LABELS[e]?.let { tr(it) } ?: e, fontSize = 14.sp, maxLines = 1,
                                 fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal,
                                 color = when { sel -> MiuixTheme.colorScheme.onPrimary; ok -> MiuixTheme.colorScheme.onSecondaryContainer; else -> Dim.copy(alpha = 0.5f) })
                         }
                     }
                 }
-                if (emos.any { it !in st.ttsRefsReady }) Text("灰色的语气缺参考音频，下载或导入 TTS 模型后可用",
+                if (emos.any { it !in st.ttsRefsReady }) Text(tr("灰色的语气缺参考音频，下载或导入 TTS 模型后可用"),
                     Modifier.padding(horizontal = 16.dp).padding(top = 6.dp), fontSize = 11.sp, color = Dim)
-                Text("每种语气配了一段参考原声，合成时模仿它的起伏和节奏；音色不变。",
+                Text(tr("每种语气配了一段参考原声，合成时模仿它的起伏和节奏；音色不变。"),
                     Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontSize = 12.sp, color = Dim)
-                LabeledSlider("语速", "%.2fx".format(st.ttsSpeed), null, st.ttsSpeed, 0.5f..2f, 29) { vm.setTtsSpeed(it) }
+                LabeledSlider(tr("语速"), "%.2fx".format(st.ttsSpeed), null, st.ttsSpeed, 0.5f..2f, 29) { vm.setTtsSpeed(it) }
             }
         }
 
         // ---- 高级参数 ----
-        SmallTitle("高级参数")
+        SmallTitle(tr("高级参数"))
         Card(Modifier.fillMaxWidth().padding(Pad2)) {
-            SwitchPreference(checked = st.ttsAdvanced, onCheckedChange = { vm.setTtsAdvanced(it) }, title = "显示高级参数",
-                summary = "不熟的话保持默认，默认值最稳")
+            SwitchPreference(checked = st.ttsAdvanced, onCheckedChange = { vm.setTtsAdvanced(it) }, title = tr("显示高级参数"),
+                summary = tr("不熟的话保持默认，默认值最稳"))
             if (st.ttsAdvanced) {
-                LabeledSlider("采样温度", "%.2f".format(st.ttsTemperature), "越低越稳但平，越高起伏越大也越易跑调",
+                LabeledSlider(tr("采样温度"), "%.2f".format(st.ttsTemperature), tr("越低越稳但平，越高起伏越大也越易跑调"),
                     st.ttsTemperature, 0.1f..2f, 37) { vm.setTtsTemperature(it) }
-                LabeledSlider("Top-K", "${st.ttsTopK}", "每步只从概率最高的 K 个里挑", st.ttsTopK.toFloat(), 1f..50f, 48) { vm.setTtsTopK(it.roundToInt()) }
-                LabeledSlider("Top-P", "%.2f".format(st.ttsTopP), "和 Top-K 一起控制随机程度", st.ttsTopP, 0.1f..1f, 17) { vm.setTtsTopP(it) }
-                LabeledSlider("重复惩罚", "%.2f".format(st.ttsRepetition), "越大越不容易拖音、重复吐字", st.ttsRepetition, 1f..2f, 19) { vm.setTtsRepetition(it) }
+                LabeledSlider("Top-K", "${st.ttsTopK}", tr("每步只从概率最高的 K 个里挑"), st.ttsTopK.toFloat(), 1f..50f, 48) { vm.setTtsTopK(it.roundToInt()) }
+                LabeledSlider("Top-P", "%.2f".format(st.ttsTopP), tr("和 Top-K 一起控制随机程度"), st.ttsTopP, 0.1f..1f, 17) { vm.setTtsTopP(it) }
+                LabeledSlider(tr("重复惩罚"), "%.2f".format(st.ttsRepetition), tr("越大越不容易拖音、重复吐字"), st.ttsRepetition, 1f..2f, 19) { vm.setTtsRepetition(it) }
             }
         }
-        Text("恢复默认参数", Modifier.padding(horizontal = 16.dp).clip(RoundedCornerShape(10.dp))
+        Text(tr("恢复默认参数"), Modifier.padding(horizontal = 16.dp).clip(RoundedCornerShape(10.dp))
             .clickable { vm.resetTtsParams() }.padding(vertical = 6.dp, horizontal = 4.dp),
             fontSize = 14.sp, color = MiuixTheme.colorScheme.primary)
 
@@ -212,29 +214,29 @@ internal fun TtsPage(vm: MainViewModel, st: UiState) {
         Card(Modifier.fillMaxWidth().padding(Pad2)) {
             Column(Modifier.padding(16.dp)) {
                 TextButton(
-                    when { st.ttsBusy -> "合成中…"; !st.ttsReady -> "合成模型未就绪"; st.ttsText.isBlank() -> "请先输入文字"; else -> "开始合成" },
+                    when { st.ttsBusy -> tr("合成中…"); !st.ttsReady -> tr("合成模型未就绪"); st.ttsText.isBlank() -> tr("请先输入文字"); else -> tr("开始合成") },
                     onClick = { vm.synthesizeTts() }, enabled = !st.ttsBusy && st.ttsReady && st.ttsText.isNotBlank(),
                     modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.textButtonColorsPrimary())
                 if (st.ttsBusy) {
                     Spacer(Modifier.height(10.dp))
                     LinearProgressIndicator(progress = st.ttsProgress)
                     Text("${st.ttsStage}  ${(st.ttsProgress * 100).roundToInt()}%", fontSize = 12.sp, color = Dim)
-                } else Text("全在手机上算，一句要几十秒。", Modifier.padding(top = 6.dp), fontSize = 12.sp, color = Dim)
+                } else Text(tr("全在手机上算，一句要几十秒。"), Modifier.padding(top = 6.dp), fontSize = 12.sp, color = Dim)
             }
         }
 
         // ---- 结果 ----
         st.ttsResultFile?.let { f ->
-            SmallTitle("合成结果")
+            SmallTitle(tr("合成结果"))
             Card(Modifier.fillMaxWidth().padding(Pad2)) {
                 Column(Modifier.padding(16.dp)) {
-                    Text("%s · %.2f 秒 · 用时 %.1f 秒".format(RefFeatureStore.LABELS[st.ttsEmotion] ?: st.ttsEmotion,
+                    Text(tr("%s · %.2f 秒 · 用时 %.1f 秒").format(RefFeatureStore.LABELS[st.ttsEmotion]?.let { tr(it) } ?: st.ttsEmotion,
                         st.ttsResultSeconds, st.ttsElapsedMs / 1000.0), fontWeight = FontWeight.Medium)
-                    Text("已加入常用语音", fontSize = 12.sp, color = Dim)
+                    Text(tr("已加入常用语音"), fontSize = 12.sp, color = Dim)
                     Spacer(Modifier.height(10.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(if (clip.isPlaying("res")) "停止" else "试听", onClick = { clip.toggle(ctx, "res", f) }, modifier = Modifier.weight(1f))
-                        TextButton("送麦", onClick = { clip.stop(); vm.sendFileToMic(f, st.ttsText) }, modifier = Modifier.weight(1f),
+                        TextButton(if (clip.isPlaying("res")) tr("停止") else tr("试听"), onClick = { clip.toggle(ctx, "res", f) }, modifier = Modifier.weight(1f))
+                        TextButton(tr("送麦"), onClick = { clip.stop(); vm.sendFileToMic(f, st.ttsText) }, modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.textButtonColorsPrimary())
                     }
                 }
@@ -242,24 +244,24 @@ internal fun TtsPage(vm: MainViewModel, st: UiState) {
         }
 
         // ---- 常用语音 ----
-        SmallTitle("常用语音  ${st.library.size}/${TtsLibrary.MAX}")
+        SmallTitle(tr("常用语音  {0}/{1}", st.library.size, TtsLibrary.MAX))
         Card(Modifier.fillMaxWidth().padding(Pad2)) {
-            if (st.library.isEmpty()) Text("合成一条就会出现在这里。用得多的一直留着，少用的自动清掉。",
+            if (st.library.isEmpty()) Text(tr("合成一条就会出现在这里。用得多的一直留着，少用的自动清掉。"),
                 Modifier.padding(16.dp), fontSize = 13.sp, color = Dim)
             st.library.forEach { e ->
                 val key = "lib:" + e.file.name
                 Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(e.preview, fontSize = 14.sp, maxLines = 2)
-                        Text("%s · %.1f 秒 · 用过 %d 次".format(RefFeatureStore.LABELS[e.emotion] ?: e.emotion, e.seconds, e.count),
+                        Text(tr("%s · %.1f 秒 · 用过 %d 次").format(RefFeatureStore.LABELS[e.emotion]?.let { tr(it) } ?: e.emotion, e.seconds, e.count),
                             fontSize = 11.sp, color = Dim)
                     }
                     IconButton(onClick = {
                         val was = clip.isPlaying(key); clip.toggle(ctx, key, e.file); if (!was) vm.touchLibrary(e)
-                    }) { Icon(if (clip.isPlaying(key)) MiuixIcons.Pause else MiuixIcons.Play, "试听") }
-                    TextButton("送麦", onClick = { clip.stop(); vm.touchLibrary(e); vm.sendFileToMic(e.file, e.preview) },
+                    }) { Icon(if (clip.isPlaying(key)) MiuixIcons.Pause else MiuixIcons.Play, tr("试听")) }
+                    TextButton(tr("送麦"), onClick = { clip.stop(); vm.touchLibrary(e); vm.sendFileToMic(e.file, e.preview) },
                         colors = ButtonDefaults.textButtonColorsPrimary())
-                    IconButton(onClick = { vm.deleteLibrary(e) }) { Icon(MiuixIcons.Delete, "删除", tint = Color(0xFFE5484D)) }
+                    IconButton(onClick = { vm.deleteLibrary(e) }) { Icon(MiuixIcons.Delete, tr("删除"), tint = Color(0xFFE5484D)) }
                 }
             }
         }

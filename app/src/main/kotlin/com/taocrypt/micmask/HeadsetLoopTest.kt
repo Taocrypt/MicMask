@@ -82,7 +82,7 @@ object HeadsetLoopTest {
         /** 外放组：实际输出设备名 */
         val speakerOutputDevice: String = "",
         /** 外放组结论 */
-        val speakerVerdict: String = "未测",
+        val speakerVerdict: String = tr("未测"),
     )
 
     private fun dbOf(rms: Double): Double =
@@ -143,7 +143,7 @@ object HeadsetLoopTest {
         val recorder = rec
             ?: return Result(
                 0.0, 0.0, 0.0, "", "", -1, 0,
-                "无法创建 AudioRecord（麦克风被占用？）", false
+                tr("无法创建 AudioRecord（麦克风被占用？）"), false
             )
 
         L.i("HeadsetLoopTest 录音就绪 source=$usedSource rate=$usedRate")
@@ -166,7 +166,7 @@ object HeadsetLoopTest {
                         it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
                         it.type == AudioDeviceInfo.TYPE_USB_HEADSET
                 }?.productName?.toString()
-        }.getOrNull() ?: "手机麦"
+        }.getOrNull() ?: tr("手机麦")
 
         val gain = loopDb - silent
 
@@ -211,16 +211,16 @@ object HeadsetLoopTest {
         var spSilent = 0.0
         var spLoop = 0.0
         var spGain = 0.0
-        var spVerdict = "未测"
+        var spVerdict = tr("未测")
         var spOut = ""
         runCatching {
             val (s0, s1, o1) = measureSpeakerLoop(ctx, wav)
             spSilent = s0; spLoop = s1; spOut = o1; spGain = s1 - s0
             spVerdict = when {
-                s0 > -20.0 -> "环境太吵（${"%.0f".format(s0)} dBFS），测不准"
-                spGain >= 10.0 -> "✅ 外放通路成立（+${"%.1f".format(spGain)} dB）—— 手机麦能收到扬声器"
-                spGain >= 5.0 -> "⚠️ 外放能收到但偏弱（+${"%.1f".format(spGain)} dB），需调大音量"
-                else -> "❌ 外放也收不到（${"%.1f".format(spGain)} dB）"
+                s0 > -20.0 -> tr("环境太吵（{0} dBFS），测不准", "%.0f".format(s0))
+                spGain >= 10.0 -> tr("✅ 外放通路成立（+{0} dB）—— 手机麦能收到扬声器", "%.1f".format(spGain))
+                spGain >= 5.0 -> tr("⚠️ 外放能收到但偏弱（+{0} dB），需调大音量", "%.1f".format(spGain))
+                else -> tr("❌ 外放也收不到（{0} dB）", "%.1f".format(spGain))
             }
             L.i("SpeakerLoop 结论=$spVerdict 输出=$spOut")
         }.onFailure { L.w("SpeakerLoop 实验失败：${it.message}") }
@@ -231,20 +231,20 @@ object HeadsetLoopTest {
         // 总判定看「耳机组 or 外放组」谁成立 —— 外放组才是主力路线
         val (verdict, ok) = when {
             silent > -20.0 ->
-                "环境太吵（静音基线 ${"%.0f".format(silent)} dBFS），测不准，请在安静处重测" to false
+                tr("环境太吵（静音基线 {0} dBFS），测不准，请在安静处重测", "%.0f".format(silent)) to false
             bestGain >= 6.0 ->
-                "✅ 回环成立（+${"%.1f".format(bestGain)} dB）" +
-                    (if ((scoGain ?: -999.0) > gain) "，且是**开了 SCO 之后**才有的" else "") +
-                    " —— 方案可用" to true
+                tr("✅ 回环成立（+{0} dB）", "%.1f".format(bestGain)) +
+                    (if ((scoGain ?: -999.0) > gain) tr("，且是**开了 SCO 之后**才有的") else "") +
+                    tr(" —— 方案可用") to true
             bestGain >= 3.0 ->
-                "⚠️ 有微弱回环（+${"%.1f".format(bestGain)} dB），可能音量太低" to false
+                tr("⚠️ 有微弱回环（+{0} dB），可能音量太低", "%.1f".format(bestGain)) to false
             spGain >= 5.0 ->
                 // 耳机组不通，但外放组通了 —— 这才是当前采用的方案
-                "耳机组不通（${"%.1f".format(bestGain)} dB），但**外放组成立**" +
-                    "（+${"%.1f".format(spGain)} dB，输出=$spOut）—— 走外放方案" to true
+                tr("耳机组不通（{0} dB），但**外放组成立**", "%.1f".format(bestGain)) +
+                    tr("（+{0} dB，输出={1}）—— 走外放方案", "%.1f".format(spGain), spOut) to true
             else ->
-                "❌ 耳机组与外放组都没测到回环（耳机组 ${"%.1f".format(gain)} dB / " +
-                    "外放组 ${"%.1f".format(spGain)} dB）" to false
+                tr("❌ 耳机组与外放组都没测到回环（耳机组 {0} dB / ", "%.1f".format(gain)) +
+                    tr("外放组 {0} dB）", "%.1f".format(spGain)) to false
         }
 
         L.i(
@@ -320,10 +320,10 @@ object HeadsetLoopTest {
                 try { a?.release() } catch (_: Exception) {}
             }
         }
-        val recorder = rec ?: return Triple(-140.0, -140.0, "无法建 AudioRecord")
+        val recorder = rec ?: return Triple(-140.0, -140.0, tr("无法建 AudioRecord"))
 
         var mp: MediaPlayer? = null
-        var outName = "未知"
+        var outName = tr("未知")
         try {
             // --- 静音基线 ---
             recorder.startRecording()
@@ -347,7 +347,7 @@ object HeadsetLoopTest {
             }
             Thread.sleep(400)
             outName = runCatching { mp.getRoutedDevice()?.productName?.toString() }.getOrNull()
-                ?: "未知"
+                ?: tr("未知")
 
             val loop = readEnergy(recorder, 3.0)
             L.i("SpeakerLoop 静音=${"%.1f".format(silent)} 播放=${"%.1f".format(loop)} " +
@@ -357,7 +357,7 @@ object HeadsetLoopTest {
             return Triple(silent, loop, outName)
         } catch (t: Throwable) {
             L.e("SpeakerLoop 失败", t)
-            return Triple(-140.0, -140.0, "失败：${t.message}")
+            return Triple(-140.0, -140.0, tr("失败：{0}", t.message))
         } finally {
             try { recorder.stop() } catch (_: Exception) {}
             try { recorder.release() } catch (_: Exception) {}
@@ -385,7 +385,7 @@ object HeadsetLoopTest {
         wav: File,
     ): Pair<Double, String> {
         var mp: MediaPlayer? = null
-        var outName = "未知"
+        var outName = tr("未知")
 
         try {
             mp = MediaPlayer().apply {
@@ -403,14 +403,14 @@ object HeadsetLoopTest {
             // 等通路建立再读设备名
             Thread.sleep(300)
             outName = runCatching { mp.getRoutedDevice()?.productName?.toString() }.getOrNull()
-                ?: "未知"
+                ?: tr("未知")
 
             rec.startRecording()
             val e = readEnergy(rec, 3.0)
             return e to outName
         } catch (t: Throwable) {
             L.e("HeadsetLoopTest 播放失败", t)
-            return -140.0 to "播放失败：${t.message}"
+            return -140.0 to tr("播放失败：{0}", t.message)
         } finally {
             try { mp?.stop() } catch (_: Exception) {}
             try { mp?.release() } catch (_: Exception) {}

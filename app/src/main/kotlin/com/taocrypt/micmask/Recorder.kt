@@ -83,7 +83,7 @@ class Recorder(private val ctx: Context) {
      */
     @SuppressLint("MissingPermission")
     fun start(): String? {
-        if (running) return "已经在录音了"
+        if (running) return tr("已经在录音了")
         chunks.clear()
         collected = 0
         peakAbs = 0f
@@ -131,18 +131,18 @@ class Recorder(private val ctx: Context) {
             }
         }
 
-        val rec = created ?: return "麦克风不可用（设备不支持所选采样率，或被其它应用占用）"
+        val rec = created ?: return tr("麦克风不可用（设备不支持所选采样率，或被其它应用占用）")
 
         try {
             rec.startRecording()
         } catch (t: Throwable) {
             try { rec.release() } catch (_: Exception) {}
             L.e("startRecording 失败", t)
-            return "无法开始录音：${t.message}"
+            return tr("无法开始录音：{0}", t.message)
         }
         if (rec.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
             try { rec.release() } catch (_: Exception) {}
-            return "麦克风没有真正启动，请检查是否被其它应用占用"
+            return tr("麦克风没有真正启动，请检查是否被其它应用占用")
         }
 
         record = rec

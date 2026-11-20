@@ -89,16 +89,16 @@ object SoundBoard {
                     } else if (AUDIO_EXT.containsMatchIn(base)) {
                         val f = File(work, "${files.size}_" + safe(base))
                         f.outputStream().use { o -> val b = ByteArray(1 shl 16); while (true) { val n = z.read(b); if (n < 0) break; total += n
-                            if (total > 300L shl 20) throw java.io.IOException("音效包过大"); o.write(b, 0, n) } }
+                            if (total > 300L shl 20) throw java.io.IOException(tr("音效包过大")); o.write(b, 0, n) } }
                         files[base] = f
                     }
                 }
             }
-            val m = manifest ?: throw IllegalArgumentException("音效包缺少 manifest.json")
-            if (m.optString("format", "mim3") != "mim3") throw IllegalArgumentException("不是 mim3 声明文件")
-            if (m.optInt("version", 1) > 1) throw IllegalArgumentException("音效包版本过新，请更新 MicMask")
+            val m = manifest ?: throw IllegalArgumentException(tr("音效包缺少 manifest.json"))
+            if (m.optString("format", "mim3") != "mim3") throw IllegalArgumentException(tr("不是 mim3 声明文件"))
+            if (m.optInt("version", 1) > 1) throw IllegalArgumentException(tr("音效包版本过新，请更新 MicMask"))
             val group = safe(m.optString("group").ifBlank { m.optString("name").ifBlank { fallbackName } })
-            require(group != PACK_LOCAL) { "分组名不能叫「本地」" }
+            require(group != PACK_LOCAL) { tr("分组名不能叫「本地」") }
             val list = m.optJSONArray("sounds")
             val pairs = ArrayList<Pair<File, String>>()
             if (list != null && list.length() > 0) {
@@ -108,9 +108,9 @@ object SoundBoard {
                     pairs += f to o.optString("name").ifBlank { fn.substringBeforeLast('.') }
                 }
             } else files.forEach { (k, f) -> pairs += f to k.substringBeforeLast('.') }
-            require(pairs.isNotEmpty()) { "音效包里没有音频" }
+            require(pairs.isNotEmpty()) { tr("音效包里没有音频") }
             val out = pairs.mapNotNull { (f, n) -> runCatching { importFile(ctx, f, group, n) }.onFailure { L.e("mim3 解码 $n 失败", it) }.getOrNull() }
-            require(out.isNotEmpty()) { "音效包里的音频都无法解码" }
+            require(out.isNotEmpty()) { tr("音效包里的音频都无法解码") }
             runCatching {
                 val meta = org.json.JSONObject().put("group", group).put("author", m.optString("author")).put("description", m.optString("description"))
                     .put("created", m.optString("created")).put("version", m.optInt("version", 1))
@@ -140,8 +140,8 @@ object SoundBoard {
 
     /** 把选中的音频原样（不转码）打包成 .mim3，写到 下载/MicMask/<分组>.mim3，返回路径 */
     fun buildMim3(ctx: Context, group: String, author: String, desc: String, items: List<PackItem>): String {
-        val g = safe(group); require(g != PACK_LOCAL) { "分组名不能叫「本地」" }
-        require(items.isNotEmpty()) { "至少选一个音频" }
+        val g = safe(group); require(g != PACK_LOCAL) { tr("分组名不能叫「本地」") }
+        require(items.isNotEmpty()) { tr("至少选一个音频") }
         val used = HashSet<String>()
         val arr = org.json.JSONArray()
         val entries = items.map { it ->
@@ -155,7 +155,7 @@ object SoundBoard {
             .put("app", "MicMask " + BuildConfig.VERSION_NAME).put("sounds", arr)
         val name = writeMim3(ctx, g, m, entries.map { (fn, u) -> fn to { z: java.io.OutputStream -> ctx.contentResolver.openInputStream(u)!!.use { it.copyTo(z) }; Unit } })
         L.i("mim3 打包 分组=$g 作者=$author 共 ${entries.size} 个 → 下载/MicMask/$name")
-        return "下载/MicMask/$name"
+        return tr("下载/MicMask/{0}", name)
     }
 
     /** 写 .mim3（zip）到 下载/MicMask/，返回实际文件名 */
@@ -166,7 +166,7 @@ object SoundBoard {
             put(android.provider.MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
             put(android.provider.MediaStore.Downloads.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS + "/MicMask")
         }
-        val out = ctx.contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv) ?: throw IllegalStateException("无法在下载目录创建文件")
+        val out = ctx.contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv) ?: throw IllegalStateException(tr("无法在下载目录创建文件"))
         try {
             ctx.contentResolver.openOutputStream(out)!!.use { os ->
                 java.util.zip.ZipOutputStream(os).use { z ->
@@ -182,7 +182,7 @@ object SoundBoard {
     /** 把已导入的一个分组导出成 .mim3（音频以 48k 单声道 WAV 存放），返回路径 */
     fun exportGroup(ctx: Context, group: String, author: String = "", desc: String = ""): String {
         val list = list(ctx).filter { it.pack == group }
-        require(list.isNotEmpty()) { "这个分组是空的" }
+        require(list.isNotEmpty()) { tr("这个分组是空的") }
         val info = packInfo(ctx, group)
         val arr = org.json.JSONArray()
         val used = HashSet<String>()
@@ -205,7 +205,7 @@ object SoundBoard {
             .put("app", "MicMask " + BuildConfig.VERSION_NAME).put("sounds", arr)
         val name = writeMim3(ctx, safe(g), m, entries)
         L.i("mim3 导出 分组=$group 共 ${entries.size} 个 → 下载/MicMask/$name")
-        return "下载/MicMask/$name"
+        return tr("下载/MicMask/{0}", name)
     }
 
     /** 音效包里已有的分组（用于「添加音效」选择分组） */
@@ -252,7 +252,7 @@ object SoundBoard {
     }
 
     private fun save(ctx: Context, pack: String, name: String, pcm: ShortArray): Sound {
-        require(pcm.size > SR / 20) { "解码后没有声音" }
+        require(pcm.size > SR / 20) { tr("解码后没有声音") }
         val d = File(dir(ctx), safe(pack)).also { it.mkdirs() }
         var f = File(d, "$name.pcm"); var k = 2
         while (f.exists()) f = File(d, "$name ($k).pcm").also { k++ }
@@ -277,7 +277,7 @@ object SoundBoard {
         if (fd != null) ex.setDataSource(fd) else ex.setDataSource(path!!)
         try {
             val ti = (0 until ex.trackCount).firstOrNull { ex.getTrackFormat(it).getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true }
-                ?: throw IllegalArgumentException("不是音频文件")
+                ?: throw IllegalArgumentException(tr("不是音频文件"))
             ex.selectTrack(ti)
             val inFmt = ex.getTrackFormat(ti)
             val codec = MediaCodec.createDecoderByType(inFmt.getString(MediaFormat.KEY_MIME)!!)

@@ -1,5 +1,7 @@
 package com.taocrypt.micmask.update
 
+import com.taocrypt.micmask.tr
+
 import com.taocrypt.micmask.R
 import com.taocrypt.micmask.Prefs
 
@@ -120,7 +122,7 @@ object Updater {
     }
 
     fun mirrorUrl(base: String?, gh: String) = if (base == null) gh else base.trimEnd('/') + "/" + gh
-    private fun nameOf(base: String?) = if (base == null) "GitHub 直连" else (Uri.parse(base).host ?: base)
+    private fun nameOf(base: String?) = if (base == null) tr("GitHub 直连") else (Uri.parse(base).host ?: base)
 
     // ---------------------------------------------------------------- 版本比较
     /** "v2.0-alpha15" → [2,0,0,stage,15]；alpha<beta<rc<正式 */
@@ -159,7 +161,7 @@ object Updater {
         try {
             val code = c.responseCode
             if (code != 200) throw HttpFail(code, "HTTP $code")
-            if (c.contentType?.startsWith("text/html") == true) throw HttpFail(0, "返回网页而不是数据")
+            if (c.contentType?.startsWith("text/html") == true) throw HttpFail(0, tr("返回网页而不是数据"))
             return c.inputStream.bufferedReader().readText()
         } finally { c.disconnect() }
     }
@@ -213,8 +215,8 @@ object Updater {
 
     private suspend fun fetchRelease(ctx: Context): Release {
         val beta = betaChannel(ctx)
-        val noStable = Exception("还没有发布稳定版，可在设置里切到测试版")
-        var last: Exception = Exception("网络不通")
+        val noStable = Exception(tr("还没有发布稳定版，可在设置里切到测试版"))
+        var last: Exception = Exception(tr("网络不通"))
         try {
             val arr = JSONArray(getText(API_LIST, 8000, "application/vnd.github+json"))
             val rs = (0 until arr.length()).map { arr.getJSONObject(it) }
@@ -222,16 +224,16 @@ object Updater {
                 .map { fromApi(it) }.filter { it.tag.isNotEmpty() && (beta || !isPre(it.tag)) }
             val best = rs.maxWithOrNull { a, b -> if (isNewer(a.tag, b.tag)) 1 else if (isNewer(b.tag, a.tag)) -1 else 0 }
             if (best != null) return best
-            if (arr.length() > 0) throw if (beta) Exception("暂无公开发布版本") else noStable
-            throw Exception("暂无公开发布版本")
+            if (arr.length() > 0) throw if (beta) Exception(tr("暂无公开发布版本")) else noStable
+            throw Exception(tr("暂无公开发布版本"))
         } catch (e: HttpFail) {
-            last = if (e.code == 403 || e.code == 429) Exception("GitHub 请求太频繁") else e
+            last = if (e.code == 403 || e.code == 429) Exception(tr("GitHub 请求太频繁")) else e
         } catch (e: org.json.JSONException) { last = e
         } catch (e: java.io.IOException) { last = e }
         L.i("更新：GitHub API 不通（${last.message}），改走通道清单（${if (beta) "测试版" else "稳定版"}）")
         // 测试版：先读通道清单，旧发布没有清单时退回 latest 的 update.json
         val urls = listOf(feedJson(beta)) + if (beta) listOf(UPDATE_JSON) else emptyList()
-        fun parse(t: String) = fromUpdateJson(JSONObject(t)).also { if (it.tag.isEmpty()) throw Exception("清单为空") }
+        fun parse(t: String) = fromUpdateJson(JSONObject(t)).also { if (it.tag.isEmpty()) throw Exception(tr("清单为空")) }
         val users = userMirrors(ctx)
         for (u in urls) for (m in users + listOf<String?>(null)) {
             try { return parse(getText(mirrorUrl(m, u), 6000)) }
@@ -241,7 +243,7 @@ object Updater {
         if (mode(ctx) == 1) throw last
         val ms = mirrorCandidates(ctx)
         for (u in urls) firstOf(ms.map { m -> suspend { parse(getText(mirrorUrl(m, u), 8000)) } })?.let { return it }
-        throw if (last === noStable) noStable else Exception("GitHub 和镜像都连不上")
+        throw if (last === noStable) noStable else Exception(tr("GitHub 和镜像都连不上"))
     }
 
     /** 检查更新；[silent]=启动时自动检查：只在有新版且没被跳过（或强制）时弹框 */
@@ -260,7 +262,7 @@ object Updater {
                 } else State.Latest(r.tag)
             } catch (e: Exception) {
                 L.w("更新：检查失败 ${e.message}")
-                State.Fail(e.message ?: "检查失败")
+                State.Fail(e.message ?: tr("检查失败"))
             }
         }
     }
@@ -317,7 +319,7 @@ object Updater {
     // ---------------------------------------------------------------- 下载与安装
     fun download(ctx: Context, r: Release) {
         val app = ctx.applicationContext
-        val asset = r.apk() ?: run { _state.value = State.Fail("这个版本没有安卓安装包"); return }
+        val asset = r.apk() ?: run { _state.value = State.Fail(tr("这个版本没有安卓安装包")); return }
         if (dlJob?.isActive == true) return
         dlJob = scope.launch {
             val dir = File(app.cacheDir, "updates").apply { mkdirs() }
@@ -325,9 +327,9 @@ object Updater {
             val file = File(dir, asset.name)
             if (asset.size > 0 && file.length() == asset.size) { done(app, r, file); return@launch }
             noteText = Triple("", 0L, asset.size); noteBps = 0.0
-            _state.value = State.Downloading(r, 0, asset.size, "测速中…", 0.0)
+            _state.value = State.Downloading(r, 0, asset.size, tr("测速中…"), 0.0)
             UpdateService.start(app)
-            var err = "下载失败"
+            var err = tr("下载失败")
             for (b in plan(app, asset.url)) {
                 ensureActive()
                 val name = nameOf(b)
@@ -358,9 +360,9 @@ object Updater {
         try {
             val code = c.responseCode
             if (code != 200) throw Exception("HTTP $code")
-            if (c.contentType?.startsWith("text/html") == true) throw Exception("返回了网页")
+            if (c.contentType?.startsWith("text/html") == true) throw Exception(tr("返回了网页"))
             val len = c.contentLengthLong
-            if (size > 0 && len > 0 && len != size) throw Exception("大小不对 $len")
+            if (size > 0 && len > 0 && len != size) throw Exception(tr("大小不对 {0}", len))
             val total = if (len > 0) len else size
             var got = 0L; val t0 = System.nanoTime(); var lastUi = 0L
             c.inputStream.use { ins -> part.outputStream().use { out ->
@@ -373,8 +375,8 @@ object Updater {
                     if (now - lastUi > 500_000_000L) { lastUi = now; onProg(got, total, got / ((now - t0) / 1e9).coerceAtLeast(1e-3)) }
                 }
             } }
-            if (total > 0 && got != total) throw Exception("没下完")
-            file.delete(); if (!part.renameTo(file)) throw Exception("保存失败")
+            if (total > 0 && got != total) throw Exception(tr("没下完"))
+            file.delete(); if (!part.renameTo(file)) throw Exception(tr("保存失败"))
         } finally { c.disconnect(); part.delete() }
     }
 
@@ -403,7 +405,7 @@ object Updater {
     // ---------------------------------------------------------------- 通知
     private fun nm(ctx: Context): NotificationManager {
         val nm = ctx.getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(NotificationChannel(CH, "应用更新", NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) })
+        nm.createNotificationChannel(NotificationChannel(CH, tr("应用更新"), NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) })
         return nm
     }
 
@@ -423,14 +425,14 @@ object Updater {
         val tag = (state.value as? State.Downloading)?.r?.tag ?: ""
         val (src, got, total) = noteText
         val pct = if (total > 0) (got * 100 / total).toInt() else 0
-        val text = if (got <= 0) "准备下载…" else "$pct% · ${fmtMb(got)}/${fmtMb(total)} · ${fmtSpeed(noteBps)}" + if (src.isNotEmpty()) " · $src" else ""
+        val text = if (got <= 0) tr("准备下载…") else "$pct% · ${fmtMb(got)}/${fmtMb(total)} · ${fmtSpeed(noteBps)}" + if (src.isNotEmpty()) " · $src" else ""
         return NotificationCompat.Builder(ctx, CH).setSmallIcon(R.drawable.ic_notify)
-            .setContentTitle("正在下载 MicMask $tag").setContentText(text)
+            .setContentTitle(tr("正在下载 MicMask {0}", tag)).setContentText(text)
             .setOnlyAlertOnce(true).setOngoing(true).setSilent(true).setShowWhen(false)
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setProgress(100, pct, total <= 0 || got <= 0).setContentIntent(openApp(ctx))
-            .addAction(0, "取消", cancelIntent(ctx)).build()
+            .addAction(0, tr("取消"), cancelIntent(ctx)).build()
     }
 
     private fun progressNote(ctx: Context, @Suppress("UNUSED_PARAMETER") tag: String, got: Long, total: Long, src: String) = runCatching {
@@ -445,12 +447,12 @@ object Updater {
     private fun doneNote(ctx: Context, tag: String) = runCatching {
         nm(ctx).cancel(NID)
         nm(ctx).notify(NID_DONE, NotificationCompat.Builder(ctx, CH).setSmallIcon(R.drawable.ic_notify)
-            .setContentTitle("MicMask $tag 下载完成").setContentText("点击安装").setAutoCancel(true).setContentIntent(openApp(ctx)).build())
+            .setContentTitle(tr("MicMask {0} 下载完成", tag)).setContentText(tr("点击安装")).setAutoCancel(true).setContentIntent(openApp(ctx)).build())
     }
 
     private fun failNote(ctx: Context, tag: String, err: String) = runCatching {
         nm(ctx).notify(NID_DONE, NotificationCompat.Builder(ctx, CH).setSmallIcon(R.drawable.ic_notify)
-            .setContentTitle("MicMask $tag 下载失败").setContentText(err).setAutoCancel(true).setContentIntent(openApp(ctx)).build())
+            .setContentTitle(tr("MicMask {0} 下载失败", tag)).setContentText(err).setAutoCancel(true).setContentIntent(openApp(ctx)).build())
     }
 
     private fun cancelNote(ctx: Context) = runCatching { nm(ctx).cancel(NID) }

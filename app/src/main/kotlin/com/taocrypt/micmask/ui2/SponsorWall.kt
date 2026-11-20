@@ -1,5 +1,7 @@
 package com.taocrypt.micmask.ui2
 
+import com.taocrypt.micmask.tr
+
 import com.taocrypt.micmask.Prefs
 
 import android.content.Context
@@ -114,29 +116,29 @@ fun SponsorWall() {
     LaunchedEffect(Unit) { val d = loadSponsors(ctx); if (d != null) doc = d else failed = true }
     val summary = MiuixTheme.colorScheme.onSurfaceVariantSummary
 
-    SmallTitle("赞赏墙")
+    SmallTitle(tr("赞赏墙"))
     Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
         val d = doc
         if (d == null || d.list.isEmpty()) {
-            Text(if (d == null) (if (failed) "名单暂时无法加载，稍后再看" else "名单加载中…") else "还没有赞助者，成为第一位吧",
+            Text(if (d == null) (if (failed) tr("名单暂时无法加载，稍后再看") else tr("名单加载中…")) else tr("还没有赞助者，成为第一位吧"),
                 fontSize = 13.sp, color = summary, modifier = Modifier.padding(16.dp))
             return@Card
         }
-        Text("${d.count} 位赞助者 · 累计 ${yuan(d.total)}，谢谢你们！", fontSize = 13.sp, color = summary,
+        Text(tr("{0} 位赞助者 · 累计 {1}，谢谢你们！", d.count, yuan(d.total)), fontSize = 13.sp, color = summary,
             modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 4.dp))
         // 按爱发电赞助期限分两栏：在期的在上，过期的进「历史赞助」（金额累计、排序不变）
         val cur = d.list.filter { it.active }; val past = d.list.filterNot { it.active }
         @Composable fun head(t: String) = Text(t, fontSize = 12.sp, color = summary, fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 2.dp))
-        head("当前赞助 ${cur.size}")
-        if (cur.isEmpty()) Text("暂时没有在期的赞助", fontSize = 13.sp, color = summary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
+        head(tr("当前赞助 {0}", cur.size))
+        if (cur.isEmpty()) Text(tr("暂时没有在期的赞助"), fontSize = 13.sp, color = summary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
         cur.forEachIndexed { i, s -> SponsorRow(i + 1, s) }
         if (past.isNotEmpty()) {
-            head("历史赞助 ${past.size}")
+            head(tr("历史赞助 {0}", past.size))
             val shown = if (showAll) past else past.take(20)
             shown.forEach { s -> SponsorRow(99, s) }
             if (past.size > 20) {
-                TextButton(text = if (showAll) "收起" else "查看全部 ${past.size} 位", onClick = { showAll = !showAll },
+                TextButton(text = if (showAll) tr("收起") else tr("查看全部 {0} 位", past.size), onClick = { showAll = !showAll },
                     modifier = Modifier.fillMaxWidth().padding(12.dp))
             } else Spacer(Modifier.size(8.dp))
         } else Spacer(Modifier.size(8.dp))

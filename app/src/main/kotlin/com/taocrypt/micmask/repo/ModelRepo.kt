@@ -1,5 +1,7 @@
 package com.taocrypt.micmask.repo
 
+import com.taocrypt.micmask.tr
+
 import android.content.Context
 import com.taocrypt.micmask.L
 import com.taocrypt.micmask.ModelStore
@@ -83,7 +85,7 @@ object ModelRepo {
     /** 下载到的是 Git LFS 指针而不是文件本体 */
     private fun checkLfs(f: File) {
         if (f.length() in 1..1024 && f.readText(Charsets.UTF_8).startsWith("version https://git-lfs"))
-            throw java.io.IOException("${f.name} 在仓库里是 LFS 指针，raw 地址拿不到本体；请把这个文件放到 Release 附件，清单里写绝对地址")
+            throw java.io.IOException(tr("{0} 在仓库里是 LFS 指针，raw 地址拿不到本体；请把这个文件放到 Release 附件，清单里写绝对地址", f.name))
     }
 
     private fun open(url: String): HttpURLConnection {
@@ -96,13 +98,13 @@ object ModelRepo {
             }
             val code = c.responseCode
             if (code in 300..399) {
-                val loc = c.getHeaderField("Location") ?: throw java.io.IOException("重定向无地址")
+                val loc = c.getHeaderField("Location") ?: throw java.io.IOException(tr("重定向无地址"))
                 c.disconnect(); u = URL(u, loc); return@repeat
             }
             if (code != 200) { c.disconnect(); throw java.io.IOException("HTTP $code：$u") }
             return c
         }
-        throw java.io.IOException("重定向次数过多")
+        throw java.io.IOException(tr("重定向次数过多"))
     }
 
     /**
@@ -112,7 +114,7 @@ object ModelRepo {
     fun fetchAll(inputs: List<String>): Manifest {
         val ok = ArrayList<Manifest>(); val err = ArrayList<String>()
         for (u in inputs) runCatching { fetch(u).let { m -> m.copy(models = m.models.map { it.copy(repo = u) }) } }.onSuccess { ok += it }.onFailure {
-            L.w("模型仓库 $u 获取失败：${it.message}"); err += (u.substringAfter("://").take(40) + "：" + (it.message ?: "未知错误"))
+            L.w("模型仓库 $u 获取失败：${it.message}"); err += (u.substringAfter("://").take(40) + "：" + (it.message ?: tr("未知错误")))
         }
         if (ok.isEmpty()) throw java.io.IOException(err.joinToString("；"))
         fun <T, K> merge(sel: (Manifest) -> List<T>, key: (T) -> K) = ok.flatMap(sel).distinctBy(key)
@@ -122,7 +124,7 @@ object ModelRepo {
 
     fun fetch(repoInput: String): Manifest {
         val mu = manifestUrl(repoInput)
-        require(mu.isNotEmpty()) { "还没填模型仓库地址" }
+        require(mu.isNotEmpty()) { tr("还没填模型仓库地址") }
         val text = open(mu).let { c -> c.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }.also { c.disconnect() } }
         val root = JSONObject(text)
         val baseDir = mu.substringBeforeLast('/') + "/"
@@ -171,7 +173,7 @@ object ModelRepo {
         for (f in need) {
             val okName = f.name == f.name.substringAfterLast('/') &&
                 (f.name in ModelStore.required || f.name in ModelStore.optional || ModelStore.VOICE_RE.matches(f.name))
-            require(okName) { "清单里的文件名不合法：${f.name}" }
+            require(okName) { tr("清单里的文件名不合法：{0}", f.name) }
         }
         val total = need.sumOf { it.size }.coerceAtLeast(1L)
         var done = 0L
@@ -192,10 +194,10 @@ object ModelRepo {
             checkLfs(tmp)
             val hex = md.digest().joinToString("") { "%02x".format(it) }
             if (f.sha256.isNotEmpty() && hex != f.sha256.lowercase()) {
-                tmp.delete(); throw java.io.IOException("${f.name} 校验失败（sha256 不符）")
+                tmp.delete(); throw java.io.IOException(tr("{0} 校验失败（sha256 不符）", f.name))
             }
             dst.delete()
-            if (!tmp.renameTo(dst)) throw java.io.IOException("改名失败：${f.name}")
+            if (!tmp.renameTo(dst)) throw java.io.IOException(tr("改名失败：{0}", f.name))
             ModelStore.externalDir(ctx).let { File(it, f.name).delete() }
             L.i("仓库下载完成 ${f.name} ${dst.length() / 1048576}MB")
         }
@@ -204,8 +206,8 @@ object ModelRepo {
 
     /** 下载文件变声（句级）模型：合成器 + 索引 + 缺失的基础文件 */
     fun downloadFileModel(ctx: Context, man: Manifest, progress: (Float, String) -> Unit) {
-        require(man.file.isNotEmpty()) { "仓库里没有句级模型" }
-        download(ctx, man, RModel("file", "句级模型", "", "", "", man.file), progress)
+        require(man.file.isNotEmpty()) { tr("仓库里没有句级模型") }
+        download(ctx, man, RModel("file", tr("句级模型"), "", "", "", man.file), progress)
     }
 
     /** TTS 文件名白名单（含 ref/ 子目录），防止清单写出奇怪路径 */
@@ -213,8 +215,8 @@ object ModelRepo {
 
     /** 下载全部 TTS 文件到 [dst]（缺的、大小或校验不符的才下）。 */
     fun downloadTts(man: Manifest, dst: File, progress: (Float, String) -> Unit) {
-        require(man.tts.isNotEmpty()) { "仓库里没有 TTS 模型" }
-        man.tts.forEach { require(TTS_RE.matches(it.path)) { "清单里的 TTS 路径不合法：${it.path}" } }
+        require(man.tts.isNotEmpty()) { tr("仓库里没有 TTS 模型") }
+        man.tts.forEach { require(TTS_RE.matches(it.path)) { tr("清单里的 TTS 路径不合法：{0}", it.path) } }
         val total = man.ttsSize.coerceAtLeast(1L)
         var done = 0L
         for (f in man.tts) {
@@ -232,9 +234,9 @@ object ModelRepo {
             }
             checkLfs(tmp)
             val hex = md.digest().joinToString("") { "%02x".format(it) }
-            if (f.sha256.isNotEmpty() && hex != f.sha256.lowercase()) { tmp.delete(); throw java.io.IOException("${f.path} 校验失败（sha256 不符）") }
+            if (f.sha256.isNotEmpty() && hex != f.sha256.lowercase()) { tmp.delete(); throw java.io.IOException(tr("{0} 校验失败（sha256 不符）", f.path)) }
             out.delete()
-            if (!tmp.renameTo(out)) throw java.io.IOException("改名失败：${f.path}")
+            if (!tmp.renameTo(out)) throw java.io.IOException(tr("改名失败：{0}", f.path))
             L.i("TTS 下载完成 ${f.path} ${out.length() / 1048576}MB")
         }
         progress(1f, "")
@@ -248,12 +250,12 @@ object ModelRepo {
         try { c.inputStream.use { ins -> tmp.outputStream().use { out ->
             val b = ByteArray(1 shl 16); var tot = 0L
             while (true) { val n = ins.read(b); if (n < 0) break; out.write(b, 0, n); md.update(b, 0, n); tot += n
-                if (tot > 200L shl 20) throw java.io.IOException("素材过大") }
+                if (tot > 200L shl 20) throw java.io.IOException(tr("素材过大")) }
         } } } finally { c.disconnect() }
         try {
             checkLfs(tmp)
             val hex = md.digest().joinToString("") { "%02x".format(it) }
-            if (s.sha256.isNotEmpty() && hex != s.sha256.lowercase()) throw java.io.IOException("${s.name} 校验失败")
+            if (s.sha256.isNotEmpty() && hex != s.sha256.lowercase()) throw java.io.IOException(tr("{0} 校验失败", s.name))
             return if (tmp.name.endsWith(".mim3", true)) com.taocrypt.micmask.SoundBoard.importMim3(ctx, tmp, s.name).first()
                    else com.taocrypt.micmask.SoundBoard.importFile(ctx, tmp, s.pack, s.name)
         } finally { tmp.delete() }
@@ -273,7 +275,7 @@ object ModelRepo {
                             if (first) {
                                 first = false
                                 if (n >= 23 && String(buf, 0, 23, Charsets.UTF_8) == "version https://git-lfs")
-                                    throw java.io.IOException("${tmp.name.removeSuffix(".part")} 下到的是 LFS 指针，仓库里这个对象还没上传")
+                                    throw java.io.IOException(tr("{0} 下到的是 LFS 指针，仓库里这个对象还没上传", tmp.name.removeSuffix(".part")))
                             }
                             out.write(buf, 0, n); md.update(buf, 0, n); onBytes(n)
                         }

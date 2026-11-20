@@ -97,7 +97,7 @@ class TtsEngine(private val assetsDir: File, private val modelDir: File) {
     )
 
     fun load(threads: Int = 4): String {
-        require(frontend == null) { "已加载" }
+        require(frontend == null) { tr("已加载") }
         val e = OrtEnvironment.getEnvironment()
         env = e
         val o = OrtSession.SessionOptions()
@@ -164,7 +164,7 @@ class TtsEngine(private val assetsDir: File, private val modelDir: File) {
             for (i in out.indices) out[i] = buf[i]
             out
         }
-        else -> error("不支持的输出类型：${v?.javaClass?.name}")
+        else -> error(tr("不支持的输出类型：{0}", v?.javaClass?.name))
     }
 
     /**
@@ -281,7 +281,7 @@ class TtsEngine(private val assetsDir: File, private val modelDir: File) {
                 else -> f32(asF(v), shape)
             }
         }
-        else -> error("toTensor 不支持的类型：${v?.javaClass?.name}")
+        else -> error(tr("toTensor 不支持的类型：{0}", v?.javaClass?.name))
     }
 
     /** 沿第一维下钻到底，取出第一个叶子数组（用来判断元素类型）。 */
@@ -329,7 +329,7 @@ class TtsEngine(private val assetsDir: File, private val modelDir: File) {
         noiseSeed: Long? = null,
         onStep: ((Int) -> Unit)? = null,
     ): Pair<FloatArray, Timings> {
-        val fe = frontend ?: error("未加载")
+        val fe = frontend ?: error(tr("未加载"))
         val t = Timings()
         val tAll = System.currentTimeMillis()
 
@@ -347,11 +347,11 @@ class TtsEngine(private val assetsDir: File, private val modelDir: File) {
             val han = text.count { it in '\u4e00'..'\u9fff' }
             throw IllegalStateException(
                 if (han == 0) {
-                    "文本里没有一个汉字（共 ${text.length} 个字符）。" +
-                        "端侧 G2P 只支持中文，英文/数字/emoji 会被丢掉 —— 请改成中文再合成。"
+                    tr("文本里没有一个汉字（共 {0} 个字符）。", text.length) +
+                        tr("端侧 G2P 只支持中文，英文/数字/emoji 会被丢掉 —— 请改成中文再合成。")
                 } else {
-                    "文本 G2P 后为空（含 $han 个汉字却没产出音素）。" +
-                        "可能是生僻字或全角符号过多，试着换一种写法。"
+                    tr("文本 G2P 后为空（含 {0} 个汉字却没产出音素）。", han) +
+                        tr("可能是生僻字或全角符号过多，试着换一种写法。")
                 }
             )
         }
@@ -555,7 +555,7 @@ class TtsEngine(private val assetsDir: File, private val modelDir: File) {
             // 不再静默降级：全零 BERT 会让音质明显变差且与 PC 基准对不上，
             // 却没有任何报错线索。这里直接抛出，让上层看到真实原因。
             L.e("$TAG BERT 推理失败", e)
-            throw IllegalStateException("BERT 推理失败：${e.message}", e)
+            throw IllegalStateException(tr("BERT 推理失败：{0}", e.message), e)
         }
     }
 
@@ -594,7 +594,7 @@ class TtsEngine(private val assetsDir: File, private val modelDir: File) {
         // logits 形状 [*, 1025]；AR 每步只有 1 行
         val n = VOCAB
         val base = logitsIn.size - n
-        require(base >= 0) { "logits 长度 ${logitsIn.size} 小于词表 $n" }
+        require(base >= 0) { tr("logits 长度 {0} 小于词表 {1}", logitsIn.size, n) }
         val logits = FloatArray(n)
         for (i in 0 until n) logits[i] = logitsIn[base + i]
 
