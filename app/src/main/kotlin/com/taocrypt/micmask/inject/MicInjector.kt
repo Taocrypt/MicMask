@@ -89,14 +89,21 @@ object MicInjector {
 
     fun shizukuRunning(): Boolean = runCatching { Shizuku.pingBinder() }.getOrDefault(false)
 
-    fun shizukuGranted(): Boolean = runCatching {
+    /** 用户在设置里选了「普通模式」：即使 Shizuku 已授权，也按外放模式工作 */
+    @Volatile var forceNormal = false
+
+    /** 变声是否走 Shizuku 注入（已授权且用户没选普通模式） */
+    fun shizukuGranted(): Boolean = !forceNormal && shizukuPermitted()
+
+    /** Shizuku 本身是否已授权（不看用户选的模式；音频还原/自检/授权页用） */
+    fun shizukuPermitted(): Boolean = runCatching {
         shizukuRunning() && !Shizuku.isPreV11() &&
             Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
     }.getOrDefault(false)
 
     fun requestShizuku(onResult: (Boolean) -> Unit) {
         if (!shizukuRunning()) { onResult(false); return }
-        if (shizukuGranted()) { onResult(true); return }
+        if (shizukuPermitted()) { onResult(true); return }
         val l = object : Shizuku.OnRequestPermissionResultListener {
             override fun onRequestPermissionResult(requestCode: Int, grantResult: Int) {
                 if (requestCode != REQ_CODE) return
@@ -132,7 +139,7 @@ object MicInjector {
 
     private fun ensureBound(ctx: Context, then: () -> Unit) {
         if (binder?.pingBinder() == true) { then(); return }
-        if (!shizukuGranted()) {
+        if (!shizukuPermitted()) {
             setPhase(Phase.ERROR, if (shizukuRunning()) "还没授权 Shizuku" else "Shizuku 没有运行")
             return
         }
@@ -507,7 +514,7 @@ object MicInjector {
         if (app.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             done("自检需要录音权限，先在「变声」页录一次音授权"); return
         }
-        if (!shizukuGranted()) { done(if (shizukuRunning()) "还没授权 Shizuku" else "Shizuku 没有运行"); return }
+        if (!shizukuPermitted()) { done(if (shizukuRunning()) "还没授权 Shizuku" else "Shizuku 没有运行"); return }
         main.postDelayed({ if (binder == null) done("注入服务 10 秒没连上（Shizuku 拉起失败）") }, 10_000)
         ensureBound(app) {
             Thread {

@@ -178,6 +178,8 @@ data class UiState(
     val dlName: String = "",
     /** 外放模式：没有 Shizuku 授权时，变声与语音包改为扬声器外放，声卡禁用 */
     val speakerMode: Boolean = false,
+    /** 用户选了普通模式（不走 Shizuku） */
+    val forceNormal: Boolean = false,
     /** 录播（外放模式）：转换中 / 进度 / 结果 */
     val clipBusy: Boolean = false,
     val clipStage: String = "",
@@ -281,6 +283,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val prefs = Prefs.main(ctx)
 
     init {
+        com.taocrypt.micmask.inject.MicInjector.forceNormal = prefs.getBoolean("force_normal", false)
+        _state.value = _state.value.copy(forceNormal = com.taocrypt.micmask.inject.MicInjector.forceNormal)
+        // Toast 由 ViewModel 直接用系统 Toast 弹出：App 在后台（悬浮窗操作）时也能看到
+        viewModelScope.launch {
+            _state.collect { st -> st.toast?.let { msg ->
+                android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_SHORT).show()
+                _state.value = _state.value.copy(toast = null)
+            } }
+        }
         _state.value = _state.value.copy(liveAec = ctx.getSharedPreferences("live", 0).getBoolean("aec", true), liveBench = "",
             repos = loadRepos(ctx), repoUrl = loadRepos(ctx).firstOrNull { it.on }?.url ?: DEFAULT_REPO)
         refreshVoices()
@@ -610,7 +621,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val inj = com.taocrypt.micmask.inject.MicInjector
         val txt = when {
             !inj.shizukuRunning() -> "Shizuku 未运行（先装 Shizuku 并用无线调试启动）"
-            !inj.shizukuGranted() -> "Shizuku 已运行，未授权本 App"
+            !inj.shizukuPermitted() -> "Shizuku 已运行，未授权本 App"
             else -> "Shizuku 已授权" + (if (inj.binder != null) "，注入服务：" + inj.ping() else "")
         }
         val uids = _state.value.qqInjectTarget.split(',', ' ', ';').filter { it.isNotBlank() }
@@ -1448,6 +1459,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _state.value = _state.value.copy(qqSelfTesting = false, qqSelfTest = r)
             refreshInjectState()
         }
+    }
+
+    /** 设置页权限模式：true=普通模式（扬声器外放/录播），false=Shizuku 实时注入 */
+    fun setNormalMode(normal: Boolean) {
+        if (com.taocrypt.micmask.inject.MicInjector.liveOn || _state.value.liveOn) { toast("请先关闭变声，再切换模式"); return }
+        prefs.edit().putBoolean("force_normal", normal).apply()
+        com.taocrypt.micmask.inject.MicInjector.forceNormal = normal
+        _state.value = _state.value.copy(forceNormal = normal)
+        L.i("UI 权限模式 → ${if (normal) "普通" else "Shizuku"}")
+        if (!normal && !com.taocrypt.micmask.inject.MicInjector.shizukuPermitted()) requestShizuku() else refreshInjectState()
     }
 
     fun requestShizuku() {

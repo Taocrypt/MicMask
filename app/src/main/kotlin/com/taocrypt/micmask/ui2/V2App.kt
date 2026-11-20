@@ -163,7 +163,8 @@ private class UiPrefs(ctx: Context) {
     var monet by mutableStateOf(sp.getBoolean("monet", true))
     var key by mutableIntStateOf(sp.getInt("key", 0))
     var glass by mutableStateOf(sp.getBoolean("glass", true))
-    fun save() = sp.edit().putInt("mode", mode).putBoolean("monet", monet).putInt("key", key).putBoolean("glass", glass).apply()
+    var oled by mutableStateOf(sp.getBoolean("oled", false))     // 深色时背景纯黑
+    fun save() = sp.edit().putInt("mode", mode).putBoolean("monet", monet).putInt("key", key).putBoolean("glass", glass).putBoolean("oled", oled).apply()
     fun controller(): ThemeController {
         val m = when (mode) {
             1 -> if (monet) ColorSchemeMode.MonetLight else ColorSchemeMode.Light
@@ -175,13 +176,27 @@ private class UiPrefs(ctx: Context) {
     }
 }
 
+/** 深色 + 纯黑开启时，把背景/表面换成 #000，卡片用极深灰保持层次（OLED 省电） */
+@Composable
+private fun OledTheme(controller: ThemeController, oled: Boolean, content: @Composable () -> Unit) {
+    MiuixTheme(controller = controller) {
+        val base = MiuixTheme.colorScheme
+        if (oled && base.background.luminance() < 0.5f) {
+            val black = Color.Black
+            MiuixTheme(colors = base.copy(background = black, surface = black, surfaceVariant = black,
+                surfaceContainer = Color(0xFF121212), surfaceContainerHigh = Color(0xFF1A1A1A),
+                surfaceContainerHighest = Color(0xFF222222)), content = content)
+        } else content()
+    }
+}
+
 /** v2 界面：四栏（AI 变声 / 普通变声 / 虚拟声卡 / 设置）+ 二级页，悬浮液态玻璃底栏 */
 @Composable
 fun V2App(vm: MainViewModel) {
     val ctx = LocalContext.current
     val ui = remember { UiPrefs(ctx) }
     val controller = remember(ui.mode, ui.monet, ui.key) { ui.controller() }
-    MiuixTheme(controller = controller) {
+    OledTheme(controller, ui.oled) {
         val isLight = MiuixTheme.colorScheme.background.luminance() >= 0.5f
         val window = (ctx as? Activity)?.window
         SideEffect {
@@ -189,7 +204,7 @@ fun V2App(vm: MainViewModel) {
                 isAppearanceLightStatusBars = isLight; isAppearanceLightNavigationBars = isLight } }
         }
         val st by vm.state.collectAsStateWithLifecycle()
-        LaunchedEffect(st.toast) { st.toast?.let { Toast.makeText(ctx, it, Toast.LENGTH_LONG).show(); vm.clearToast() } }
+        // toast 改由 MainViewModel 统一弹出（后台/悬浮窗也显示）
         LaunchedEffect(st.error) { st.error?.let { Toast.makeText(ctx, it, Toast.LENGTH_LONG).show(); vm.clearError() } }
 
         var sub by rememberSaveable { mutableStateOf<String?>(null) }
@@ -1304,11 +1319,12 @@ private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (St
             if (st.liveFloat) FloatLookSettings()
         }
     }
-    item { SmallTitle("外观与权限") }
+    item { SmallTitle("权限模式") }
+    item { PermModeCard(vm, st) }
+    item { SmallTitle("外观") }
     item {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
             ArrowPreference(title = "外观", summary = "深浅色、莫奈取色、液态玻璃", onClick = { open("theme") })
-            ArrowPreference(title = "Shizuku 授权", summary = st.qqShizuku.ifEmpty { "点此检查/申请" }, onClick = { vm.requestShizuku() })
         }
     }
     item { SmallTitle("模型仓库") }
@@ -1389,6 +1405,8 @@ private fun ThemePage(ui: UiPrefs) {
                 summary = "按壁纸或所选主色生成整套配色")
             if (ui.monet) WindowDropdownPreference(items = KeyColors.map { it.first }, selectedIndex = ui.key, title = "主色",
                 onSelectedIndexChange = { ui.key = it; ui.save() })
+            SwitchPreference(checked = ui.oled, onCheckedChange = { ui.oled = it; ui.save() }, title = "纯黑背景",
+                summary = "深色模式下背景改为纯黑，OLED 屏更省电", enabled = ui.mode != 1)
         }
         SmallTitle("底栏")
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
@@ -1640,6 +1658,39 @@ private fun Mim3Page(vm: MainViewModel, st: UiState) {
                 Text("保存到 Download/MicMask/<分组名>.mim3，可直接发给别人导入。",
                     Modifier.padding(horizontal = 12.dp, vertical = 8.dp), fontSize = 12.sp, color = Summary)
             }
+        }
+    }
+}
+
+
+/** 设置页「权限模式」：Shizuku（实时注入）/ 普通（扬声器外放）两个卡片按钮，底部描述随所选模式变化 */
+@Composable
+private fun PermModeCard(vm: MainViewModel, st: UiState) {
+    val primary = MiuixTheme.colorScheme.primary
+    val permitted = com.taocrypt.micmask.inject.MicInjector.shizukuPermitted()
+    val normal = st.forceNormal
+    Card(Modifier.fillMaxWidth().padding(PagePad)) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                listOf(false to "Shizuku", true to "普通").forEach { (isNormal, name) ->
+                    val sel = normal == isNormal
+                    val bg by animateColorAsState(if (sel) primary else MiuixTheme.colorScheme.surfaceContainer, label = "perm")
+                    val fg = if (sel) MiuixTheme.colorScheme.onPrimary else MiuixTheme.colorScheme.onSurface
+                    Column(Modifier.weight(1f).clip(RoundedCornerShape(14.dp)).background(bg)
+                        .clickable(enabled = !st.liveOn) { if (!sel || (!isNormal && !permitted)) vm.setNormalMode(isNormal) }
+                        .padding(vertical = 14.dp, horizontal = 12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(name, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = fg)
+                        Text(if (isNormal) "扬声器外放" else if (permitted) "已授权" else "未授权", fontSize = 12.sp, color = fg.copy(alpha = 0.75f))
+                    }
+                }
+            }
+            Text(when {
+                st.liveOn -> "变声中不能切换，先关闭变声。"
+                normal -> "普通模式：不使用 Shizuku。变声和音效从扬声器外放，AI/普通变声为「录一句再放」的录播方式，声卡不可用；对方可能听到原声。"
+                permitted -> "Shizuku 模式：把变声直接送进目标应用的麦克风，支持实时 AI 变声、普通变声和虚拟声卡。"
+                else -> "Shizuku 模式：需要先安装并启动 Shizuku，再点上方按钮授权；未授权时自动按普通模式工作。\n" + st.qqShizuku.lineSequence().firstOrNull().orEmpty()
+            }, fontSize = 12.sp, color = Summary)
         }
     }
 }
