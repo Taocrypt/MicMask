@@ -34,6 +34,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
@@ -131,6 +132,15 @@ private fun demoDoc(): SponsorDoc {
 
 /** 秒级时间戳 → 日期；0 表示旧名单没有该字段 */
 private fun day(sec: Long, pat: String = "yyyy-MM-dd") = if (sec <= 0) "" else java.text.SimpleDateFormat(pat, java.util.Locale.getDefault()).format(java.util.Date(sec * 1000))
+/** 按爱发电档位（累计金额）分色：1月¥5 / 3月¥15 / 半年¥28.2 / 1年¥54 / 2年¥103.2 / 3年¥151.2 */
+private fun tierColor(amount: Double): androidx.compose.ui.graphics.Color = androidx.compose.ui.graphics.Color(when {
+    amount >= 151.2 -> 0xFFE0A030   // 3 年：金
+    amount >= 103.2 -> 0xFFE0607A   // 2 年：玫红
+    amount >= 54.0 -> 0xFF9A6CE0    // 1 年：紫
+    amount >= 28.2 -> 0xFF4C8DF0    // 半年：蓝
+    amount >= 15.0 -> 0xFF2FB39A    // 3 个月：青
+    else -> 0xFF8A94A6              // 1 个月：灰蓝
+})
 private fun yuan(v: Double) = "¥" + DecimalFormat("#,##0.##").format(v)
 
 @Composable
@@ -160,10 +170,13 @@ fun SponsorWall(header: @Composable () -> Unit = {}) {
         }
         Text(tr("{0} 位赞助者 · 累计 {1}，谢谢你们！", d.count, yuan(d.total)), fontSize = 13.sp, color = summary,
             modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 4.dp))
-        // 弹幕：三条轨道不同速度向左循环滚动，在期赞助者主题色高亮
-        Danmaku(d.list)
-        // 完整名单折叠：在期的在上，过期的进「历史赞助」
-        val cur = d.list.filter { it.active }; val past = d.list.filterNot { it.active }
+        // 完整名单：在期的在上，过期的进「历史赞助」，各自按金额从高到低
+        val cur = d.list.filter { it.active }.sortedByDescending { it.amount }
+        val past = d.list.filterNot { it.active }.sortedByDescending { it.amount }
+        // 弹幕：只放在期赞助者，三条轨道不同速度向左循环，底色按赞助档位区分
+        // 弹幕顺序：最近赞助的在前（按最近一次赞助日期从新到旧）
+        if (cur.isNotEmpty()) Danmaku(cur.sortedByDescending { if (it.last > 0) it.last else it.since })
+        else Text(tr("暂时没有在期的赞助"), fontSize = 13.sp, color = summary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
         Collapsible(tr("当前 {0} 位 · 历史 {1} 位", cur.size, past.size)) {
             @Composable fun head(t: String) = Text(t, fontSize = 12.sp, color = summary, fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 2.dp))
@@ -188,7 +201,7 @@ fun SponsorWall(header: @Composable () -> Unit = {}) {
 private fun Danmaku(list: List<Sponsor>) {
     val lanes = 3
     val byLane = List(lanes) { l -> list.filterIndexed { i, _ -> i % lanes == l } }.filter { it.isNotEmpty() }
-    // 长按任意轨道：按住期间全部加速；点一下某条轨道：该轨道停住（内容滞留），再点或 6 秒后继续
+    // 长按任意轨道：按住期间全部加速；点一下某条轨道：该轨道停住（内容滞留），再点或 5 秒后继续
     var fast by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         byLane.forEachIndexed { l, items ->
@@ -215,7 +228,7 @@ private fun DanmakuLane(items: List<Sponsor>, speedDp: Float, lead: androidx.com
             androidx.compose.runtime.withFrameNanos { t ->
                 val dt = if (last == 0L) 0f else (t - last) / 1e9f
                 last = t
-                if (paused && System.currentTimeMillis() - pauseAt > 6000) paused = false
+                if (paused && System.currentTimeMillis() - pauseAt > 5000) paused = false
                 val period = w + gapPx
                 if (!paused && period > gapPx) x = (x + dt * speedPx * (if (fastNow) 2f else 1f)) % period
             }
@@ -250,8 +263,10 @@ private fun DanmakuChip(s: Sponsor) {
     var img by remember(s.avatar) { mutableStateOf(synchronized(avatarCache) { avatarCache[s.avatar] }) }
     LaunchedEffect(s.avatar) { if (img == null) img = loadAvatar(s.avatar) }
     val cs = MiuixTheme.colorScheme
-    val bg = if (s.active) cs.primary.copy(alpha = 0.14f) else cs.secondaryContainer.copy(alpha = 0.6f)
-    val fg = if (s.active) cs.primary else cs.onSurfaceVariantSummary
+    val dark = cs.background.luminance() < 0.5f
+    val tc = tierColor(s.amount)
+    val bg = androidx.compose.ui.graphics.lerp(cs.surface, tc, if (dark) 0.26f else 0.16f)
+    val fg = androidx.compose.ui.graphics.lerp(tc, if (dark) androidx.compose.ui.graphics.Color.White else androidx.compose.ui.graphics.Color.Black, if (dark) 0.2f else 0.2f)
     Row(Modifier.clip(RoundedCornerShape(50)).background(bg).padding(start = 3.dp, end = 12.dp, top = 3.dp, bottom = 3.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(24.dp).clip(CircleShape).background(cs.secondaryContainer), contentAlignment = Alignment.Center) {
@@ -291,6 +306,6 @@ private fun SponsorRow(rank: Int, s: Sponsor) {
             if (dates.isNotEmpty()) Text(dates.joinToString(" · "), fontSize = 11.sp, color = summary, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Spacer(Modifier.width(8.dp))
-        Text(yuan(s.amount), fontSize = 14.sp, fontWeight = FontWeight.Medium, color = MiuixTheme.colorScheme.primary)
+        Text(yuan(s.amount), fontSize = 14.sp, fontWeight = FontWeight.Medium, color = if (s.active) tierColor(s.amount) else summary)
     }
 }
