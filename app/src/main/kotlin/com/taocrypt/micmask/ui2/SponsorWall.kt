@@ -1,5 +1,7 @@
 package com.taocrypt.micmask.ui2
 
+import androidx.compose.foundation.border
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.ui.zIndex
 import com.taocrypt.micmask.tr
@@ -205,9 +207,13 @@ private fun Danmaku(list: List<Sponsor>) {
     val byLane = List(lanes) { l -> list.filterIndexed { i, _ -> i % lanes == l } }.filter { it.isNotEmpty() }
     // 长按任意轨道：按住期间全部 5 倍速；点一条弹幕：只有这一条停住，再点或 5 秒后继续
     var fast by remember { mutableStateOf(false) }
+    // 每条轨道当前滞留几条；只要有一条滞留，其他弹幕全部盖上灰色遮罩
+    val held = remember { androidx.compose.runtime.mutableStateMapOf<Int, Int>() }
+    val dim = held.values.sum() > 0
     Column(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         byLane.forEachIndexed { l, items ->
-            DanmakuLane(items, speedDp = 26f + l * 9f, lead = (l * 28).dp, fast = fast, onFast = { fast = it })
+            DanmakuLane(items, speedDp = 26f + l * 9f, lead = (l * 28).dp, fast = fast, onFast = { fast = it },
+                dim = dim, onHeld = { held[l] = it })
         }
     }
 }
@@ -221,7 +227,8 @@ private class Bullet(val id: Long, val s: Sponsor, x0: Float) {
 }
 
 @Composable
-private fun DanmakuLane(items: List<Sponsor>, speedDp: Float, lead: androidx.compose.ui.unit.Dp, fast: Boolean, onFast: (Boolean) -> Unit) {
+private fun DanmakuLane(items: List<Sponsor>, speedDp: Float, lead: androidx.compose.ui.unit.Dp, fast: Boolean, onFast: (Boolean) -> Unit,
+                         dim: Boolean, onHeld: (Int) -> Unit) {
     val density = androidx.compose.ui.platform.LocalDensity.current
     val gapPx = with(density) { 12.dp.toPx() }
     val speedPx = with(density) { speedDp.dp.toPx() }
@@ -229,12 +236,16 @@ private fun DanmakuLane(items: List<Sponsor>, speedDp: Float, lead: androidx.com
     var laneW by remember { mutableStateOf(0) }
     val bullets = remember { androidx.compose.runtime.mutableStateListOf<Bullet>() }
     val fastNow by androidx.compose.runtime.rememberUpdatedState(fast)
+    val onHeldNow by androidx.compose.runtime.rememberUpdatedState(onHeld)
+    val maskA by androidx.compose.animation.core.animateFloatAsState(if (dim) 0.72f else 0f, label = "dim")
+    val maskC = MiuixTheme.colorScheme.surface
     LaunchedEffect(items) {
         bullets.clear()
         var next = 0          // 下一条要发的名单下标（循环）
         var seq = 0L
         var tail: Float? = leadPx   // 下一条的起点，跟着轨道一起左移；null = 最新一条还没测出宽度
         var last = 0L
+        var heldNow = 0
         while (true) {
             androidx.compose.runtime.withFrameNanos { t ->
                 val dt = if (last == 0L) 0f else (t - last) / 1e9f
@@ -246,6 +257,8 @@ private fun DanmakuLane(items: List<Sponsor>, speedDp: Float, lead: androidx.com
                     if (!b.paused) b.x -= dx
                 }
                 bullets.removeAll { !it.paused && it.w > 0 && it.x + it.w < 0 }
+                val h = bullets.count { it.paused }
+                if (h != heldNow) { heldNow = h; onHeldNow(h) }
                 if (tail == null) {
                     val nb = bullets.lastOrNull()
                     if (nb == null) tail = laneW.toFloat()
@@ -260,7 +273,7 @@ private fun DanmakuLane(items: List<Sponsor>, speedDp: Float, lead: androidx.com
             }
         }
     }
-    Box(Modifier.fillMaxWidth().height(30.dp).clipToBounds()
+    Box(Modifier.fillMaxWidth().height(33.dp).clipToBounds()
         .onSizeChanged { laneW = it.width }
         .pointerInput(Unit) {
             detectTapGestures(
@@ -276,17 +289,19 @@ private fun DanmakuLane(items: List<Sponsor>, speedDp: Float, lead: androidx.com
         }) {
         for (b in bullets) {
             androidx.compose.runtime.key(b.id) {
-                Box(Modifier.wrapContentWidth(Alignment.Start, unbounded = true)
+                Box(Modifier.align(Alignment.CenterStart).wrapContentWidth(Alignment.Start, unbounded = true)
                     .zIndex(if (b.paused) 1f else 0f)
                     .offset { androidx.compose.ui.unit.IntOffset(b.x.toInt(), 0) }
-                    .onSizeChanged { b.w = it.width }) { DanmakuChip(b.s) }
+                    .onSizeChanged { b.w = it.width }) { DanmakuChip(b.s, held = b.paused) }
             }
         }
+        // 灰度遮罩：盖在流动弹幕上、滞留弹幕下
+        if (maskA > 0f) Box(Modifier.matchParentSize().zIndex(0.5f).background(maskC.copy(alpha = maskA)))
     }
 }
 
 @Composable
-private fun DanmakuChip(s: Sponsor) {
+private fun DanmakuChip(s: Sponsor, held: Boolean = false) {
     var img by remember(s.avatar) { mutableStateOf(synchronized(avatarCache) { avatarCache[s.avatar] }) }
     LaunchedEffect(s.avatar) { if (img == null) img = loadAvatar(s.avatar) }
     val cs = MiuixTheme.colorScheme
@@ -294,7 +309,14 @@ private fun DanmakuChip(s: Sponsor) {
     val tc = tierColor(s.amount)
     val bg = androidx.compose.ui.graphics.lerp(cs.surface, tc, if (dark) 0.26f else 0.16f)
     val fg = androidx.compose.ui.graphics.lerp(tc, if (dark) androidx.compose.ui.graphics.Color.White else androidx.compose.ui.graphics.Color.Black, if (dark) 0.2f else 0.2f)
-    Row(Modifier.clip(RoundedCornerShape(50)).background(bg).padding(start = 3.dp, end = 12.dp, top = 3.dp, bottom = 3.dp),
+    // 滞留时突出：略放大、档位色描边、底色加深
+    val k by androidx.compose.animation.core.animateFloatAsState(if (held) 1f else 0f, label = "held")
+    Row(Modifier
+        .graphicsLayer { val sc = 1f + 0.06f * k; scaleX = sc; scaleY = sc }
+        .clip(RoundedCornerShape(50))
+        .background(androidx.compose.ui.graphics.lerp(bg, androidx.compose.ui.graphics.lerp(cs.surface, tc, if (dark) 0.42f else 0.30f), k))
+        .border((1.5f * k).dp, tc.copy(alpha = k), RoundedCornerShape(50))
+        .padding(start = 3.dp, end = 12.dp, top = 3.dp, bottom = 3.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(24.dp).clip(CircleShape).background(cs.secondaryContainer), contentAlignment = Alignment.Center) {
             val b = img
