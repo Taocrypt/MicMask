@@ -210,7 +210,7 @@
   "参数": "Parameters",
   "参考音频已导入（%.1f 秒）": "Reference audio imported (%.1f s)",
   "参考音频已设为 {0}": "Reference audio set to {0}",
-  "参考项目与致谢": "Credits & references",
+  "参考项目": "References",
   "双击旋钮或推子复位。耳返开关在设置里，外放会啸叫，请戴耳机。": "Double-tap a knob or fader to reset. Monitor is in Settings; use headphones, the speaker will feed back.",
   "反馈": "Feedback",
   "发现新版本 {0}": "New version {0}",
@@ -441,6 +441,7 @@
   "支持": "supported",
   "支持 mp3、m4a、wav、ogg、flac 等常见音频。": "Supports mp3, m4a, wav, ogg, flac and other common formats.",
   "支持 wav / mp3 / m4a / flac / ogg，或直接录一段": "Supports wav / mp3 / m4a / flac / ogg, or record directly",
+  "支持开发": "Support development",
   "收起": "Collapse",
   "收起 ▴": "Collapse ▴",
   "收起后自动贴边半隐藏": "Auto half-hide at edge when collapsed",
@@ -709,7 +710,6 @@
   "调整窗口大小": "Resize window",
   "调用失败": "Call failed",
   "调试": "Debug",
-  "赞赏墙": "Sponsor Wall",
   "赞赏支持": "Sponsor",
   "越低越稳但平，越高起伏越大也越易跑调": "Lower is steadier but flatter; higher is more expressive but may go off-key",
   "越大越不容易拖音、重复吐字": "Higher reduces dragged or repeated syllables",
@@ -861,5 +861,6 @@
   "加群交流": "Join the community",
   "加入MicMask用户交流Q群": "Join the MicMask user QQ group",
   "交流反馈": "Community & feedback",
-  "启动时检查": "Check on launch"
+  "启动时检查": "Check on launch",
+  "当前 {0} 位 · 历史 {1} 位": "{0} current · {1} past"
 }

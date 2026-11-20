@@ -8,11 +8,16 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.MarqueeSpacing
+import androidx.compose.foundation.basicMarquee
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -125,7 +130,7 @@ private fun demoDoc(): SponsorDoc {
 private fun yuan(v: Double) = "¥" + DecimalFormat("#,##0.##").format(v)
 
 @Composable
-fun SponsorWall() {
+fun SponsorWall(header: @Composable () -> Unit = {}) {
     val ctx = LocalContext.current
     var doc by remember { mutableStateOf(Prefs.main(ctx).getString(KEY, null)?.let(::parse)) }
     var showAll by remember { mutableStateOf(false) }
@@ -134,12 +139,13 @@ fun SponsorWall() {
     val summary = MiuixTheme.colorScheme.onSurfaceVariantSummary
 
     var demo by remember { mutableStateOf(false) }
-    SmallTitle(tr("赞赏墙"))
     Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp)
         .pointerInput(Unit) { detectTapGestures(onLongPress = {
             demo = !demo
             android.widget.Toast.makeText(ctx, if (demo) tr("预览示例名单（仅本机，非真实赞助）") else tr("已退出示例名单"), android.widget.Toast.LENGTH_SHORT).show()
         }) }) {
+        header()
+        Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(0.5.dp).background(summary.copy(alpha = 0.25f)))
         val d = if (demo) demoDoc() else doc
         if (demo) Text(tr("示例数据，仅预览显示效果 · 长按退出"), fontSize = 12.sp, color = MiuixTheme.colorScheme.primary,
             modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp))
@@ -150,22 +156,67 @@ fun SponsorWall() {
         }
         Text(tr("{0} 位赞助者 · 累计 {1}，谢谢你们！", d.count, yuan(d.total)), fontSize = 13.sp, color = summary,
             modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 4.dp))
-        // 按爱发电赞助期限分两栏：在期的在上，过期的进「历史赞助」（金额累计、排序不变）
+        // 弹幕：三条轨道不同速度向左循环滚动，在期赞助者主题色高亮
+        Danmaku(d.list)
+        // 完整名单折叠：在期的在上，过期的进「历史赞助」
         val cur = d.list.filter { it.active }; val past = d.list.filterNot { it.active }
-        @Composable fun head(t: String) = Text(t, fontSize = 12.sp, color = summary, fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 2.dp))
-        head(tr("当前赞助 {0}", cur.size))
-        if (cur.isEmpty()) Text(tr("暂时没有在期的赞助"), fontSize = 13.sp, color = summary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
-        cur.forEachIndexed { i, s -> SponsorRow(i + 1, s) }
-        if (past.isNotEmpty()) {
-            head(tr("历史赞助 {0}", past.size))
-            val shown = if (showAll) past else past.take(20)
-            shown.forEach { s -> SponsorRow(99, s) }
-            if (past.size > 20) {
-                TextButton(text = if (showAll) tr("收起") else tr("查看全部 {0} 位", past.size), onClick = { showAll = !showAll },
-                    modifier = Modifier.fillMaxWidth().padding(12.dp))
-            } else Spacer(Modifier.size(8.dp))
-        } else Spacer(Modifier.size(8.dp))
+        Collapsible(tr("当前 {0} 位 · 历史 {1} 位", cur.size, past.size)) {
+            @Composable fun head(t: String) = Text(t, fontSize = 12.sp, color = summary, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 2.dp))
+            Column {
+                head(tr("当前赞助 {0}", cur.size))
+                if (cur.isEmpty()) Text(tr("暂时没有在期的赞助"), fontSize = 13.sp, color = summary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
+                cur.forEachIndexed { i, s -> SponsorRow(i + 1, s) }
+                if (past.isNotEmpty()) {
+                    head(tr("历史赞助 {0}", past.size))
+                    val shown = if (showAll) past else past.take(20)
+                    shown.forEach { s -> SponsorRow(99, s) }
+                    if (past.size > 20) TextButton(text = if (showAll) tr("收起") else tr("查看全部 {0} 位", past.size), onClick = { showAll = !showAll },
+                        modifier = Modifier.fillMaxWidth().padding(12.dp))
+                }
+                Spacer(Modifier.size(8.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun Danmaku(list: List<Sponsor>) {
+    val lanes = 3
+    val byLane = List(lanes) { l -> list.filterIndexed { i, _ -> i % lanes == l } }.filter { it.isNotEmpty() }
+    Column(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        byLane.forEachIndexed { l, items ->
+            // 名单太少时重复填满一行，保证一直在滚
+            val fill = generateSequence { items }.flatten().take(maxOf(items.size, 6)).toList()
+            Row(Modifier.fillMaxWidth().clipToBounds()
+                .basicMarquee(iterations = Int.MAX_VALUE, initialDelayMillis = l * 400, repeatDelayMillis = 0,
+                    spacing = MarqueeSpacing(12.dp), velocity = (26 + l * 9).dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Spacer(Modifier.width((l * 28).dp))
+                fill.forEach { DanmakuChip(it) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DanmakuChip(s: Sponsor) {
+    var img by remember(s.avatar) { mutableStateOf(synchronized(avatarCache) { avatarCache[s.avatar] }) }
+    LaunchedEffect(s.avatar) { if (img == null) img = loadAvatar(s.avatar) }
+    val cs = MiuixTheme.colorScheme
+    val bg = if (s.active) cs.primary.copy(alpha = 0.14f) else cs.secondaryContainer.copy(alpha = 0.6f)
+    val fg = if (s.active) cs.primary else cs.onSurfaceVariantSummary
+    Row(Modifier.clip(RoundedCornerShape(50)).background(bg).padding(start = 3.dp, end = 12.dp, top = 3.dp, bottom = 3.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(24.dp).clip(CircleShape).background(cs.secondaryContainer), contentAlignment = Alignment.Center) {
+            val b = img
+            if (b != null) Image(b, null, Modifier.size(24.dp), contentScale = ContentScale.Crop)
+            else Text(s.name.take(1), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        }
+        Spacer(Modifier.width(6.dp))
+        Text(s.name, fontSize = 13.sp, maxLines = 1, fontWeight = FontWeight.Medium, color = cs.onSurface)
+        Text("  " + yuan(s.amount), fontSize = 12.sp, maxLines = 1, color = fg)
+        if (s.remark.isNotBlank()) Text("  " + s.remark.take(16), fontSize = 12.sp, maxLines = 1, color = cs.onSurfaceVariantSummary)
     }
 }
 

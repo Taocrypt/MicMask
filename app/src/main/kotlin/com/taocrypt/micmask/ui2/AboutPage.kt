@@ -144,8 +144,8 @@ fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit =
             }
         }
 
-        // ---- 更新 ----
-        SmallTitle(tr("更新"))
+        // ---- 版本信息（更新 + 设备信息，设备信息默认折叠） ----
+        SmallTitle(tr("版本信息"))
         Card(Modifier.fillMaxWidth().padding(pad)) {
             val (t, s) = when (val u = upd) {
                 Updater.State.Idle -> tr("检查更新") to tr("点此检查")
@@ -169,11 +169,6 @@ fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit =
             SwitchPreference(checked = auto, onCheckedChange = { auto = it; Updater.setAutoCheck(ctx, it) }, title = tr("启动时检查"),
                 summary = tr("关闭后仍会检查强制更新"))
             ArrowPreference(title = tr("下载镜像"), summary = tr("GitHub 不通时自动测速选择镜像"), onClick = openMirrors)
-        }
-
-        // ---- 版本信息（默认折叠） ----
-        SmallTitle(tr("版本信息"))
-        Card(Modifier.fillMaxWidth().padding(pad)) {
             Collapsible("${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) · Android ${Build.VERSION.RELEASE}") {
                 InfoRow(tr("版本"), "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
                 InfoRow(tr("构建"), if (BuildConfig.DEBUG) tr("测试版") else tr("正式版"))
@@ -189,22 +184,21 @@ fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit =
         Card(Modifier.fillMaxWidth().padding(pad)) {
             ArrowPreference(title = tr("加群交流"), summary = tr("加入MicMask用户交流Q群"), onClick = { openQqGroup(ctx) })
             ArrowPreference(title = tr("提交问题"), summary = tr("GitHub Issues，附上日志更快定位"), onClick = { openUrl(ctx, AboutLinks.ISSUES) })
-            ArrowPreference(title = tr("免责声明"), summary = tr("版权归属、使用准则与隐私"), onClick = openDisclaimer)
         }
 
         // ---- 赞赏 ----
-        SmallTitle(tr("赞赏支持"))
-        Card(Modifier.fillMaxWidth().padding(pad)) {
+        SmallTitle(tr("支持开发"))
+        SponsorWall {
             val ready = AboutLinks.DONATE.isNotBlank()
             ArrowPreference(title = tr("赞赏支持"), summary = if (ready) tr("爱发电 · ¥5/月，请作者喝杯奶茶") else tr("即将开放，感谢关注"),
                 enabled = ready, onClick = { if (ready) openUrl(ctx, AboutLinks.DONATE) })
         }
-        SponsorWall()
 
-        // ---- 参考项目 ----
-        SmallTitle(tr("参考项目与致谢"))
+        // ---- 其他：免责声明 + 参考项目（默认折叠） ----
+        SmallTitle(tr("其他"))
         Card(Modifier.fillMaxWidth().padding(pad)) {
-            Collapsible(AboutLinks.REFS.joinToString(" · ") { it.first }) {
+            ArrowPreference(title = tr("免责声明"), summary = tr("版权归属、使用准则与隐私"), onClick = openDisclaimer)
+            Collapsible(tr("参考项目") + "：" + AboutLinks.REFS.joinToString(" · ") { it.first }) {
                 AboutLinks.REFS.forEach { (name, desc, url) ->
                     ArrowPreference(title = name, summary = desc, onClick = { openUrl(ctx, url) })
                 }
@@ -226,7 +220,7 @@ private fun InfoRow(k: String, v: String) {
 
 /** 折叠卡片内容：头部一行摘要 + 展开/收起箭头，默认收起 */
 @Composable
-private fun Collapsible(summary: String, content: @Composable () -> Unit) {
+internal fun Collapsible(summary: String, content: @Composable () -> Unit) {
     var open by rememberSaveable { mutableStateOf(false) }
     val rot by animateFloatAsState(if (open) 180f else 0f, label = "fold")
     Column {
