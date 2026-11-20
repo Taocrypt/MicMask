@@ -283,6 +283,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val prefs = Prefs.main(ctx)
 
     init {
+        // 开始实时变声时引擎会测速/读缓存，把结果记到当前音色上（自动降档的临时结果不记）
+        com.taocrypt.micmask.inject.MicInjector.onBench = { r ->
+            val v = _state.value.liveVoice
+            if (v.isNotEmpty() && !r.contains("自动")) {
+                ctx.getSharedPreferences("live", 0).edit().putString("bench_$v", r).apply()
+                _state.value = _state.value.copy(liveBench = r)
+            }
+        }
         com.taocrypt.micmask.inject.MicInjector.forceNormal = prefs.getBoolean("force_normal", false)
         _state.value = _state.value.copy(forceNormal = com.taocrypt.micmask.inject.MicInjector.forceNormal)
         // Toast 由 ViewModel 直接用系统 Toast 弹出：App 在后台（悬浮窗操作）时也能看到

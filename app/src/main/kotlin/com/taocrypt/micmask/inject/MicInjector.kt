@@ -338,6 +338,7 @@ object MicInjector {
                 }.getOrElse { it.message ?: tr("调用失败") }
                 if (err != null) { main.post { status(tr("启动失败：{0}", err)) }; setPhase(Phase.ERROR, tr("实时变声启动失败：{0}", err)); return@Thread }
                 liveOn = true
+                var lastBench = ""
                 setPhase(Phase.LIVE, tr("实时变声中"))
                 while (liveOn) {
                     val s = status()
@@ -350,6 +351,7 @@ object MicInjector {
                         setPhase(if (e.isNotEmpty()) Phase.ERROR else Phase.IDLE, if (e.isNotEmpty()) e else tr("实时变声已停止"))
                         break
                     }
+                    kv["bench"]?.takeIf { it.isNotEmpty() && it != lastBench }?.let { b -> lastBench = b; onBench?.invoke(b) }
                     main.post { status((modeLabel ?: if (external) tr("AI 变声") else tr("普通变声")) + tr(" · 麦电平 {0} · 目标在录={1} · 缓冲 {2} ms · 断流 {3}", kv["live"], kv["recs"], (kv["outBuf"]?.toIntOrNull() ?: 0) / 48, kv["under"]) + (kv["eng"]?.takeIf { it.isNotEmpty() }?.let { " · $it" } ?: statusExtra?.invoke()?.let { " · $it" } ?: "")) }
                     Thread.sleep(300)
                 }
@@ -359,6 +361,8 @@ object MicInjector {
 
     /** 附加状态（实时 RVC 引擎的耗时等） */
     @Volatile var statusExtra: (() -> String)? = null
+    /** 实时变声启动后引擎报出的测速摘要（每个音色记一次，供状态行展示） */
+    @Volatile var onBench: ((String) -> Unit)? = null
     /** 状态栏显示的模式名（AI 变声 / 普通变声 / 虚拟声卡），由界面在启动时设置 */
     @Volatile var modeLabel: String? = null
 
