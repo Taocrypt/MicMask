@@ -714,7 +714,9 @@ private fun LazyListScope.aiPage(vm: MainViewModel, st: UiState, open: (String) 
             Text("还没有音色。从下方仓库下载，或导入模型 zip。", Modifier.padding(16.dp), color = Summary)
         }
     }
-    items(st.liveVoices, key = { "v_$it" }) { v -> VoiceItem(vm, st, v) }
+    if (st.liveVoices.isNotEmpty()) item(key = "voices") {
+        ReorderList(st.liveVoices, key = { it }, onMove = { a, b -> vm.moveVoice(a, b) }) { v, handle, _ -> VoiceItem(vm, st, v, handle) }
+    }
     item { ImportRow(vm, st) }
     item {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -727,12 +729,58 @@ private fun LazyListScope.aiPage(vm: MainViewModel, st: UiState, open: (String) 
     if (st.repoMsg.isNotEmpty() || st.repoLoading) item {
         Text(if (st.repoLoading) "正在获取…" else st.repoMsg, Modifier.padding(horizontal = 28.dp, vertical = 4.dp), fontSize = 13.sp, color = Summary)
     }
-    items(st.repoModels, key = { "r_${it.id}" }) { m -> RepoItem(vm, st, m) }
+    if (st.repoModels.isNotEmpty()) item { RepoTabs(vm, st) }
+    val shown = repoFiltered(st).filter { it.gender == st.repoTab }
+    if (st.repoModels.isNotEmpty() && shown.isEmpty()) item {
+        Text(if (st.repoQuery.isNotBlank()) "没有找到「${st.repoQuery.trim()}」" else "这个分类下还没有模型", Modifier.padding(horizontal = 28.dp, vertical = 8.dp), fontSize = 13.sp, color = Summary)
+    }
+    items(shown, key = { "r_${it.id}" }) { m -> RepoItem(vm, st, m) }
     item { SmallTitle("更多") }
     item {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
             ArrowPreference(title = "文件变声", summary = "导入或录制音频整段转换，基于 RVC 合成", onClick = { open("file") })
             ArrowPreference(title = "文字转语音", summary = "输入文字合成语音，基于 GPT-SoVITS 合成", onClick = { open("tts") })
+        }
+    }
+}
+
+/** 搜索词 + 仓库筛选后的仓库模型（分类之前） */
+private fun repoFiltered(st: UiState): List<com.taocrypt.micmask.repo.ModelRepo.RModel> {
+    val q = st.repoQuery.trim()
+    return st.repoModels.filter { m ->
+        (st.repoFilter.isEmpty() || m.repo == st.repoFilter) &&
+            (q.isEmpty() || m.name.contains(q, true) || m.id.contains(q, true) || m.author.contains(q, true) || m.desc.contains(q, true))
+    }
+}
+
+/** 模型仓库：搜索框、按仓库筛选（多于一个仓库时）、女声 / 男声 / 其他分类（各带数量） */
+@Composable
+private fun RepoTabs(vm: MainViewModel, st: UiState) {
+    TextField(value = st.repoQuery, onValueChange = { vm.setRepoQuery(it) }, label = "搜索模型", singleLine = true,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp))
+    val srcs = st.repoModels.map { it.repo }.distinct()
+    if (srcs.size > 1) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        for (u in listOf("") + srcs) {
+            val sel = st.repoFilter == u
+            val label = if (u.isEmpty()) "全部仓库" else st.repos.firstOrNull { it.url == u }?.label ?: u.substringAfter("://")
+            Text(label, Modifier.clip(RoundedCornerShape(12.dp))
+                .background(if (sel) MiuixTheme.colorScheme.primary.copy(alpha = 0.15f) else MiuixTheme.colorScheme.surfaceContainer)
+                .clickable { vm.setRepoFilter(u) }.padding(horizontal = 12.dp, vertical = 6.dp),
+                fontSize = 13.sp, maxLines = 1, color = if (sel) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onSurfaceContainer)
+        }
+    }
+    val base = repoFiltered(st)
+    Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        for ((k, label) in listOf("female" to "女声", "male" to "男声", "other" to "其他")) {
+            val sel = st.repoTab == k
+            val n = base.count { it.gender == k }
+            Text("$label $n", Modifier.weight(1f).clip(RoundedCornerShape(12.dp))
+                .background(if (sel) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.surfaceContainer)
+                .clickable { vm.setRepoTab(k) }.padding(vertical = 8.dp),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center, fontSize = 14.sp,
+                fontWeight = if (sel) FontWeight.Medium else FontWeight.Normal,
+                color = if (sel) MiuixTheme.colorScheme.onPrimary else MiuixTheme.colorScheme.onSurfaceContainer)
         }
     }
 }
@@ -756,22 +804,27 @@ private fun ImportRow(vm: MainViewModel, st: UiState) {
 }
 
 @Composable
-private fun VoiceItem(vm: MainViewModel, st: UiState, v: String) {
+private fun VoiceItem(vm: MainViewModel, st: UiState, v: String, handle: Modifier = Modifier) {
     var renaming by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
     val sel = v == st.liveVoice
     val primary = MiuixTheme.colorScheme.primary
     Card(Modifier.fillMaxWidth().padding(PagePad).padding(bottom = 8.dp), onClick = { vm.setLiveVoice(v) },
         insideMargin = PaddingValues(0.dp)) {
-        Row(Modifier.padding(start = 14.dp, end = 4.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(start = 2.dp, end = 4.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             val label = vm.voiceLabel(v)
+            val pinned = v in st.voicePins
+            // 拖动把手：按住上下拖排序
+            Text("⋮⋮", handle.padding(horizontal = 8.dp, vertical = 10.dp), fontSize = 16.sp, color = Summary)
             Box(Modifier.size(42.dp).clip(CircleShape).background(if (sel) primary else primary.copy(alpha = 0.12f)), contentAlignment = Alignment.Center) {
                 Text(label.take(1), fontWeight = FontWeight.Bold, color = if (sel) MiuixTheme.colorScheme.onPrimary else primary)
             }
             Column(Modifier.weight(1f).padding(start = 12.dp)) {
                 Text(label, fontWeight = FontWeight.SemiBold, color = if (sel) primary else MiuixTheme.colorScheme.onSurface)
-                Text("${if (sel) "使用中 · " else ""}%.1f MB".format(vm.voiceSizeMb(v)), fontSize = 12.sp, color = Summary)
+                Text("${if (pinned) "已置顶 · " else ""}${if (sel) "使用中 · " else ""}%.1f MB".format(vm.voiceSizeMb(v)), fontSize = 12.sp, color = Summary)
             }
+            Text(if (pinned) "取消置顶" else "置顶", Modifier.clip(RoundedCornerShape(8.dp)).clickable { vm.togglePinVoice(v) }
+                .padding(horizontal = 6.dp, vertical = 6.dp), fontSize = 13.sp, color = primary)
             IconButton(onClick = { renaming = true }) { Icon(MiuixIcons.Edit, "编辑") }
             IconButton(onClick = { deleting = true }) { Icon(MiuixIcons.Delete, "删除") }
         }
@@ -1266,30 +1319,55 @@ private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (St
 
 @Composable
 private fun RepoSetting(vm: MainViewModel, st: UiState) {
-    var repo by remember { mutableStateOf("") }
+    // editing：null 不显示；"" 新增；其它为正在编辑的仓库地址
+    var editing by remember { mutableStateOf<String?>(null) }
     Card(Modifier.fillMaxWidth().padding(PagePad)) {
-        Column(Modifier.padding(16.dp)) {
-            // 可添加多个仓库，按顺序合并显示；同名音色以靠上的仓库为准
-            st.repoUrls.forEachIndexed { i, u ->
-                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("${i + 1}. " + u.substringAfter("://"), Modifier.weight(1f), fontSize = 13.sp, maxLines = 2,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                    if (i > 0) Text("上移", Modifier.clip(RoundedCornerShape(8.dp)).clickable { vm.moveRepoUp(u) }.padding(horizontal = 8.dp, vertical = 4.dp),
-                        fontSize = 13.sp, color = MiuixTheme.colorScheme.primary)
-                    Text("移除", Modifier.clip(RoundedCornerShape(8.dp)).clickable { vm.removeRepo(u) }.padding(horizontal = 8.dp, vertical = 4.dp),
-                        fontSize = 13.sp, color = Color(0xFFE5484D))
+        Column(Modifier.padding(vertical = 8.dp)) {
+            if (st.repos.isEmpty()) Text("还没有模型仓库。仓库为社区维护，请只添加你信任、有权使用的仓库。",
+                Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontSize = 13.sp, color = Summary)
+            ReorderList(st.repos, key = { it.url }, onMove = { a, b -> vm.moveRepo(a, b) }) { r, handle, dragging ->
+                Row(Modifier.fillMaxWidth()
+                    .background(if (dragging) MiuixTheme.colorScheme.surfaceContainerHigh else Color.Transparent)
+                    .clickable { editing = r.url }.padding(start = 4.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Text("⋮⋮", handle.padding(horizontal = 10.dp, vertical = 10.dp), fontSize = 16.sp, color = Summary)
+                    Column(Modifier.weight(1f)) {
+                        Text(r.label, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            color = if (r.on) MiuixTheme.colorScheme.onSurface else Summary)
+                        if (r.name.isNotBlank()) Text(r.url.substringAfter("://"), fontSize = 12.sp, color = Summary, maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    }
+                    Switch(checked = r.on, onCheckedChange = { vm.toggleRepo(r.url, it) })
                 }
             }
-            if (st.repoUrls.isEmpty()) Text("还没有模型仓库。仓库为社区维护，请只添加你信任、有权使用的仓库。", fontSize = 12.sp, color = Summary)
-            Spacer(Modifier.height(8.dp))
-            TextField(value = repo, onValueChange = { repo = it }, label = "cnb / GitHub 仓库地址或 models.json 链接", singleLine = true)
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton("刷新全部", onClick = { vm.refreshRepo() }, enabled = st.repoUrls.isNotEmpty() && !st.repoLoading, modifier = Modifier.weight(1f))
-                TextButton("添加仓库", onClick = { vm.addRepo(repo); repo = "" }, enabled = repo.isNotBlank(), modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.textButtonColorsPrimary())
+            Text("按住 ⋮⋮ 拖动排序，靠上的仓库优先；点一项可改备注名或删除。", Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                fontSize = 12.sp, color = Summary)
+            Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton("刷新全部", onClick = { vm.refreshRepo() }, enabled = st.repos.any { it.on } && !st.repoLoading, modifier = Modifier.weight(1f))
+                TextButton("添加仓库", onClick = { editing = "" }, modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary())
             }
-            if (st.repoMsg.isNotBlank()) Text(st.repoMsg, fontSize = 12.sp, color = Summary, modifier = Modifier.padding(top = 6.dp))
+            if (st.repoMsg.isNotBlank()) Text(st.repoMsg, fontSize = 12.sp, color = Summary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+        }
+    }
+    editing?.let { old ->
+        val cur = st.repos.firstOrNull { it.url == old }
+        var url by remember(old) { mutableStateOf(cur?.url.orEmpty()) }
+        var name by remember(old) { mutableStateOf(cur?.name.orEmpty()) }
+        WindowDialog(show = true, title = if (cur == null) "添加模型仓库" else "编辑模型仓库",
+            summary = "仓库为社区维护，请只添加你信任、有权使用的仓库", onDismissRequest = { editing = null }) {
+            Column {
+                TextField(value = name, onValueChange = { name = it.take(20) }, label = "备注名（可空）", singleLine = true)
+                Spacer(Modifier.height(8.dp))
+                TextField(value = url, onValueChange = { url = it }, label = "cnb / GitHub 仓库地址或 models.json 链接", singleLine = true)
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (cur != null) TextButton("删除", onClick = { vm.removeRepo(old); editing = null }, modifier = Modifier.weight(1f))
+                    else TextButton("取消", onClick = { editing = null }, modifier = Modifier.weight(1f))
+                    TextButton("保存", onClick = { vm.saveRepo(cur?.url, url, name); editing = null }, enabled = url.isNotBlank(),
+                        modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary())
+                }
+            }
         }
     }
 }
@@ -1326,7 +1404,9 @@ private fun RepoItem(vm: MainViewModel, st: UiState, m: ModelRepo.RModel) {
                     Text(m.name, fontWeight = FontWeight.SemiBold)
                     val meta = listOfNotNull(m.author.takeIf { it.isNotBlank() }?.let { "作者 $it" },
                         if (m.totalSize > 0) "%.0f MB".format(m.totalSize / 1048576f) else null,
-                        if (installed) "已安装" else null).joinToString(" · ")
+                        if (installed) "已安装" else null,
+                        // 多仓库时标出来源
+                        st.repos.takeIf { r -> r.count { it.on } > 1 }?.firstOrNull { it.url == m.repo }?.label).joinToString(" · ")
                     if (meta.isNotEmpty()) Text(meta, fontSize = 12.sp, color = Summary)
                 }
                 IconButton(onClick = { vm.downloadRepoModel(m) }, enabled = st.dlId == null && !st.liveOn) {

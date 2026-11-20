@@ -144,6 +144,8 @@ data class UiState(
     /** 本机性能测试结果（空=还没测） */
     val liveBench: String = "",
     val liveVoices: List<String> = emptyList(),
+    /** 置顶的本地音色 */
+    val voicePins: Set<String> = emptySet(),
     val liveVoice: String = "",
     val liveBenching: Boolean = false,
     val logMsg: String = "",
@@ -158,11 +160,16 @@ data class UiState(
 
     // ---------------- v2：在线模型仓库 ----------------
     val repoUrl: String = "",
-    /** 多个模型仓库（按顺序合并，同名音色/文件以靠前的仓库为准）；repoUrl = 第一个，兼容旧逻辑 */
-    val repoUrls: List<String> = emptyList(),
+    /** 多个模型仓库（按顺序合并，同名音色/文件以靠前的仓库为准），含备注名与开关 */
+    val repos: List<RepoEntry> = emptyList(),
     val repoModels: List<com.taocrypt.micmask.repo.ModelRepo.RModel> = emptyList(),
     val repoLoading: Boolean = false,
     val repoMsg: String = "",
+    /** AI 页模型仓库分类 tab：female / male / other */
+    val repoTab: String = "female",
+    /** AI 页模型仓库：搜索词、只看某个仓库（地址，空 = 全部） */
+    val repoQuery: String = "",
+    val repoFilter: String = "",
     /** 正在下载的音色 id（null=空闲） */
     val dlId: String? = null,
     val dlProgress: Float = 0f,
@@ -236,11 +243,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         @Volatile var current: MainViewModel? = null
         /** 不内置任何模型仓库：用户在设置里填自己有权使用的仓库 */
         const val DEFAULT_REPO = ""
-        /** 仓库列表：新键 repoUrls（换行分隔），没有就沿用旧的单个 repoUrl */
-        fun loadRepoUrls(ctx: android.content.Context): List<String> {
+        /** 仓库列表：新键 repos（JSON），没有就沿用 alpha41 的 repoUrls 或更早的单个 repoUrl */
+        fun loadRepos(ctx: android.content.Context): List<RepoEntry> {
             val sp = Prefs.main(ctx)
+            sp.getString("repos", null)?.let { js -> runCatching {
+                val a = org.json.JSONArray(js)
+                return (0 until a.length()).map { a.getJSONObject(it) }
+                    .map { RepoEntry(it.optString("url"), it.optString("name"), it.optBoolean("on", true)) }.filter { it.url.isNotBlank() }
+            } }
             val l = sp.getString("repoUrls", null)?.split('\n') ?: listOf(sp.getString("repoUrl", null).orEmpty())
-            return l.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+            return l.map { it.trim() }.filter { it.isNotEmpty() }.distinct().map { RepoEntry(it) }
         }
         /**
          * 无障碍**自动**触发时的外放时长（秒）。
@@ -268,7 +280,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         _state.value = _state.value.copy(liveAec = ctx.getSharedPreferences("live", 0).getBoolean("aec", true), liveBench = "",
-            repoUrl = loadRepoUrls(ctx).firstOrNull() ?: DEFAULT_REPO, repoUrls = loadRepoUrls(ctx))
+            repos = loadRepos(ctx), repoUrl = loadRepos(ctx).firstOrNull { it.on }?.url ?: DEFAULT_REPO)
         refreshVoices()
         migrateRoutingOnce()
 
@@ -1139,26 +1151,65 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ---------------------------------------------------------------- v2 模型仓库 / 音色管理
     private var repoManifest: com.taocrypt.micmask.repo.ModelRepo.Manifest? = null
 
-    fun setRepoUrl(v: String) = setRepoUrls(listOf(v))
-    /** 保存仓库列表（去空去重）；repoUrl 同步为第一个，旧版本读到的也是它 */
-    fun setRepoUrls(list: List<String>) {
-        val l = list.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
-        prefs.edit().putString("repoUrls", l.joinToString("\n")).putString("repoUrl", l.firstOrNull().orEmpty()).apply()
-        _state.value = _state.value.copy(repoUrl = l.firstOrNull().orEmpty(), repoUrls = l)
+    // ---- 本地音色排序：置顶的在前（按置顶先后），其余按拖动后的顺序，新下载的排最后 ----
+    private fun voicePins(): Set<String> = prefs.getString("voicePins", "")!!.split('\n').filter { it.isNotEmpty() }.toCollection(LinkedHashSet())
+    private fun orderVoices(all: List<String>): List<String> {
+        val ord = prefs.getString("voiceOrder", "")!!.split('\n').filter { it.isNotEmpty() }
+        val pins = voicePins()
+        val idx = { v: String -> ord.indexOf(v).let { if (it < 0) Int.MAX_VALUE else it } }
+        return all.sortedWith(compareBy<String>({ if (it in pins) 0 else 1 }, { if (it in pins) pins.indexOf(it) else idx(it) }))
     }
-    fun addRepo(v: String) { if (v.isNotBlank()) { setRepoUrls(_state.value.repoUrls + v); refreshRepo() } }
-    fun removeRepo(v: String) { setRepoUrls(_state.value.repoUrls - v); refreshRepo() }
-    fun moveRepoUp(v: String) {
-        val l = _state.value.repoUrls.toMutableList(); val i = l.indexOf(v)
-        if (i > 0) { l.removeAt(i); l.add(i - 1, v); setRepoUrls(l); refreshRepo() }
+    private fun saveVoiceOrder(l: List<String>, pins: Set<String>) {
+        prefs.edit().putString("voiceOrder", l.joinToString("\n")).putString("voicePins", pins.joinToString("\n")).apply()
+        _state.value = _state.value.copy(liveVoices = orderVoices(l), voicePins = pins)
+    }
+    fun togglePinVoice(v: String) {
+        val p = LinkedHashSet(_state.value.voicePins); if (!p.remove(v)) p.add(v)
+        saveVoiceOrder(_state.value.liveVoices, p)
+    }
+    /** 拖动排序：只在同一组内移动（置顶组 / 普通组），跨组以置顶状态为准 */
+    fun moveVoice(from: Int, to: Int) {
+        val l = _state.value.liveVoices.toMutableList()
+        if (from !in l.indices || to !in l.indices || from == to) return
+        val v = l.removeAt(from); l.add(to, v)
+        val pins = _state.value.voicePins
+        // 置顶组的顺序 = 拖完后它们在列表里的顺序
+        saveVoiceOrder(l, l.filter { it in pins }.toCollection(LinkedHashSet()))
+    }
+
+    fun setRepoTab(t: String) { _state.value = _state.value.copy(repoTab = t) }
+    fun setRepoQuery(q: String) { _state.value = _state.value.copy(repoQuery = q) }
+    fun setRepoFilter(u: String) { _state.value = _state.value.copy(repoFilter = u) }
+    fun setRepoUrl(v: String) = setRepos(listOf(RepoEntry(v.trim())))
+    /** 保存仓库列表（去空、按地址去重）；旧键 repoUrl 同步为第一个启用的，降级到旧版本也能用 */
+    fun setRepos(list: List<RepoEntry>, refresh: Boolean = false) {
+        val l = list.map { it.copy(url = it.url.trim(), name = it.name.trim()) }.filter { it.url.isNotEmpty() }.distinctBy { it.url }
+        val arr = org.json.JSONArray(); l.forEach { arr.put(org.json.JSONObject().put("url", it.url).put("name", it.name).put("on", it.on)) }
+        val first = l.firstOrNull { it.on }?.url.orEmpty()
+        prefs.edit().putString("repos", arr.toString()).putString("repoUrl", first).apply()
+        _state.value = _state.value.copy(repos = l, repoUrl = first)
+        if (refresh) refreshRepo()
+    }
+    /** 新增或修改（old 为原地址，null 表示新增） */
+    fun saveRepo(old: String?, url: String, name: String) {
+        val e = RepoEntry(url.trim(), name.trim(), true); val l = _state.value.repos
+        setRepos(if (old == null) l + e else l.map { if (it.url == old) e.copy(on = it.on) else it }, refresh = true)
+    }
+    fun removeRepo(url: String) = setRepos(_state.value.repos.filter { it.url != url }, refresh = true)
+    fun toggleRepo(url: String, on: Boolean) = setRepos(_state.value.repos.map { if (it.url == url) it.copy(on = on) else it }, refresh = true)
+    /** 拖动排序结束时调用 */
+    fun moveRepo(from: Int, to: Int) {
+        val l = _state.value.repos.toMutableList()
+        if (from !in l.indices || to !in l.indices || from == to) return
+        l.add(to, l.removeAt(from)); setRepos(l, refresh = true)
     }
 
     fun refreshRepo() {
         if (_state.value.repoLoading) return
-        val urls = _state.value.repoUrls
+        val urls = _state.value.repos.filter { it.on }.map { it.url }
         if (urls.isEmpty()) {
             repoManifest = null
-            _state.value = _state.value.copy(repoModels = emptyList(), repoSounds = emptyList(), repoTtsSize = 0L, repoMsg = "还没填模型仓库地址（设置页）"); return
+            _state.value = _state.value.copy(repoModels = emptyList(), repoSounds = emptyList(), repoTtsSize = 0L, repoMsg = if (_state.value.repos.isEmpty()) "还没填模型仓库地址（设置页）" else "模型仓库都已关闭（设置页）"); return
         }
         _state.value = _state.value.copy(repoLoading = true, repoMsg = "正在获取模型列表…")
         viewModelScope.launch {
@@ -1305,7 +1356,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun refreshVoices() {
         val v = ModelStore.currentVoice(ctx) ?: ""
-        _state.value = _state.value.copy(liveVoices = ModelStore.voices(ctx), liveVoice = v,
+        _state.value = _state.value.copy(liveVoices = orderVoices(ModelStore.voices(ctx)), voicePins = voicePins(), liveVoice = v,
             liveBench = ctx.getSharedPreferences("live", 0).getString("bench_$v", "") ?: "")
     }
 
@@ -2390,4 +2441,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     @Suppress("unused")
     private suspend fun unusedWithContext() = withContext(Dispatchers.Default) { Unit }
+}
+
+/** 模型仓库：地址、备注名（空则显示地址）、是否启用 */
+data class RepoEntry(val url: String, val name: String = "", val on: Boolean = true) {
+    val label: String get() = name.ifBlank { url.substringAfter("://").removeSuffix("/") }
 }

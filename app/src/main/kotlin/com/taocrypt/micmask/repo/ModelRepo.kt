@@ -32,6 +32,10 @@ object ModelRepo {
     data class RModel(
         val id: String, val name: String, val author: String, val desc: String,
         val license: String, val files: List<RFile>,
+        /** 声线分类：info.json / 清单里的 "gender"：female / male，其余都算 other */
+        val gender: String = "other",
+        /** 来自哪个仓库（地址，fetchAll 填） */
+        val repo: String = "",
     ) {
         val totalSize: Long get() = files.sumOf { it.size }
     }
@@ -107,7 +111,7 @@ object ModelRepo {
      */
     fun fetchAll(inputs: List<String>): Manifest {
         val ok = ArrayList<Manifest>(); val err = ArrayList<String>()
-        for (u in inputs) runCatching { fetch(u) }.onSuccess { ok += it }.onFailure {
+        for (u in inputs) runCatching { fetch(u).let { m -> m.copy(models = m.models.map { it.copy(repo = u) }) } }.onSuccess { ok += it }.onFailure {
             L.w("模型仓库 $u 获取失败：${it.message}"); err += (u.substringAfter("://").take(40) + "：" + (it.message ?: "未知错误"))
         }
         if (ok.isEmpty()) throw java.io.IOException(err.joinToString("；"))
@@ -135,7 +139,8 @@ object ModelRepo {
         val models = if (ms == null) emptyList() else (0 until ms.length()).map { i ->
             val o = ms.getJSONObject(i)
             RModel(o.getString("id"), o.optString("name", o.getString("id")), o.optString("author", ""),
-                o.optString("desc", ""), o.optString("license", ""), files(o.optJSONArray("files")))
+                o.optString("desc", ""), o.optString("license", ""), files(o.optJSONArray("files")),
+                o.optString("gender", "").lowercase().let { if (it == "female" || it == "male") it else "other" })
         }
         val ss = root.optJSONArray("sounds")
         val sounds = if (ss == null) emptyList() else (0 until ss.length()).map { i ->
