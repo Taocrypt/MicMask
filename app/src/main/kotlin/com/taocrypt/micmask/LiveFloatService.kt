@@ -74,6 +74,8 @@ class LiveFloatService : Service() {
     private lateinit var presetRow: LinearLayout
     /** 普通模式（无 Shizuku）录播按钮：按住录音，松手转换并外放，上滑取消 */
     private lateinit var recBtn: TextView
+    private lateinit var playBtn: TextView
+    private lateinit var recRow: LinearLayout
     private lateinit var sfxRow: LinearLayout
     private var lastSfxKey = ""
     private var lastPresetKey = ""
@@ -140,6 +142,12 @@ class LiveFloatService : Service() {
         modeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         presetRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         recBtn = recButton()
+        playBtn = playButton()
+        recRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; visibility = View.GONE
+            addView(recBtn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { topMargin = sdp(8) })
+            addView(playBtn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = sdp(8); marginStart = sdp(6) })
+        }
         sfxRow = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         // 底栏：左下性能信息（可换行，占满剩余宽度），右下缩放工具 A− / A+ / ⤡
         // 启动/停止按钮已去掉：点正在运行的模式按钮即停止；「打开 App」「关闭」改为双击 / 长按悬浮球
@@ -157,7 +165,7 @@ class LiveFloatService : Service() {
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(modeRow)
-            addView(recBtn)
+            addView(recRow)
             addView(space(8)); addView(HorizontalScrollView(this@LiveFloatService).apply { isHorizontalScrollBarEnabled = false; addView(presetRow) })
             addView(space(8)); addView(TextView(this@LiveFloatService).apply { text = tr("音效包"); setTextColor(0xFF999999.toInt()); textSize = 11f * ps })
             addView(space(2)); addView(sfxRow)
@@ -407,13 +415,15 @@ class LiveFloatService : Service() {
 
     // AI 变声时快速轮询输出状态，给色环上色
     private var outVoiced = false
+    private var lastClip = false
     private val fast = object : Runnable { override fun run() {
         val st = vm()?.state?.value
         val ai = (st?.liveOn == true) && st.liveMode == 0
         outVoiced = ai && (MicInjector.outState()?.let { it.first in 0..250 } ?: false)
         paintRing(st?.liveOn == true)
-        val clip = expanded && (st?.recording == true || st?.clipBusy == true)
-        if (clip) paintRec(st)
+        val clip = expanded && (st?.recording == true || st?.clipBusy == true || st?.qqPlaying == true)
+        if (clip || clip != lastClip) paintRec(st)
+        lastClip = clip
         h.postDelayed(this, if (ai) 120 else if (clip) 200 else 600)
     } }
     private fun paintRing(on: Boolean) = ring.setStroke(dp(3), when { outVoiced -> RING_BUSY; on -> ACCENT; else -> RING_OFF })
@@ -442,7 +452,7 @@ class LiveFloatService : Service() {
         if (force || now - lastStatT >= 900) { lastStatT = now; stat.text = statText() }
         // 模式按钮
         modeRow.removeAllViews()
-        recBtn.visibility = if (speaker) View.VISIBLE else View.GONE
+        recRow.visibility = if (speaker) View.VISIBLE else View.GONE
         if (speaker) {
             MODES.take(2).forEachIndexed { i, n ->
                 modeRow.addView(chip(n, if (mode == i) ACCENT else 0x33FFFFFF, R1) { if (vm == null) openApp() else vm.pickMode(i) })
@@ -514,13 +524,35 @@ class LiveFloatService : Service() {
             busy -> "${st.clipStage} ${Math.round(st.clipProgress * 100)}%"
             recCancel -> tr("松开取消")
             rec -> tr("录音中 %d:%02d · 松手转换，上滑取消").format(st.recElapsedMs / 60000, st.recElapsedMs / 1000 % 60)
-            playing -> tr("■ 停止外放")
             else -> tr("按住 录一句")
         }
-        recBtn.background = round(when { recCancel -> 0xFFE5484D.toInt(); rec || playing -> ACCENT; busy -> 0x22FFFFFF; else -> 0x33FFFFFF }, R2)
+        recBtn.background = round(when { recCancel -> 0xFFE5484D.toInt(); rec -> ACCENT; busy -> 0x22FFFFFF; else -> 0x33FFFFFF }, R2)
+        if (::playBtn.isInitialized) {
+            val has = st?.qqPendingName != null && !busy && !rec
+            playBtn.text = if (playing) "■" else "▶"
+            playBtn.alpha = if (has || playing) 1f else 0.35f
+            playBtn.background = round(if (playing) ACCENT else 0x33FFFFFF, R2)
+        }
     }
 
     private var recCancel = false
+    /** 普通模式悬浮窗：手动播放/停止最近一次转换结果 */
+    private fun playButton() = TextView(this).apply {
+        setTextColor(Color.WHITE); textSize = 14f * ps; gravity = Gravity.CENTER; typeface = Typeface.DEFAULT_BOLD
+        setPadding(sdp(16), sdp(12), sdp(16), sdp(12)); text = "▶"
+        setOnClickListener {
+            cancelHide()
+            val vm = vm(); val st = vm?.state?.value
+            when {
+                vm == null || st == null -> openApp()
+                st.qqPlaying -> vm.stopQqLoop()
+                st.clipBusy || st.recording -> {}
+                st.qqPendingName == null -> android.widget.Toast.makeText(applicationContext, tr("还没有录音，先按住录一句"), android.widget.Toast.LENGTH_SHORT).show()
+                else -> vm.playPendingNow()
+            }
+            h.postDelayed({ paintRec(vm()?.state?.value) }, 80); scheduleHide()
+        }
+    }
     private fun recButton() = TextView(this).apply {
         setTextColor(Color.WHITE); textSize = 14f * ps; gravity = Gravity.CENTER; typeface = Typeface.DEFAULT_BOLD
         setPadding(sdp(12), sdp(12), sdp(12), sdp(12)); visibility = View.GONE
@@ -534,7 +566,6 @@ class LiveFloatService : Service() {
                     when {
                         vm == null || st == null -> openApp()
                         st.clipBusy -> {}
-                        st.qqPlaying -> vm.stopQqLoop()
                         !vm.hasMicPermission() -> { android.widget.Toast.makeText(applicationContext, tr("需要麦克风权限才能录音"), android.widget.Toast.LENGTH_SHORT).show(); openApp() }
                         else -> { y0 = e.rawY; active = true; v.parent?.requestDisallowInterceptTouchEvent(true)
                             runCatching { v.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY) }; vm.clipStart() }
@@ -545,7 +576,7 @@ class LiveFloatService : Service() {
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     if (active && vm != null) {
                         val cur = st?.liveMode?.coerceAtMost(1) ?: 0
-                        if (recCancel || e.actionMasked == MotionEvent.ACTION_CANCEL) vm.clipCancel() else vm.clipStop(cur)
+                        if (recCancel || e.actionMasked == MotionEvent.ACTION_CANCEL) vm.clipCancel() else vm.clipStop(cur, autoPlay = false)
                     }
                     active = false; recCancel = false
                     h.postDelayed({ paintRec(vm()?.state?.value) }, 80); scheduleHide()

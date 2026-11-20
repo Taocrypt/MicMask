@@ -1320,9 +1320,9 @@ private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (St
     item {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
             ArrowPreference(title = tr("外观"), summary = tr("深浅色、莫奈取色、液态玻璃"), onClick = { open("theme") })
-            ArrowPreference(title = tr("日志"), summary = tr("实时查看、筛选、复制，导出到 下载/MicMask"), onClick = { open("logs") })
-            ArrowPreference(title = tr("音频还原"), summary = tr("某个应用突然没声音时点这里：停止变声、还原麦克风，并恢复被禁止播放声音的应用"), onClick = { vm.repairAudio() })
-            ArrowPreference(title = tr("关于 MicMask"), summary = tr("v{0} · 检查更新、交流群、致谢", com.taocrypt.micmask.BuildConfig.VERSION_NAME), onClick = { open("about") })
+            ArrowPreference(title = tr("日志"), summary = tr("查看、筛选、导出日志"), onClick = { open("logs") })
+            ArrowPreference(title = tr("音频还原"), summary = tr("应用没声音时点这里还原"), onClick = { vm.repairAudio() })
+            ArrowPreference(title = tr("关于 MicMask"), summary = tr("v{0} · 更新、交流群、致谢", com.taocrypt.micmask.BuildConfig.VERSION_NAME), onClick = { open("about") })
         }
     }
 }

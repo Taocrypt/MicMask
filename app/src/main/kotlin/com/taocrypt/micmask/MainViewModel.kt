@@ -664,7 +664,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun clipCancel() = cancelRecording()
 
     /** mode 0=AI 音色，1=音调（变调 + 音调页效果） */
-    fun clipStop(mode: Int) {
+    /** @param autoPlay 主页松手直接外放；悬浮窗传 false，改为手动点播放 */
+    fun clipStop(mode: Int, autoPlay: Boolean = true) {
         if (!_state.value.recording) return
         val r = recorder.stop()
         _state.value = _state.value.copy(recording = false, recElapsedMs = 0L, recLevel = 0f)
@@ -719,9 +720,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 armQqPending(f)
                 L.i("录播 ${if (mode == 0) "AI" else "普通"} → ${f.name} %.1fs".format(sec))
                 // 松手转换完直接外放（不再需要单独的悬浮球/外放按钮）
-                runCatching { playPendingNow() }
+                if (autoPlay) runCatching { playPendingNow() }
                 _state.value = _state.value.copy(clipBusy = false, clipStage = "", clipFile = f, clipSeconds = sec,
-                    toast = tr("转换完成，正在外放"))
+                    toast = if (autoPlay) tr("转换完成，正在外放") else tr("转换完成，点 ▶ 播放"))
             }.onFailure {
                 L.e("录播转换失败", it)
                 _state.value = _state.value.copy(clipBusy = false, clipStage = "", toast = tr("转换失败：{0}", it.message))

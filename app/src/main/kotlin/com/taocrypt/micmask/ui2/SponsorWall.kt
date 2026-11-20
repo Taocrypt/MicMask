@@ -9,6 +9,8 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -105,6 +107,21 @@ private suspend fun loadAvatar(url: String): ImageBitmap? {
     return bmp
 }
 
+
+/** 预览用示例名单（只在本机显示，不联网、不写缓存）：赞赏墙卡片长按切换 */
+private fun demoDoc(): SponsorDoc {
+    val now = System.currentTimeMillis() / 1000
+    val names = listOf("小鹿乱撞", "夜猫子阿杰", "Kirito", "柠檬不酸", "momo", "一只咸鱼", "星河长明", "阿乌", "Lumi", "南瓜粥",
+        "今天也要早睡", "风铃", "Echo", "芝士奶盖", "老王隔壁的", "Neko", "白开水", "七月", "Rain", "橘子汽水",
+        "不吃香菜", "阿狸", "Moonlight", "冰美式", "鱼丸粗面", "Sakura", "晚风", "十一", "Pixel", "蓝莓派", "云朵", "Tofu")
+    val remarks = listOf("开黑必备，支持！", "亚托莉太可爱了", "", "希望出更多男声", "", "加油作者", "用来整蛊室友哈哈", "", "催更 iOS 版", "")
+    val list = names.mapIndexed { i, n ->
+        val amt = listOf(200.0, 128.0, 66.6, 50.0, 30.0, 20.0, 18.8, 10.0, 6.0, 5.0)[i % 10] * (if (i < 3) 2 else 1)
+        Sponsor(n, "", amt, remarks[i % remarks.size], if (i < 7) now + 86400L * (30 - i) else now - 86400L * (i + 3))
+    }.sortedByDescending { it.amount }
+    return SponsorDoc(list.size, list.sumOf { it.amount }, list)
+}
+
 private fun yuan(v: Double) = "¥" + DecimalFormat("#,##0.##").format(v)
 
 @Composable
@@ -116,9 +133,16 @@ fun SponsorWall() {
     LaunchedEffect(Unit) { val d = loadSponsors(ctx); if (d != null) doc = d else failed = true }
     val summary = MiuixTheme.colorScheme.onSurfaceVariantSummary
 
+    var demo by remember { mutableStateOf(false) }
     SmallTitle(tr("赞赏墙"))
-    Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
-        val d = doc
+    Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp)
+        .pointerInput(Unit) { detectTapGestures(onLongPress = {
+            demo = !demo
+            android.widget.Toast.makeText(ctx, if (demo) tr("预览示例名单（仅本机，非真实赞助）") else tr("已退出示例名单"), android.widget.Toast.LENGTH_SHORT).show()
+        }) }) {
+        val d = if (demo) demoDoc() else doc
+        if (demo) Text(tr("示例数据，仅预览显示效果 · 长按退出"), fontSize = 12.sp, color = MiuixTheme.colorScheme.primary,
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp))
         if (d == null || d.list.isEmpty()) {
             Text(if (d == null) (if (failed) tr("名单暂时无法加载，稍后再看") else tr("名单加载中…")) else tr("还没有赞助者，成为第一位吧"),
                 fontSize = 13.sp, color = summary, modifier = Modifier.padding(16.dp))
