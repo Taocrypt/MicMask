@@ -136,16 +136,11 @@ fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit =
             Text(tr("安卓实时变声 · 直通游戏与通话麦克风"), fontSize = 13.sp, color = summary, textAlign = TextAlign.Center)
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("v${BuildConfig.VERSION_NAME}", fontSize = 12.sp, color = MiuixTheme.colorScheme.onPrimary,
-                    modifier = Modifier.clip(RoundedCornerShape(50)).background(MiuixTheme.colorScheme.primary).padding(horizontal = 10.dp, vertical = 3.dp))
-                // GitHub 胶囊：图标 + star 数，点开项目主页
-                Row(Modifier.clip(RoundedCornerShape(50)).background(MiuixTheme.colorScheme.onSurface)
-                    .clickable { openUrl(ctx, AboutLinks.HOME) }.padding(horizontal = 10.dp, vertical = 3.dp),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    Icon(painterResource(com.taocrypt.micmask.R.drawable.ic_github), "GitHub", Modifier.size(14.dp), tint = MiuixTheme.colorScheme.surface)
-                    Spacer(Modifier.width(4.dp))
-                    Text(stars?.let { "★ $it" } ?: "GitHub", fontSize = 12.sp, color = MiuixTheme.colorScheme.surface)
-                }
+                // 两个胶囊同款：图标 + 文字
+                Pill(com.taocrypt.micmask.R.drawable.ic_tag, "v${BuildConfig.VERSION_NAME}",
+                    MiuixTheme.colorScheme.primary, MiuixTheme.colorScheme.onPrimary)
+                Pill(com.taocrypt.micmask.R.drawable.ic_github, stars?.let { "★ $it" } ?: "GitHub",
+                    MiuixTheme.colorScheme.onSurface, MiuixTheme.colorScheme.surface) { openUrl(ctx, AboutLinks.HOME) }
             }
         }
 
@@ -198,7 +193,7 @@ fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit =
         }
 
         // ---- 赞赏 ----
-        SmallTitle(tr("支持开发"))
+        SmallTitle(tr("赞赏支持"))
         Card(Modifier.fillMaxWidth().padding(pad)) {
             val ready = AboutLinks.DONATE.isNotBlank()
             ArrowPreference(title = tr("赞赏支持"), summary = if (ready) tr("爱发电 · ¥5/月，请作者喝杯奶茶") else tr("即将开放，感谢关注"),
@@ -255,4 +250,14 @@ private suspend fun fetchStars(): Int? = withContext(Dispatchers.IO) {
         }
         if (c.responseCode != 200) null else JSONObject(c.inputStream.bufferedReader().readText()).optInt("stargazers_count", -1).takeIf { it >= 0 }
     }.getOrNull()
+}
+
+@Composable
+private fun Pill(icon: Int, text: String, bg: androidx.compose.ui.graphics.Color, fg: androidx.compose.ui.graphics.Color, onClick: (() -> Unit)? = null) {
+    Row(Modifier.clip(RoundedCornerShape(50)).background(bg).then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier).padding(horizontal = 10.dp, vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Icon(painterResource(icon), null, Modifier.size(14.dp), tint = fg)
+        Spacer(Modifier.width(4.dp))
+        Text(text, fontSize = 12.sp, color = fg)
+    }
 }
