@@ -765,7 +765,7 @@ private fun RepoTabs(vm: MainViewModel, st: UiState) {
     }
     val base = repoFiltered(st)
     Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        for ((k, label) in listOf("female" to "女声", "male" to "男声", "other" to "其他")) {
+        for ((k, label) in listOf("male" to "男声", "female" to "女声", "anime" to "动漫", "other" to "其他")) {
             val sel = st.repoTab == k
             val n = base.count { it.gender == k }
             Text("$label $n", Modifier.weight(1f).clip(RoundedCornerShape(12.dp))

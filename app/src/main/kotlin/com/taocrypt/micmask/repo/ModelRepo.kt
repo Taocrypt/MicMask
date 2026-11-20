@@ -32,7 +32,7 @@ object ModelRepo {
     data class RModel(
         val id: String, val name: String, val author: String, val desc: String,
         val license: String, val files: List<RFile>,
-        /** 声线分类：info.json / 清单里的 "gender"：female / male，其余都算 other */
+        /** 分类：info.json / 清单里的 "gender"：male / female / anime（动漫），其余都算 other */
         val gender: String = "other",
         /** 来自哪个仓库（地址，fetchAll 填） */
         val repo: String = "",
@@ -140,7 +140,7 @@ object ModelRepo {
             val o = ms.getJSONObject(i)
             RModel(o.getString("id"), o.optString("name", o.getString("id")), o.optString("author", ""),
                 o.optString("desc", ""), o.optString("license", ""), files(o.optJSONArray("files")),
-                o.optString("gender", "").lowercase().let { if (it == "female" || it == "male") it else "other" })
+                o.optString("gender", "").lowercase().let { if (it in setOf("female", "male", "anime")) it else "other" })
         }
         val ss = root.optJSONArray("sounds")
         val sounds = if (ss == null) emptyList() else (0 until ss.length()).map { i ->
