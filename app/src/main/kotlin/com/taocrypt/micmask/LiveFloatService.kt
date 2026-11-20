@@ -35,7 +35,7 @@ import kotlin.math.abs
 
 /**
  * 实时变声悬浮窗：收起是小球（颜色=运行状态，字=当前模式），展开是面板：
- * 性能（CPU/温度/内存/进程/断流）· 三模式切换 · 当前模式预设 · 停止 / 打开 App。
+ * 性能（CPU/温度/内存/进程/断流）· 三模式切换 · 当前模式预设 · 启动/停止 · 耳返；单击悬浮球展开/收起，双击打开 App，长按关闭悬浮窗。
  * 操作经 MainViewModel.current（App 进程在就能用；Activity 被回收时提示打开 App）。
  */
 class LiveFloatService : Service() {
@@ -141,9 +141,12 @@ class LiveFloatService : Service() {
                 else if (v == null) openApp() else v.startMode(v.state.value.liveMode)
             }
             addView(stopChip)
-            addView(chip("打开 App", 0x33FFFFFF) { openApp() })
-            // 关闭：直接关掉悬浮窗（同设置里关开关；App 不在时直接停服务）
-            addView(chip("关闭", 0x33FFFFFF) { h.post { vm()?.setLiveFloat(false) ?: toggle(applicationContext, false) } })
+            // 耳返开关（戴耳机用，外放会啸叫）：只写「耳返」，颜色表示开/关
+            monChip = chip("耳返", 0x33FFFFFF) {
+                val v = vm(); if (v == null) openApp() else v.setLiveMonitor(!(v.state.value.liveMonitor))
+            }
+            addView(monChip)
+            // 「打开 App」「关闭」已去掉：双击悬浮球打开 App，长按悬浮球关闭悬浮窗
         }
         // 右下角工具：内容缩放 A− / A+，窗口大小 ⤡（无底纯图标，和启动/停止同一行贴右；极窄窗才换行）
         val tools = LinearLayout(this).apply {
@@ -287,12 +290,22 @@ class LiveFloatService : Service() {
 
     private fun attachDrag(v: View) {
         var sx = 0f; var sy = 0f; var ox = 0; var oy = 0; var moved = false
+        // 单击展开/收起（等双击超时才执行）；双击打开 App；长按关闭悬浮窗
+        var longFired = false; var lastUp = 0L
+        val dbl = android.view.ViewConfiguration.getDoubleTapTimeout().toLong()
+        val singleRun = Runnable { setExpanded(!expanded) }
+        val longRun = Runnable {
+            longFired = true
+            runCatching { v.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS) }
+            h.post { vm()?.setLiveFloat(false) ?: toggle(applicationContext, false) }
+        }
         v.setOnTouchListener { _, e ->
             when (e.action) {
-                MotionEvent.ACTION_DOWN -> { cancelHide(); if (peeked) unpeek(); dockAnim?.cancel(); sx = e.rawX; sy = e.rawY; ox = lp.x; oy = lp.y; moved = false; true }
+                MotionEvent.ACTION_DOWN -> { cancelHide(); if (peeked) unpeek(); dockAnim?.cancel(); sx = e.rawX; sy = e.rawY; ox = lp.x; oy = lp.y; moved = false
+                    longFired = false; h.postDelayed(longRun, android.view.ViewConfiguration.getLongPressTimeout().toLong()); true }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = e.rawX - sx; val dy = e.rawY - sy
-                    if (!moved && abs(dx) + abs(dy) > dp(6)) moved = true
+                    if (!moved && abs(dx) + abs(dy) > dp(6)) { moved = true; h.removeCallbacks(longRun) }
                     if (moved) {
                         // 展开时整个窗口一起移动，不收起；按整个窗口尺寸夹在屏内
                         val (w, hh) = screen(); val r = root
@@ -306,7 +319,15 @@ class LiveFloatService : Service() {
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    if (!moved) { if (e.action == MotionEvent.ACTION_UP) setExpanded(!expanded) }
+                    h.removeCallbacks(longRun)
+                    if (longFired) { /* 长按已关闭悬浮窗 */ }
+                    else if (!moved) {
+                        if (e.action == MotionEvent.ACTION_UP) {
+                            val t = e.eventTime
+                            if (t - lastUp <= dbl) { h.removeCallbacks(singleRun); lastUp = 0L; openApp() }
+                            else { lastUp = t; h.postDelayed(singleRun, dbl) }
+                        }
+                    }
                     else {
                         // 贴边：按悬浮球中心吸到最近的左/右边
                         val (w, _) = screen()
@@ -415,6 +436,7 @@ class LiveFloatService : Service() {
     private fun tick() { h.post(loop); h.post(fast) }
 
     private var stopChip: TextView? = null
+    private var monChip: TextView? = null
     private var lastStopOn: Boolean? = null
     private fun refresh(force: Boolean) {
         if (root == null) return
@@ -443,11 +465,9 @@ class LiveFloatService : Service() {
                 if (vm == null) openApp() else vm.startMode(i)
             })
         }
-        // 耳返开关（戴耳机用，外放会啸叫）
+        // 耳返：颜色标识开关
         val mon = st?.liveMonitor == true
-        modeRow.addView(chip(if (mon) "耳返 开" else "耳返 关", if (mon) ACCENT else 0x33FFFFFF) {
-            if (vm == null) openApp() else vm.setLiveMonitor(!mon)
-        })
+        monChip?.background = round(if (mon) ACCENT else 0x33FFFFFF, 14)
         // 语音包
         val sk = "${st?.sfxPlaying}|${st?.sounds?.size}|${st?.sfxLoop}|${st?.packsOff}"
         if (force || sk != lastSfxKey) {

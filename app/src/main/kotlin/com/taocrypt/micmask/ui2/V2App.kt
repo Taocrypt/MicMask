@@ -933,15 +933,18 @@ private fun LazyListScope.pitchPage(vm: MainViewModel, st: UiState) {
             val p = pitchPresets[i]; vm.setPitchSemis(p.semis); vm.applyFxPreset(1, p.name, p.fx)
         }
     }
-    item { SmallTitle("音调") }
+    item { SmallTitle("音调与音量") }
     item {
         Card(Modifier.fillMaxWidth().padding(PagePad).animateContentSize()) {
             Column(Modifier.padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("音调", Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
                     Text("${if (st.pitchSemis > 0) "+" else ""}${st.pitchSemis.roundToInt()} 半音", color = Summary)
-                    if (st.pitchSemis.roundToInt() != 0) Text("  重置", fontSize = 13.sp, color = MiuixTheme.colorScheme.primary,
-                        modifier = Modifier.clickable { vm.setPitchSemis(0f) })
+                    // 重置回当前预设的音调（内置或自建预设），没有对应预设时回 0
+                    val baseSemis = pitchPresets.firstOrNull { it.name == st.fxPreset }?.semis
+                        ?: st.userPresets[1].orEmpty().firstOrNull { it.name == st.fxPreset }?.semis ?: 0f
+                    if (st.pitchSemis.roundToInt() != baseSemis.roundToInt()) Text("  重置", fontSize = 13.sp, color = MiuixTheme.colorScheme.primary,
+                        modifier = Modifier.clickable { vm.setPitchSemis(baseSemis) })
                 }
                 Slider(value = st.pitchSemis, onValueChange = { vm.setPitchSemis(it.roundToInt().toFloat()) }, valueRange = -12f..12f, steps = 23)
                 Spacer(Modifier.height(14.dp))
@@ -1275,7 +1278,7 @@ private fun FloatLookSettings() {
             Column(Modifier.weight(1f)) { Text("收起后自动贴边半隐藏", fontSize = 14.sp); Text("3 秒不操作，悬浮球缩进屏幕边缘一半", fontSize = 12.sp, color = Summary) }
             Switch(checked = ah, onCheckedChange = { ah = it; sp.edit().putBoolean("lf_autohide", it).apply() })
         }
-        Text("控制窗右下角「⤡」长按后拖动，可自由调宽和高；双击「⤡」恢复默认大小。", fontSize = 12.sp, color = Summary, modifier = Modifier.padding(vertical = 6.dp))
+        Text("悬浮球：单击展开/收起，双击打开 App，长按关闭悬浮窗。控制窗右下角「⤡」长按后拖动，可自由调宽和高；双击「⤡」恢复默认大小。", fontSize = 12.sp, color = Summary, modifier = Modifier.padding(vertical = 6.dp))
         Text("恢复默认", Modifier.clip(RoundedCornerShape(8.dp)).clickable {
             // 一次性写入，悬浮窗只重建一次；窗口宽高也一并恢复
             sp.edit().remove("lf_ball_dp").remove("lf_ball_alpha").remove("lf_panel_scale").remove("lf_panel_alpha")
