@@ -1289,7 +1289,7 @@ private fun FloatLookSettings() {
 }
 
 private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (String) -> Unit) {
-    item { SmallTitle("变声目标") }
+    item { SmallTitle("变声设置") }
     item {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
             val n = vm.whitelist().size
