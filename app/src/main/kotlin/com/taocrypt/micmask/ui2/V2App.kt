@@ -220,7 +220,7 @@ fun V2App(vm: MainViewModel) {
                 when (page) {
                     "tts" -> SubPage("文字转语音", { sub = null }) { TtsPage(vm, st) }
                     "file" -> SubPage("文件变声", { sub = null }) { FilePage(vm, st) }
-                    "whitelist" -> SubPage("目标应用白名单", { sub = null }) { WhitelistPage(vm) }
+                    "whitelist" -> SubPage("目标应用", { sub = null }) { WhitelistPage(vm) }
                     "theme" -> SubPage("外观", { sub = null }) { ThemePage(ui) }
                     "about" -> SubPage("关于", { sub = null }) { AboutPage(vm, { sub = "logs" }, { sub = "mirrors" }) }
                     "mirrors" -> SubPage("下载镜像", { sub = "about" }) { com.taocrypt.micmask.update.MirrorPage() }
@@ -1278,7 +1278,7 @@ private fun FloatLookSettings() {
             Column(Modifier.weight(1f)) { Text("收起后自动贴边半隐藏", fontSize = 14.sp); Text("3 秒不操作，悬浮球缩进屏幕边缘一半", fontSize = 12.sp, color = Summary) }
             Switch(checked = ah, onCheckedChange = { ah = it; sp.edit().putBoolean("lf_autohide", it).apply() })
         }
-        Text("控制窗右下角「⤡」长按后拖动，可自由调宽和高；双击「⤡」恢复默认大小。", fontSize = 12.sp, color = Summary, modifier = Modifier.padding(vertical = 6.dp))
+        Text("点模式按钮启动，再点一次停止；拖动悬浮球可贴边。控制窗右下角「⤡」长按后拖动，可自由调宽和高；双击「⤡」恢复默认大小。", fontSize = 12.sp, color = Summary, modifier = Modifier.padding(vertical = 6.dp))
         Text("恢复默认", Modifier.clip(RoundedCornerShape(8.dp)).clickable {
             // 一次性写入，悬浮窗只重建一次；窗口宽高也一并恢复
             sp.edit().remove("lf_ball_dp").remove("lf_ball_alpha").remove("lf_panel_scale").remove("lf_panel_alpha")
@@ -1293,13 +1293,13 @@ private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (St
     item {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
             val n = vm.whitelist().size
-            ArrowPreference(title = "目标应用白名单", summary = if (n == 0) "未选择（只做本机试听）" else "已选 $n 个应用", onClick = { open("whitelist") })
-            SwitchPreference(checked = st.liveAec, onCheckedChange = { vm.setLiveAec(it) }, title = "通话模式录音",
-                summary = "开：回声消除+降噪，外放不串音；关：原始麦克风，音质优先", enabled = !st.liveOn)
+            ArrowPreference(title = "目标应用", summary = if (n == 0) "未选择，只做本机试听" else "已选 $n 个应用", onClick = { open("whitelist") })
+            SwitchPreference(checked = st.liveAec, onCheckedChange = { vm.setLiveAec(it) }, title = "降噪模式",
+                summary = if (st.liveAec) "已开：回声消除 + 降噪" else "已关：原始麦克风，音质优先", enabled = !st.liveOn)
             SwitchPreference(checked = st.liveMonitor, onCheckedChange = { vm.setLiveMonitor(it) }, title = "实时耳返",
-                summary = "三种模式通用：变声后的声音同时送到耳机（外放会啸叫，请戴耳机）")
+                summary = "变声后的声音送到耳机")
             SwitchPreference(checked = st.liveFloat, onCheckedChange = { vm.setLiveFloat(it) }, title = "悬浮窗开关",
-                summary = "单击悬浮球展开/收起，双击打开 App，长按关闭悬浮窗，拖动可贴边；点模式按钮启动，再点正在运行的模式停止")
+                summary = "单击展开 · 双击打开 App · 长按关闭")
             if (st.liveFloat) FloatLookSettings()
         }
     }
