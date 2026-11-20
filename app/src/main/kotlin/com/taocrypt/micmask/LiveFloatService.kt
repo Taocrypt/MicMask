@@ -72,6 +72,8 @@ class LiveFloatService : Service() {
     private lateinit var stat: TextView
     private lateinit var modeRow: LinearLayout
     private lateinit var presetRow: LinearLayout
+    /** 普通模式（无 Shizuku）录播按钮：按住录音，松手转换并外放，上滑取消 */
+    private lateinit var recBtn: TextView
     private lateinit var sfxRow: LinearLayout
     private var lastSfxKey = ""
     private var lastPresetKey = ""
@@ -137,6 +139,7 @@ class LiveFloatService : Service() {
         stat = TextView(this).apply { setTextColor(0xFFAAAAAA.toInt()); textSize = 10f * ps; typeface = Typeface.MONOSPACE; text = tr("读取中…") }
         modeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         presetRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        recBtn = recButton()
         sfxRow = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         // 底栏：左下性能信息（可换行，占满剩余宽度），右下缩放工具 A− / A+ / ⤡
         // 启动/停止按钮已去掉：点正在运行的模式按钮即停止；「打开 App」「关闭」改为双击 / 长按悬浮球
@@ -154,6 +157,7 @@ class LiveFloatService : Service() {
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(modeRow)
+            addView(recBtn)
             addView(space(8)); addView(HorizontalScrollView(this@LiveFloatService).apply { isHorizontalScrollBarEnabled = false; addView(presetRow) })
             addView(space(8)); addView(TextView(this@LiveFloatService).apply { text = tr("音效包"); setTextColor(0xFF999999.toInt()); textSize = 11f * ps })
             addView(space(2)); addView(sfxRow)
@@ -408,7 +412,9 @@ class LiveFloatService : Service() {
         val ai = (st?.liveOn == true) && st.liveMode == 0
         outVoiced = ai && (MicInjector.outState()?.let { it.first in 0..250 } ?: false)
         paintRing(st?.liveOn == true)
-        h.postDelayed(this, if (ai) 120 else 600)
+        val clip = expanded && (st?.recording == true || st?.clipBusy == true)
+        if (clip) paintRec(st)
+        h.postDelayed(this, if (ai) 120 else if (clip) 200 else 600)
     } }
     private fun paintRing(on: Boolean) = ring.setStroke(dp(3), when { outVoiced -> RING_BUSY; on -> ACCENT; else -> RING_OFF })
 
@@ -426,7 +432,9 @@ class LiveFloatService : Service() {
         val vm = vm()
         val st = vm?.state?.value
         val on = st?.liveOn == true
-        val mode = st?.liveMode ?: 0
+        // 普通模式（无 Shizuku、未在变声）：悬浮窗换成录播 UI —— 模式只有 AI/普通，按住录音松手转换外放
+        val speaker = st?.speakerMode == true && !on
+        val mode = (st?.liveMode ?: 0).let { if (speaker) minOf(it, 1) else it }
         paintRing(on)
         if (!expanded) return
         // 性能：每秒一次
@@ -434,7 +442,13 @@ class LiveFloatService : Service() {
         if (force || now - lastStatT >= 900) { lastStatT = now; stat.text = statText() }
         // 模式按钮
         modeRow.removeAllViews()
-        MODES.forEachIndexed { i, n ->
+        recBtn.visibility = if (speaker) View.VISIBLE else View.GONE
+        if (speaker) {
+            MODES.take(2).forEachIndexed { i, n ->
+                modeRow.addView(chip(n, if (mode == i) ACCENT else 0x33FFFFFF, R1) { if (vm == null) openApp() else vm.pickMode(i) })
+            }
+            paintRec(st)
+        } else MODES.forEachIndexed { i, n ->
             // 声卡依赖 Shizuku 注入：未授权（外放模式）时不显示
             if (i == 2 && !runCatching { com.taocrypt.micmask.inject.MicInjector.shizukuGranted() }.getOrDefault(false)) return@forEachIndexed
             val sel = st != null && mode == i
@@ -442,12 +456,14 @@ class LiveFloatService : Service() {
                 if (vm == null) openApp() else vm.startMode(i)
             })
         }
-        // 耳返（放在声卡后面）：只写「耳返」，颜色标识开关；戴耳机用，外放会啸叫
-        val mon = st?.liveMonitor == true
-        modeRow.addView(chip(tr("耳返"), if (mon) ACCENT else 0x33FFFFFF, R1) { if (vm == null) openApp() else vm.setLiveMonitor(!mon) })
-        // 降噪（通话录音源，带回声消除/降噪）：变声中切换会自动重启一次
-        val aec = st?.liveAec == true
-        modeRow.addView(chip(tr("降噪"), if (aec) ACCENT else 0x33FFFFFF, R1) { if (vm == null) openApp() else vm.toggleLiveAecAnywhere() })
+        if (!speaker) {
+            // 耳返（放在声卡后面）：只写「耳返」，颜色标识开关；戴耳机用，外放会啸叫
+            val mon = st?.liveMonitor == true
+            modeRow.addView(chip(tr("耳返"), if (mon) ACCENT else 0x33FFFFFF, R1) { if (vm == null) openApp() else vm.setLiveMonitor(!mon) })
+            // 降噪（通话录音源，带回声消除/降噪）：变声中切换会自动重启一次
+            val aec = st?.liveAec == true
+            modeRow.addView(chip(tr("降噪"), if (aec) ACCENT else 0x33FFFFFF, R1) { if (vm == null) openApp() else vm.toggleLiveAecAnywhere() })
+        }
         // 语音包
         val sk = "${st?.sfxPlaying}|${st?.sounds?.size}|${st?.sfxLoop}|${st?.packsOff}"
         if (force || sk != lastSfxKey) {
@@ -487,6 +503,55 @@ class LiveFloatService : Service() {
                     st.userPresets[2].orEmpty().forEach { p -> presetRow.addView(chip("★" + p.name, if (p.name == sel) ACCENT else 0x33FFFFFF) { vm.applyUserPreset(p) }) }
                 }
             }
+        }
+    }
+
+    private fun paintRec(st: UiState?) {
+        if (!::recBtn.isInitialized) return
+        val rec = st?.recording == true; val busy = st?.clipBusy == true; val playing = st?.qqPlaying == true
+        recBtn.text = when {
+            st == null -> tr("先打开 App")
+            busy -> "${st.clipStage} ${Math.round(st.clipProgress * 100)}%"
+            recCancel -> tr("松开取消")
+            rec -> tr("录音中 %d:%02d · 松手转换，上滑取消").format(st.recElapsedMs / 60000, st.recElapsedMs / 1000 % 60)
+            playing -> tr("■ 停止外放")
+            else -> tr("按住 录一句")
+        }
+        recBtn.background = round(when { recCancel -> 0xFFE5484D.toInt(); rec || playing -> ACCENT; busy -> 0x22FFFFFF; else -> 0x33FFFFFF }, R2)
+    }
+
+    private var recCancel = false
+    private fun recButton() = TextView(this).apply {
+        setTextColor(Color.WHITE); textSize = 14f * ps; gravity = Gravity.CENTER; typeface = Typeface.DEFAULT_BOLD
+        setPadding(sdp(12), sdp(12), sdp(12), sdp(12)); visibility = View.GONE
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = sdp(8) }
+        var y0 = 0f; var active = false
+        setOnTouchListener { v, e ->
+            val vm = vm(); val st = vm?.state?.value
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    cancelHide(); active = false; recCancel = false
+                    when {
+                        vm == null || st == null -> openApp()
+                        st.clipBusy -> {}
+                        st.qqPlaying -> vm.stopQqLoop()
+                        !vm.hasMicPermission() -> { android.widget.Toast.makeText(applicationContext, tr("需要麦克风权限才能录音"), android.widget.Toast.LENGTH_SHORT).show(); openApp() }
+                        else -> { y0 = e.rawY; active = true; v.parent?.requestDisallowInterceptTouchEvent(true)
+                            runCatching { v.performHapticFeedback(android.view.HapticFeedbackConstants.VIRTUAL_KEY) }; vm.clipStart() }
+                    }
+                    h.postDelayed({ paintRec(vm()?.state?.value) }, 80)
+                }
+                MotionEvent.ACTION_MOVE -> if (active) { val c = y0 - e.rawY > dp(72); if (c != recCancel) { recCancel = c; paintRec(st) } }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (active && vm != null) {
+                        val cur = st?.liveMode?.coerceAtMost(1) ?: 0
+                        if (recCancel || e.actionMasked == MotionEvent.ACTION_CANCEL) vm.clipCancel() else vm.clipStop(cur)
+                    }
+                    active = false; recCancel = false
+                    h.postDelayed({ paintRec(vm()?.state?.value) }, 80); scheduleHide()
+                }
+            }
+            true
         }
     }
 

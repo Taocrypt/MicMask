@@ -378,9 +378,9 @@ private fun HeroCard(vm: MainViewModel, st: UiState, mode: Int) {
             if (ai) Text(tr("音色 {0}", if (st.liveVoice.isEmpty()) tr("未安装") else vm.voiceLabel(st.liveVoice)) +
                 (if (st.liveBench.isNotEmpty()) " · ${st.liveBench}" else ""), fontSize = 13.sp, color = fg2, maxLines = 2)
             if (st.speakerMode && !st.liveOn && mode < 2) {
-                Text(tr("未授权 Shizuku，当前为录播模式：按住下方按钮录一句，松手自动转换并设为待发送；到 QQ 按住说话前点悬浮球，从扬声器放出。"),
+                Text(tr("普通模式（录播）：按住下方按钮录一句，松手自动转换并从扬声器播放；悬浮窗里也能按住录音。"),
                     fontSize = 12.sp, color = fg2)
-                TextButton(tr("授权 Shizuku（切换到实时变声）"), onClick = { vm.requestShizuku() }, modifier = Modifier.fillMaxWidth())
+                TextButton(tr("授权 Shizuku（切换到实时变声）"), onClick = { vm.setNormalMode(false) }, modifier = Modifier.fillMaxWidth())
                 return@Column
             }
             if (st.liveMsg.isNotEmpty() && (mine || !st.liveOn)) Text(st.liveMsg, fontSize = 12.sp, color = fg2, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -442,15 +442,6 @@ private fun ClipRecorder(vm: MainViewModel, st: UiState, mode: Int) {
         }, color = fgc, fontWeight = FontWeight.SemiBold)
     }
     if (st.clipBusy) LinearProgressIndicator(progress = st.clipProgress, modifier = Modifier.padding(PagePad).padding(bottom = 12.dp))
-    st.clipFile?.let { f ->
-        Card(Modifier.fillMaxWidth().padding(PagePad).padding(bottom = 12.dp)) {
-            SwitchPreference(checked = st.qqFloating, onCheckedChange = { vm.setFloating(it) }, title = tr("悬浮球"),
-                summary = tr("浮在 QQ 上，按住说话前点一下就外放待发送语音"))
-            ArrowPreference(title = if (st.qqPlaying) tr("停止外放") else tr("现在外放一遍"),
-                summary = tr("待发送：%s · %.1f 秒").format(st.qqPendingName ?: f.name, st.clipSeconds),
-                onClick = { if (st.qqPlaying) vm.stopQqLoop() else vm.playPendingNow() })
-        }
-    }
 }
 
 @Composable
@@ -1321,19 +1312,14 @@ private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (St
             if (st.liveFloat) FloatLookSettings()
         }
     }
-    item { SmallTitle(tr("权限")) }
+    item { SmallTitle(tr("运行模式")) }
     item { PermModeCard(vm, st) }
-    item { SmallTitle(tr("外观")) }
+    item { SmallTitle(tr("模型仓库")) }
+    item { RepoSetting(vm, st) }
+    item { SmallTitle(tr("其他")) }
     item {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
             ArrowPreference(title = tr("外观"), summary = tr("深浅色、莫奈取色、液态玻璃"), onClick = { open("theme") })
-        }
-    }
-    item { SmallTitle(tr("模型仓库")) }
-    item { RepoSetting(vm, st) }
-    item { SmallTitle(tr("日志与其他")) }
-    item {
-        Card(Modifier.fillMaxWidth().padding(PagePad)) {
             ArrowPreference(title = tr("日志"), summary = tr("实时查看、筛选、复制，导出到 下载/MicMask"), onClick = { open("logs") })
             ArrowPreference(title = tr("音频还原"), summary = tr("某个应用突然没声音时点这里：停止变声、还原麦克风，并恢复被禁止播放声音的应用"), onClick = { vm.repairAudio() })
             ArrowPreference(title = tr("关于 MicMask"), summary = tr("v{0} · 检查更新、交流群、致谢", com.taocrypt.micmask.BuildConfig.VERSION_NAME), onClick = { open("about") })
@@ -1400,9 +1386,9 @@ private fun RepoSetting(vm: MainViewModel, st: UiState) {
 private fun ThemePage(ui: UiPrefs) {
     val ctx = LocalContext.current
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        SmallTitle(tr("语言") + if (com.taocrypt.micmask.I18n.english) "" else " / Language")
+        SmallTitle(tr("语言"))
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
-            WindowDropdownPreference(items = listOf("跟随系统 / Follow system", "简体中文", "English"),
+            WindowDropdownPreference(items = listOf(tr("跟随系统"), "简体中文", "English"),
                 selectedIndex = com.taocrypt.micmask.I18n.lang.coerceIn(0, 2), title = tr("界面语言"),
                 summary = tr("日志始终为中文"),
                 onSelectedIndexChange = { v ->

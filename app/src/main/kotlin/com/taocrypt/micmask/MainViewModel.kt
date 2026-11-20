@@ -297,6 +297,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         refreshVoices()
         migrateRoutingOnce()
         runCatching { restoreLiveFloat() }
+        // 旧的独立悬浮球（FloatingPlayService）已并入变声悬浮窗：升级后若还开着就关掉
+        runCatching { if (FloatingPlayService.running) FloatingPlayService.toggle(ctx, false) }
 
         val s = _state.value
         _state.value = s.copy(
@@ -716,8 +718,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             res.onSuccess { (f, sec) ->
                 armQqPending(f)
                 L.i("录播 ${if (mode == 0) "AI" else "普通"} → ${f.name} %.1fs".format(sec))
+                // 松手转换完直接外放（不再需要单独的悬浮球/外放按钮）
+                runCatching { playPendingNow() }
                 _state.value = _state.value.copy(clipBusy = false, clipStage = "", clipFile = f, clipSeconds = sec,
-                    toast = tr("已设为待发送，到 QQ 按住说话前点悬浮球"))
+                    toast = tr("转换完成，正在外放"))
             }.onFailure {
                 L.e("录播转换失败", it)
                 _state.value = _state.value.copy(clipBusy = false, clipStage = "", toast = tr("转换失败：{0}", it.message))
@@ -905,6 +909,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         selectMode(mode); toggleLive()
     }
+    /** 悬浮窗（普通模式）只切换录播用的模式，不启动 */
+    fun pickMode(mode: Int) { if (!_state.value.liveOn) selectMode(mode.coerceIn(0, 1)) }
     private fun selectMode(mode: Int) {
         val semis = when (mode) { 0 -> prefs.getFloat("ai_semis", 0f); 1 -> _state.value.pitchSemis; else -> 0f }
         _state.value = _state.value.copy(liveMode = mode, liveAi = mode == 0, liveSemis = semis)
@@ -1001,7 +1007,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
     /** 文件变声结果：有 Shizuku 送麦，没有就设为待发送（交给变声页的悬浮球外放） */
     fun sendOrArm(f: File) {
-        if (speakerMode()) { armQqPending(f); _state.value = _state.value.copy(toast = tr("已设为待发送，到 QQ 按住说话前点悬浮球")) }
+        if (speakerMode()) { armQqPending(f); runCatching { playPendingNow() }; _state.value = _state.value.copy(toast = tr("正在外放")) }
         else sendFileToMic(f, f.nameWithoutExtension)
     }
 
@@ -1473,8 +1479,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun requestShizuku() {
+        if (!com.taocrypt.micmask.inject.MicInjector.shizukuRunning()) { toast(tr("Shizuku 没有运行，请先打开 Shizuku 并启动服务")); refreshInjectState(); return }
         com.taocrypt.micmask.inject.MicInjector.requestShizuku { ok ->
             L.i("Shizuku 授权结果：$ok")
+            if (!ok) toast(tr("Shizuku 授权被拒绝"))
             android.os.Handler(android.os.Looper.getMainLooper()).post { refreshInjectState() }
         }
         refreshInjectState()
