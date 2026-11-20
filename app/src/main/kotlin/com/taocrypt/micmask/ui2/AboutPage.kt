@@ -72,6 +72,9 @@ object AboutLinks {
     const val HOME = "https://github.com/Taocrypt/MicMask"
     const val RELEASES = "https://github.com/Taocrypt/MicMask/releases"
     const val ISSUES = "https://github.com/Taocrypt/MicMask/issues"
+    /** 官网（暂定主仓库 GitHub Pages，尚未建站） */
+    const val SITE = "https://taocrypt.github.io/MicMask/"
+    val RELEASE_TAG get() = "$RELEASES/tag/v${BuildConfig.VERSION_NAME}"
         const val MODEL_REPO = "https://cnb.build/taocrypt/MicMask"
     const val QQ_GROUP = "https://qm.qq.com/q/WHDZb3bXws"
     const val QQ_GROUP_NAME = "MicMask用户交流群"
@@ -97,7 +100,7 @@ object AboutLinks {
     )
 }
 
-private fun openUrl(ctx: Context, url: String) {
+internal fun openUrl(ctx: Context, url: String) {
     runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
         .onFailure { Toast.makeText(ctx, tr("没有可打开链接的应用"), Toast.LENGTH_SHORT).show() }
 }
@@ -110,7 +113,7 @@ private fun openQqGroup(ctx: Context) {
 }
 
 @Composable
-fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit = {}, openDisclaimer: () -> Unit = {}) {
+fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit = {}, openDisclaimer: () -> Unit = {}, openRefs: () -> Unit = {}) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val upd by Updater.state.collectAsState()
@@ -138,9 +141,11 @@ fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit =
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 // 两个胶囊同款：图标 + 文字
                 Pill(com.taocrypt.micmask.R.drawable.ic_tag, "v${BuildConfig.VERSION_NAME}",
-                    MiuixTheme.colorScheme.primary, MiuixTheme.colorScheme.onPrimary)
+                    MiuixTheme.colorScheme.primary, MiuixTheme.colorScheme.onPrimary) { openUrl(ctx, AboutLinks.RELEASE_TAG) }
                 Pill(com.taocrypt.micmask.R.drawable.ic_github, stars?.let { "★ $it" } ?: "GitHub",
                     MiuixTheme.colorScheme.onSurface, MiuixTheme.colorScheme.surface) { openUrl(ctx, AboutLinks.HOME) }
+                Pill(com.taocrypt.micmask.R.drawable.ic_globe, tr("官网"),
+                    MiuixTheme.colorScheme.onSurface, MiuixTheme.colorScheme.surface) { openUrl(ctx, AboutLinks.SITE) }
             }
         }
 
@@ -169,13 +174,14 @@ fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit =
             SwitchPreference(checked = auto, onCheckedChange = { auto = it; Updater.setAutoCheck(ctx, it) }, title = tr("启动时检查"),
                 summary = tr("关闭后仍会检查强制更新"))
             ArrowPreference(title = tr("下载镜像"), summary = tr("GitHub 不通时自动测速选择镜像"), onClick = openMirrors)
-            Collapsible("${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) · Android ${Build.VERSION.RELEASE}") {
+            val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "-"
+            Collapsible("Android ${Build.VERSION.RELEASE} · ${Build.MANUFACTURER} ${Build.MODEL} · $abi") {
+                InfoRow(tr("系统"), "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+                InfoRow(tr("设备"), "${Build.MANUFACTURER} ${Build.MODEL}")
+                InfoRow(tr("架构"), abi)
                 InfoRow(tr("版本"), "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
                 InfoRow(tr("构建"), if (BuildConfig.DEBUG) tr("测试版") else tr("正式版"))
                 InfoRow(tr("包名"), ctx.packageName)
-                InfoRow(tr("系统"), "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
-                InfoRow(tr("设备"), "${Build.MANUFACTURER} ${Build.MODEL}")
-                InfoRow(tr("架构"), Build.SUPPORTED_ABIS.firstOrNull() ?: "-")
             }
         }
 
@@ -194,17 +200,13 @@ fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit =
                 enabled = ready, onClick = { if (ready) openUrl(ctx, AboutLinks.DONATE) })
         }
 
-        // ---- 其他：免责声明 + 参考项目（默认折叠） ----
+        // ---- 其他：免责声明 + 参考项目（二级页） ----
         SmallTitle(tr("其他"))
         Card(Modifier.fillMaxWidth().padding(pad)) {
             ArrowPreference(title = tr("免责声明"), summary = tr("版权归属、使用准则与隐私"), onClick = openDisclaimer)
-            Collapsible(tr("参考项目") + "：" + AboutLinks.REFS.joinToString(" · ") { it.first }) {
-                AboutLinks.REFS.forEach { (name, desc, url) ->
-                    ArrowPreference(title = name, summary = desc, onClick = { openUrl(ctx, url) })
-                }
-            }
+            ArrowPreference(title = tr("参考项目"), summary = AboutLinks.REFS.joinToString(" · ") { it.first }, onClick = openRefs)
         }
-        Text(tr("音色模型来自第三方，版权归原作者；请勿用于冒充他人、诈骗等违法用途。"),
+        Text("© 2026 Taocrypt · Made with ❤️ & AI",
             fontSize = 11.sp, color = summary, textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 20.dp))
     }

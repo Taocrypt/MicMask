@@ -791,7 +791,6 @@
   "音色": "Tone",
   "音色 {0}": "Voice model {0}",
   "音色检索": "Timbre retrieval",
-  "音色模型来自第三方，版权归原作者；请勿用于冒充他人、诈骗等违法用途。": "Voice models come from third parties and belong to their authors. Do not use them to impersonate others, commit fraud, or for other illegal purposes.",
   "音调": "Pitch",
   "音调与音量": "Pitch & volume",
   "音调和音色": "pitch and tone",
@@ -862,5 +861,7 @@
   "加入MicMask用户交流Q群": "Join the MicMask user QQ group",
   "交流反馈": "Community & feedback",
   "启动时检查": "Check on launch",
-  "当前 {0} 位 · 历史 {1} 位": "{0} current · {1} past"
+  "当前 {0} 位 · 历史 {1} 位": "{0} current · {1} past",
+  "官网": "Website",
+  "感谢以上项目的作者与贡献者": "Thanks to the authors and contributors of these projects"
 }
