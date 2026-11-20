@@ -87,6 +87,7 @@ class LiveFloatService : Service() {
             add()
         }
         running = true
+        LiveService.refresh(applicationContext)
         return START_STICKY
     }
 
@@ -501,5 +502,6 @@ class LiveFloatService : Service() {
         h.removeCallbacksAndMessages(null)
         root?.let { runCatching { wm.removeViewImmediate(it) } }
         root = null; running = false
+        LiveService.refresh(applicationContext)
     }
 }

@@ -735,14 +735,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val cb: (String) -> Unit = { msg ->
             val ended = msg.startsWith("已停止") || msg.contains("失败") || msg.startsWith("缺") || msg.startsWith("没找到") || msg.contains("Shizuku")
             _state.value = _state.value.copy(liveOn = inj.liveOn || !ended, liveMsg = msg)
+            if (ended && !inj.liveOn && !_state.value.liveAi) LiveService.stop(ctx)
         }
         if (_state.value.liveAi) {
             if (!LiveRvc.modelPresent(ctx)) {
                 _state.value = _state.value.copy(liveOn = false, liveMsg = "缺流式合成器模型，请先在模型页下载或导入实时模型包")
                 return
             }
+            LiveService.onStop = { stopAll() }
             LiveService.start(ctx, liveTarget(), _state.value.liveSemis.toInt(), src, cb)
         } else {
+            LiveService.onStop = { stopAll() }
+            LiveService.notifyOnly(ctx)
             inj.startLive(ctx, liveTarget(), _state.value.liveSemis,
                 src, external = false, status = cb)
         }
@@ -881,7 +885,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val needRestart = (mode == 0) != (st.liveMode == 0)
             selectMode(mode)
             if (needRestart) { toggleLive(); viewModelScope.launch { kotlinx.coroutines.delay(900); toggleLive() } }
-            else { com.taocrypt.micmask.inject.MicInjector.setLiveSemis(_state.value.liveSemis); com.taocrypt.micmask.inject.MicInjector.setFx(activeFx()) }
+            else { com.taocrypt.micmask.inject.MicInjector.setLiveSemis(_state.value.liveSemis); com.taocrypt.micmask.inject.MicInjector.setFx(activeFx())
+                com.taocrypt.micmask.inject.MicInjector.modeLabel = listOf("AI 变声", "普通变声", "虚拟声卡").getOrNull(_state.value.liveMode); LiveService.refresh(ctx) }
             return
         }
         selectMode(mode); toggleLive()

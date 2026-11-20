@@ -3,6 +3,7 @@ package com.taocrypt.micmask
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -26,6 +27,43 @@ class LiveService : Service() {
         fun stop(ctx: Context) {
             ctx.stopService(Intent(ctx, LiveService::class.java))
         }
+
+        /** 普通变声/声卡：只挂常驻通知（不在 App 进程里跑推理） */
+        fun notifyOnly(ctx: Context) {
+            pending = null
+            ctx.startForegroundService(Intent(ctx, LiveService::class.java))
+        }
+
+        /** 通知栏「停止」回调（由 ViewModel 设置，走和 App 内一样的停止流程） */
+        @Volatile var onStop: (() -> Unit)? = null
+        @Volatile var running = false; private set
+
+        /** 悬浮窗开关/模式变化后刷新通知文字与按钮 */
+        fun refresh(ctx: Context) {
+            if (!running) return
+            ctx.getSystemService(NotificationManager::class.java).notify(NID, build(ctx))
+        }
+
+        private const val NID = 42
+
+        private fun build(ctx: Context): Notification {
+            val mode = MicInjector.modeLabel ?: "实时变声"
+            val open = PendingIntent.getActivity(ctx, 10, Intent(ctx, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT), PendingIntent.FLAG_IMMUTABLE)
+            val stop = PendingIntent.getService(ctx, 11, Intent(ctx, LiveService::class.java).setAction("stop"), PendingIntent.FLAG_IMMUTABLE)
+            val b = Notification.Builder(ctx, CH)
+                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                .setContentTitle("$mode 运行中")
+                .setContentText("点「停止」结束，或回到 App 点当前模式的「停止」")
+                .setContentIntent(open)
+                .setOngoing(true)
+            if (!LiveFloatService.running) {
+                val fl = PendingIntent.getService(ctx, 12, Intent(ctx, LiveService::class.java).setAction("float"), PendingIntent.FLAG_IMMUTABLE)
+                b.addAction(Notification.Action.Builder(null, "开启悬浮窗", fl).build())
+            }
+            b.addAction(Notification.Action.Builder(null, "停止", stop).build())
+            return b.build()
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -34,13 +72,26 @@ class LiveService : Service() {
         L.init(applicationContext)
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel(CH, "实时变声", NotificationManager.IMPORTANCE_LOW))
-        val n = Notification.Builder(this, CH)
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setContentTitle("MicMask 实时变声运行中")
-            .setContentText("回到 App 点「停止实时变声」结束")
-            .setOngoing(true).build()
-        if (Build.VERSION.SDK_INT >= 29) startForeground(42, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
-        else startForeground(42, n)
+        when (intent?.action) {
+            "stop" -> {
+                val f = onStop
+                if (f != null) android.os.Handler(mainLooper).post { f() } else MicInjector.stopLive()
+                stopSelf(); return START_NOT_STICKY
+            }
+            "float" -> {
+                if (FloatingPlayService.canDraw(this)) {
+                    Prefs.main(applicationContext).edit().putBoolean("lf_on", true).apply()
+                    LiveFloatService.toggle(applicationContext, true)
+                } else {
+                    startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+                }
+                return START_NOT_STICKY
+            }
+        }
+        val n = build(this)
+        if (Build.VERSION.SDK_INT >= 29) startForeground(NID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+        else startForeground(NID, n)
+        running = true
 
         val p = pending ?: return START_NOT_STICKY
         pending = null
@@ -71,6 +122,7 @@ class LiveService : Service() {
     }
 
     override fun onDestroy() {
+        running = false
         super.onDestroy()
     }
 }
