@@ -1323,7 +1323,7 @@ private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (St
             ArrowPreference(title = tr("外观"), summary = tr("深浅色、莫奈取色、液态玻璃"), onClick = { open("theme") })
             ArrowPreference(title = tr("日志"), summary = tr("查看、筛选、导出日志"), onClick = { open("logs") })
             ArrowPreference(title = tr("音频还原"), summary = tr("应用没声音时点这里还原"), onClick = { vm.repairAudio() })
-            ArrowPreference(title = tr("关于 MicMask"), summary = tr("v{0} · 更新、交流群、致谢", com.taocrypt.micmask.BuildConfig.VERSION_NAME), onClick = { open("about") })
+            ArrowPreference(title = tr("关于 MicMask"), summary = tr("v{0} · 更新、反馈、赞赏", com.taocrypt.micmask.BuildConfig.VERSION_NAME), onClick = { open("about") })
         }
     }
 }

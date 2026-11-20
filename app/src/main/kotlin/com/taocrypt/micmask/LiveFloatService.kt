@@ -555,8 +555,7 @@ class LiveFloatService : Service() {
     }
     private fun recButton() = TextView(this).apply {
         setTextColor(Color.WHITE); textSize = 14f * ps; gravity = Gravity.CENTER; typeface = Typeface.DEFAULT_BOLD
-        setPadding(sdp(12), sdp(12), sdp(12), sdp(12)); visibility = View.GONE
-        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = sdp(8) }
+        setPadding(sdp(12), sdp(12), sdp(12), sdp(12))
         var y0 = 0f; var active = false
         setOnTouchListener { v, e ->
             val vm = vm(); val st = vm?.state?.value
