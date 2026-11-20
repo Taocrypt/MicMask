@@ -52,7 +52,7 @@ class LiveService : Service() {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT), PendingIntent.FLAG_IMMUTABLE)
             val stop = PendingIntent.getService(ctx, 11, Intent(ctx, LiveService::class.java).setAction("stop"), PendingIntent.FLAG_IMMUTABLE)
             val b = Notification.Builder(ctx, CH)
-                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                .setSmallIcon(R.drawable.ic_notify)
                 .setContentTitle("$mode 运行中")
                 .setContentText("点「停止」结束，或回到 App 点当前模式的「停止」")
                 .setContentIntent(open)

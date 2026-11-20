@@ -1,5 +1,6 @@
 package com.taocrypt.micmask.update
 
+import com.taocrypt.micmask.R
 import com.taocrypt.micmask.Prefs
 
 import android.app.NotificationChannel
@@ -423,7 +424,7 @@ object Updater {
         val (src, got, total) = noteText
         val pct = if (total > 0) (got * 100 / total).toInt() else 0
         val text = if (got <= 0) "准备下载…" else "$pct% · ${fmtMb(got)}/${fmtMb(total)} · ${fmtSpeed(noteBps)}" + if (src.isNotEmpty()) " · $src" else ""
-        return NotificationCompat.Builder(ctx, CH).setSmallIcon(android.R.drawable.stat_sys_download)
+        return NotificationCompat.Builder(ctx, CH).setSmallIcon(R.drawable.ic_notify)
             .setContentTitle("正在下载 MicMask $tag").setContentText(text)
             .setOnlyAlertOnce(true).setOngoing(true).setSilent(true).setShowWhen(false)
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
@@ -443,12 +444,12 @@ object Updater {
 
     private fun doneNote(ctx: Context, tag: String) = runCatching {
         nm(ctx).cancel(NID)
-        nm(ctx).notify(NID_DONE, NotificationCompat.Builder(ctx, CH).setSmallIcon(android.R.drawable.stat_sys_download_done)
+        nm(ctx).notify(NID_DONE, NotificationCompat.Builder(ctx, CH).setSmallIcon(R.drawable.ic_notify)
             .setContentTitle("MicMask $tag 下载完成").setContentText("点击安装").setAutoCancel(true).setContentIntent(openApp(ctx)).build())
     }
 
     private fun failNote(ctx: Context, tag: String, err: String) = runCatching {
-        nm(ctx).notify(NID_DONE, NotificationCompat.Builder(ctx, CH).setSmallIcon(android.R.drawable.stat_notify_error)
+        nm(ctx).notify(NID_DONE, NotificationCompat.Builder(ctx, CH).setSmallIcon(R.drawable.ic_notify)
             .setContentTitle("MicMask $tag 下载失败").setContentText(err).setAutoCancel(true).setContentIntent(openApp(ctx)).build())
     }
 

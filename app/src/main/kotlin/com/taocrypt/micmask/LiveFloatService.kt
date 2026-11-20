@@ -98,7 +98,7 @@ class LiveFloatService : Service() {
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel(CH, "变声悬浮窗", NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) })
         val hide = PendingIntent.getService(this, 2, Intent(this, LiveFloatService::class.java).setAction("hide"), PendingIntent.FLAG_IMMUTABLE)
-        val n = Notification.Builder(this, CH).setSmallIcon(android.R.drawable.ic_btn_speak_now)
+        val n = Notification.Builder(this, CH).setSmallIcon(R.drawable.ic_notify)
             .setContentTitle("变声悬浮窗").setContentText("点小球展开：切换模式、预设、看性能")
             .addAction(Notification.Action.Builder(null, "关闭悬浮窗", hide).build()).setOngoing(true).build()
         if (Build.VERSION.SDK_INT >= 29) startForeground(NID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK) else startForeground(NID, n)

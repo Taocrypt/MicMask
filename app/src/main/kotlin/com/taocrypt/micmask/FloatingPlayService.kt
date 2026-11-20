@@ -161,7 +161,7 @@ class FloatingPlayService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val n = Notification.Builder(this, CH_ID)
-            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setSmallIcon(R.drawable.ic_notify)
             .setContentTitle("变声悬浮窗已开启")
             .setContentText("点悬浮球播放待发语音；不用时点这里关闭")
             .setContentIntent(open)
