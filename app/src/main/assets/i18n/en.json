@@ -916,5 +916,5 @@
   "正在切换 · {0}": "Switching · {0}",
   "重新开始变声后生效": "Takes effect after restarting voice changing",
   "兼容录音": "Compatibility recording",
-  "常规录音初始化失败时会自动启用；打开则始终使用（排障/测试用），重新开始变声后生效": "Used automatically when normal recording fails to initialize; turn on to always use it (for troubleshooting/testing). Takes effect after restarting voice changing"
+  "录音失败时自动启用，打开则始终使用": "Auto-used if recording fails; on = always"
 }
