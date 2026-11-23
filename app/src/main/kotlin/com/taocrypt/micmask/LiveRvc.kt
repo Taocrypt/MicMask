@@ -252,7 +252,7 @@ class LiveRvc(private val open: (String) -> Any?) {
             val blockMs get() = (len - XF_FR) * 10
         }
         fun ratio(c: Cand) = maxOf(c.ms, featMs).toDouble() / c.blockMs
-        val key = NETG_FILES.joinToString(",") { n -> "$n:" + ((open(n) as? File)?.length() ?: -1) } + "|t$tier f$featThreads s$synThreads"
+        val key = NETG_FILES.joinToString(",") { n -> "$n:" + ((open(n) as? File)?.let { "${it.length()}@${it.lastModified()}" } ?: -1) } + "|t$tier f$featThreads s$synThreads"
         var chosen: Cand? = null
         runCatching {
             val c = pickCache?.takeIf { it.exists() }?.readText()?.split("\n")
@@ -289,6 +289,7 @@ class LiveRvc(private val open: (String) -> Any?) {
         }
         val pick = chosen!!
         netG = load("流式合成器", pick.name)
+        curName = pick.name
         emb = embOf(netG!!)
         L.i("live 特征维度 $emb（${if (emb == 256) "RVC v1" else "RVC v2"}）${if (compatOf(netG!!) != null) " 兼容模式" else ""}")
         if (emb == 256 && hubert?.outputNames?.contains("feat9") == false) {   // 基础模型可能刚更新过：重载一次再判断
@@ -325,31 +326,59 @@ class LiveRvc(private val open: (String) -> Any?) {
         if (n >= 3) { synchronized(trouble) { trouble.clear() }; downshift(src) }
     }
 
+    /** 当前在用的合成器（标准名） */
+    @Volatile private var curName: String? = null
+
+    /** 合成器的输出块长（帧）：优先读转换器写的元数据 outFrames，没有再试跑一次 */
+    private fun lenOf(s: OrtSession): Int {
+        runCatching {
+            val j = s.metadata.customMetadata["micmask"]
+            if (!j.isNullOrBlank()) { val f = org.json.JSONObject(j).optInt("outFrames", 0); if (f > XF_FR) return f }
+        }
+        val old = netG; netG = s
+        try {
+            val ph = FloatArray(T * embOf(s)); val pi = LongArray(T) { 120 }; val pf = FloatArray(T) { 300f }
+            return runNetG(ph, pi, pf).size / UPP
+        } finally { netG = old }
+    }
+
+    /** 降档目标：本音色其余合成器里，块长比当前大的最小那个（按元数据/实测块长挑，不看文件名；兼容模式不参与） */
     private fun downshift(src: String) {
-        val name = "atri48_stream_b50_qdq.onnx"
-        val f = open(name)
-        if (f == null) { if (!noB50Logged) { noB50Logged = true; L.w("live 连续断流（$src），但该音色没有省电档模型，无法自动降档") }; return }
+        val others = NETG_FILES.filter { it != curName && !it.endsWith("_compat.onnx") && open(it) != null }
+        if (others.isEmpty()) { if (!noB50Logged) { noB50Logged = true; L.w("live 连续断流（$src），但该音色没有省电档模型，无法自动降档") }; return }
         shifting = true
-        L.w("live 10s 内断流/丢块 ≥3 次（最近：$src）→ 自动切到省电档")
+        L.w("live 10s 内断流/丢块 ≥3 次（最近：$src）→ 找块长更大的档位")
         Thread({
             try {
                 val o = OrtSession.SessionOptions().apply {
                     setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
                     setIntraOpNumThreads(synThreads); setInterOpNumThreads(1)
                 }
-                val t = System.nanoTime()
-                val sess = when (f) { is File -> env.createSession(f.absolutePath, o); else -> env.createSession(f.toString(), o) }
-                L.i("live 省电档合成器加载 ${(System.nanoTime() - t) / 1_000_000}ms")
+                var best: Pair<String, OrtSession>? = null; var bestLen = Int.MAX_VALUE
+                for (n in others) {
+                    val f = open(n) ?: continue
+                    val t = System.nanoTime()
+                    val sess = runCatching { when (f) { is File -> env.createSession(f.absolutePath, o); else -> env.createSession(f.toString(), o) } }
+                        .getOrElse { L.e("live 加载 $n 失败", it); continue }
+                    val len = runCatching { synExec.submit(java.util.concurrent.Callable { lenOf(sess) }).get() }.getOrElse { L.e("live 读 $n 块长失败", it); -1 }
+                    L.i("live 候选 $n 块长 ${(len - XF_FR) * 10}ms（加载 ${(System.nanoTime() - t) / 1_000_000}ms）")
+                    if (len > LEN && len < bestLen) { best?.second?.close(); best = n to sess; bestLen = len } else sess.close()
+                }
+                val b = best
+                if (b == null) {
+                    if (!noB50Logged) { noB50Logged = true; L.w("live 本音色没有块长更大的档位，无法自动降档") }
+                    shifting = false; return@Thread
+                }
                 synExec.execute {
                     val old = netG
-                    netG = sess
-                    val ph = FloatArray(T * embOf(sess)); val pi = LongArray(T) { 120 }; val pf = FloatArray(T) { 300f }
+                    netG = b.second
+                    val ph = FloatArray(T * embOf(b.second)); val pi = LongArray(T) { 120 }; val pf = FloatArray(T) { 300f }
                     val newLen = runCatching { runNetG(ph, pi, pf).size / UPP }.getOrElse { L.e("live 省电档试跑失败", it); -1 }
-                    if (newLen <= 0) { netG = old; runCatching { sess.close() }; shifting = false; return@execute }
-                    LEN = newLen
+                    if (newLen <= 0) { netG = old; runCatching { b.second.close() }; shifting = false; return@execute }
+                    LEN = newLen; curName = b.first
                     runCatching { old?.close() }
                     benchSummary = "省电档(自动)：每步 ${BLOCK * 10}ms"
-                    L.i("live 已自动降到省电档，每步 ${BLOCK * 10}ms（本次运行有效，下次开始仍按测速结果）")
+                    L.i("live 已自动降档到 ${b.first}，每步 ${BLOCK * 10}ms（本次运行有效，下次开始仍按测速结果）")
                     onConfig?.invoke(BLOCK * 10)
                     shifting = false
                 }
@@ -405,6 +434,20 @@ class LiveRvc(private val open: (String) -> Any?) {
         if (running) L.i("live 停止：共 $blkSeq 块，丢 $dropped，静音 $gated")
         running = false
         pump?.interrupt(); pump = null
+    }
+
+    /**
+     * 换音色：只关合成器会话，HuBERT/RMVPE 留着（下次 [load] 只加载新合成器，切音色快、内存峰值低）。
+     * 正在跑就先停，等在途块结束再关。
+     */
+    fun dropSynth() {
+        stop()
+        val t0 = System.nanoTime()
+        while (inflight.get() > 0 && System.nanoTime() - t0 < 1_500_000_000L) Thread.sleep(5)
+        runCatching { synExec.submit { runCatching { netG?.close() }; netG = null }.get(2, java.util.concurrent.TimeUnit.SECONDS) }
+            .onFailure { runCatching { netG?.close() }; netG = null }
+        curName = null; noB50Logged = false
+        L.i("live 换音色：保留特征模型，只重载合成器")
     }
 
     fun release() {

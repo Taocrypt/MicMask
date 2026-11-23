@@ -227,14 +227,19 @@ class InjectorService : Binder {
                             pfd.use { p ->
                                 val dst = java.io.File(MODEL_DIR, name)
                                 val size = p.statSize
-                                if (dst.length() != size) {
+                                // 同结构的音色文件大小可能完全一样（如 花火/辉姬），只比大小会沿用上一个音色：再抽样比内容
+                                if (dst.length() != size || sampleCrc(FileInputStream(p.fileDescriptor).channel, size) != dst.takeIf { it.exists() }?.let { f -> java.io.RandomAccessFile(f, "r").use { sampleCrc(it.channel, size) } }) {
                                     java.io.File(MODEL_DIR).mkdirs()
                                     val t0 = System.currentTimeMillis()
                                     val tmpF = java.io.File(MODEL_DIR, "$name.part")
                                     FileInputStream(p.fileDescriptor).use { i -> java.io.FileOutputStream(tmpF).use { o -> i.copyTo(o, 1 shl 20) } }
                                     if (!tmpF.renameTo(dst)) throw java.io.IOException("rename $name")
                                     slog('I', "拷贝模型 $name ${size shr 20}MB 用时 ${System.currentTimeMillis() - t0}ms")
-                                    if (name in loadedNames) engine?.let { e -> engine = null; Thread { e.release() }.start() }
+                                    if (name in loadedNames) engine?.let { e ->
+                                        // 只换了合成器（换音色）：保留已加载的 HuBERT/RMVPE，只丢合成器会话；基础模型变了才整个重建
+                                        if (name.contains("_stream")) e.dropSynth()
+                                        else { engine = null; Thread { e.release() }.start() }
+                                    }
                                 }
                                 models[name] = dst
                             }
@@ -559,6 +564,16 @@ class InjectorService : Binder {
     // ------------------------------------------------------------ shell 内推理（不受 App 后台冻结/降频影响）
 
     private val MODEL_DIR = "/data/local/tmp/micmask-models"
+    /** 抽样指纹：在 1/4、1/2、3/4 和末尾各读 64KB 算 CRC32（不移动流位置），用来识别大小相同的不同模型 */
+    private fun sampleCrc(ch: java.nio.channels.FileChannel, size: Long): Long {
+        val crc = java.util.zip.CRC32(); val buf = java.nio.ByteBuffer.allocate(64 * 1024)
+        for (pos in longArrayOf(size / 4, size / 2, size * 3 / 4, maxOf(0L, size - buf.capacity()))) {
+            buf.clear(); var p = pos
+            while (buf.hasRemaining()) { val k = ch.read(buf, p); if (k <= 0) break; p += k }
+            buf.flip(); crc.update(buf)
+        }
+        return crc.value
+    }
     private val loadedNames = HashSet<String>()
     private val models = java.util.concurrent.ConcurrentHashMap<String, java.io.File>()
     @Volatile private var engine: com.taocrypt.micmask.LiveRvc? = null
