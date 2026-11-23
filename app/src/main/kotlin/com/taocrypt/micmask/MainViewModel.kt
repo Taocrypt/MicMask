@@ -308,6 +308,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         com.taocrypt.micmask.inject.MicInjector.forceNormal = prefs.getBoolean("force_normal", false)
+        com.taocrypt.micmask.inject.MicInjector.recCompat = prefs.getBoolean("rec_compat", false)
         _state.value = _state.value.copy(forceNormal = com.taocrypt.micmask.inject.MicInjector.forceNormal)
         // Toast 由 ViewModel 直接用系统 Toast 弹出：App 在后台（悬浮窗操作）时也能看到
         viewModelScope.launch {
@@ -1693,6 +1694,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             refreshInjectState()
         }
     }
+
+    /** 设置页「兼容录音」：下次开始变声时生效 */
+    fun setRecCompat(on: Boolean) {
+        prefs.edit().putBoolean("rec_compat", on).apply()
+        com.taocrypt.micmask.inject.MicInjector.recCompat = on
+        L.i("UI 兼容录音 → $on")
+        if (com.taocrypt.micmask.inject.MicInjector.liveOn) toast(tr("重新开始变声后生效"))
+    }
+
+    fun recCompat(): Boolean = com.taocrypt.micmask.inject.MicInjector.recCompat
 
     /** 设置页权限模式：true=普通模式（扬声器外放/录播），false=Shizuku 实时注入 */
     fun setNormalMode(normal: Boolean) {

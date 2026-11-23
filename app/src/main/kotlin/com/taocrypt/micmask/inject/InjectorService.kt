@@ -94,6 +94,8 @@ class InjectorService : Binder {
         const val TX_LIVE_TUNE = 24
         /** 变声中换音色：新合成器已由 TX_LIVE_MODELS 送到，重启推理（麦克风通道不断，换的这一两秒输出静音） */
         const val TX_LIVE_RELOAD = 25
+        /** TX_LIVE_START 的 source 高位：强制兼容录音 */
+        const val REC_COMPAT_FLAG = 0x10000
         const val TX_DESTROY = 16777115
 
         const val SR = 48000
@@ -186,7 +188,9 @@ class InjectorService : Binder {
                     val n = data.readInt().coerceIn(0, 16)
                     val uids = IntArray(n) { data.readInt() }
                     liveSemis = data.readFloat()
-                    liveSource = data.readInt()
+                    val srcRaw = data.readInt()
+                    liveSource = srcRaw and 0xffff
+                    recCompat = (srcRaw and REC_COMPAT_FLAG) != 0
                     liveExternal = data.dataAvail() >= 4 && data.readInt() == 1
                     livePrimeMs = maxOf(if (data.dataAvail() >= 4) data.readInt().coerceIn(20, 1500) else 100, tierPrimeMs)
                     val rvcHere = data.dataAvail() >= 4 && data.readInt() == 1
@@ -686,6 +690,9 @@ class InjectorService : Binder {
 
     @Volatile private var liveSemis = 0f
     @Volatile private var liveSource = 1 // MediaRecorder.AudioSource.MIC
+    /** 强制走 native_setup 兜底录音（App 设置「兼容录音」，经 TX_LIVE_START 的 source 高位传入） */
+    @Volatile private var recCompat = false
+    @Volatile private var recPath = ""
     private var aec: android.media.audiofx.AcousticEchoCanceler? = null
     private var ns: android.media.audiofx.NoiseSuppressor? = null
     @Volatile private var liveExternal = false
@@ -783,27 +790,22 @@ class InjectorService : Binder {
         try {
             val minBuf = android.media.AudioRecord.getMinBufferSize(SR,
                 AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-            val fmt = AudioFormat.Builder().setSampleRate(SR)
-                .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
-                .setEncoding(AudioFormat.ENCODING_PCM_16BIT).build()
-            val b = android.media.AudioRecord.Builder()
-                .setAudioSource(liveSource)
-                .setAudioFormat(fmt)
-                .setBufferSizeInBytes(maxOf(minBuf, SR / 50 * 2 * 2))
-            if (Build.VERSION.SDK_INT >= 31 && c != null) runCatching { b.setContext(c) }
-            @Suppress("MissingPermission")
-            rec = runCatching { b.build() }.getOrNull()?.takeIf { it.state == android.media.AudioRecord.STATE_INITIALIZED }
-            if (rec == null && liveSource != android.media.MediaRecorder.AudioSource.MIC) {
+            val bufBytes = maxOf(minBuf, SR / 50 * 2 * 2)
+            val log: (Char, String) -> Unit = { lv, m -> slog(lv, m) }
+            // 常规 Builder → 失败则 native_setup 兜底（vivo 等 ROM 改了构造）；recCompat=强制兜底，用于测试
+            var res = ShellAudioRecord.create(liveSource, SR, bufBytes, c, recCompat, log)
+            if (res.rec == null && liveSource != android.media.MediaRecorder.AudioSource.MIC) {
                 slog('W', "录音源 $liveSource 初始化失败，退回 MIC")
                 liveSource = android.media.MediaRecorder.AudioSource.MIC
-                b.setAudioSource(liveSource)
-                @Suppress("MissingPermission")
-                rec = runCatching { b.build() }.getOrNull()
+                res = ShellAudioRecord.create(liveSource, SR, bufBytes, c, recCompat, log)
             }
+            recPath = res.path
+            rec = res.rec
             if (rec == null || rec.state != android.media.AudioRecord.STATE_INITIALIZED) {
-                lastError = "shell 录音初始化失败（ROM 不给 shell 录音权限？）"
+                lastError = "shell 录音初始化失败（${res.error}）"
                 return
             }
+            slog('I', "LIVE 录音路径=${res.path} 强制兼容=$recCompat sdk=${Build.VERSION.SDK_INT} ${Build.MANUFACTURER}/${Build.MODEL}")
             // 回声消除 / 降噪：扬声器外放的声音会被真麦录进去，用系统（多为高通硬件）AEC 去掉
             val sid = rec.audioSessionId
             aec = if (android.media.audiofx.AcousticEchoCanceler.isAvailable())
@@ -1004,6 +1006,7 @@ class InjectorService : Binder {
             "eng=${engine?.takeIf { engineState == "运行" }?.stats() ?: engineState}",
             "bench=${engine?.benchSummary ?: ""}",
             "gen=$engGen",
+            "recPath=$recPath",
             "err=$lastError",
         ).joinToString("|")
     }

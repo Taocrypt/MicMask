@@ -93,6 +93,8 @@ object MicInjector {
 
     /** 用户在设置里选了「普通模式」：即使 Shizuku 已授权，也按外放模式工作 */
     @Volatile var forceNormal = false
+    /** 设置「兼容录音」：shell 端跳过常规 AudioRecord，强制 native_setup 兜底（测试/排障用） */
+    @Volatile var recCompat = false
 
     /** 变声是否走 Shizuku 注入（已授权且用户没选普通模式） */
     fun shizukuGranted(): Boolean = !forceNormal && shizukuPermitted()
@@ -332,7 +334,7 @@ object MicInjector {
                 val err = runCatching {
                     call(InjectorService.TX_LIVE_START, {
                         it.writeInt(uids.size); uids.forEach { u -> it.writeInt(u) }
-                        it.writeFloat(semis); it.writeInt(source); it.writeInt(if (external) 1 else 0); it.writeInt(primeMs); it.writeInt(if (rvcInShell) 1 else 0)
+                        it.writeFloat(semis); it.writeInt(source or (if (recCompat) InjectorService.REC_COMPAT_FLAG else 0)); it.writeInt(if (external) 1 else 0); it.writeInt(primeMs); it.writeInt(if (rvcInShell) 1 else 0)
                         writeTune(it)
                     }) { r -> r.readString() }
                 }.getOrElse { it.message ?: tr("调用失败") }
