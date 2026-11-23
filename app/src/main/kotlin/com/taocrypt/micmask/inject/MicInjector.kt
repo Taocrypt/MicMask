@@ -351,6 +351,9 @@ object MicInjector {
                         setPhase(if (e.isNotEmpty()) Phase.ERROR else Phase.IDLE, if (e.isNotEmpty()) e else tr("实时变声已停止"))
                         break
                     }
+                    engGen = kv["gen"]?.toIntOrNull() ?: -1
+                    engState = kv["eng"].orEmpty()
+                    benchNow = kv["bench"].orEmpty()
                     kv["bench"]?.takeIf { it.isNotEmpty() && it != lastBench }?.let { b -> lastBench = b; onBench?.invoke(b) }
                     main.post { status((modeLabel ?: if (external) tr("AI 变声") else tr("普通变声")) + tr(" · 麦电平 {0} · 目标在录={1} · 缓冲 {2} ms · 断流 {3}", kv["live"], kv["recs"], (kv["outBuf"]?.toIntOrNull() ?: 0) / 48, kv["under"]) + (kv["eng"]?.takeIf { it.isNotEmpty() }?.let { " · $it" } ?: statusExtra?.invoke()?.let { " · $it" } ?: "")) }
                     Thread.sleep(300)
@@ -363,6 +366,10 @@ object MicInjector {
     @Volatile var statusExtra: (() -> String)? = null
     /** 实时变声启动后引擎报出的测速摘要（每个音色记一次，供状态行展示） */
     @Volatile var onBench: ((String) -> Unit)? = null
+    /** 注入服务最近一次状态里的引擎代数（-1=旧服务不报）、引擎状态、测速摘要；热切换音色时用来等新音色真正生效 */
+    @Volatile var engGen = -1
+    @Volatile var engState = ""
+    @Volatile var benchNow = ""
     /** 状态栏显示的模式名（AI 变声 / 普通变声 / 虚拟声卡），由界面在启动时设置 */
     @Volatile var modeLabel: String? = null
 
@@ -409,6 +416,14 @@ object MicInjector {
     }
 
     /** 变声中换音色：先 [sendLiveModels] 送新合成器，再调这个让 shell 重启推理；返回是否生效 */
+    /** 当前引擎代数：直接问一次状态，不等轮询 */
+    fun engGenNow(): Int {
+        val kv = status().split("|").mapNotNull { p -> p.split("=", limit = 2).takeIf { it.size == 2 } }.associate { it[0] to it[1] }
+        kv["eng"]?.let { engState = it }
+        kv["bench"]?.let { benchNow = it }
+        return kv["gen"]?.toIntOrNull()?.also { engGen = it } ?: -1
+    }
+
     fun reloadLive(): Boolean = liveOn && runCatching { call(InjectorService.TX_LIVE_RELOAD) { r -> r.readInt() == 1 } }.getOrDefault(false)
 
     fun setLiveSemis(semis: Float) {

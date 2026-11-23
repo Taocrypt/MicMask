@@ -595,6 +595,8 @@ class InjectorService : Binder {
     private val models = java.util.concurrent.ConcurrentHashMap<String, java.io.File>()
     @Volatile private var engine: com.taocrypt.micmask.LiveRvc? = null
     @Volatile private var engineState = ""
+    /** 引擎每次真正跑起来（模型加载完、开始推理）+1；App 据此判断「换音色」是否已生效 */
+    @Volatile private var engGen = 0
 
     @Volatile private var tuneTier = 0
     @Volatile private var tuneGate = com.taocrypt.micmask.LiveRvc.GATE_DB
@@ -639,6 +641,7 @@ class InjectorService : Binder {
                 micRing.clear()
                 e.start()
                 engineState = "运行"
+                engGen++
                 slog('I', "shell 推理已启动（进程内，不经 App）")
             } catch (t: Throwable) {
                 engineState = "失败：" + describe(t)
@@ -968,6 +971,7 @@ class InjectorService : Binder {
             "under=$underruns",
             "eng=${engine?.takeIf { engineState == "运行" }?.stats() ?: engineState}",
             "bench=${engine?.benchSummary ?: ""}",
+            "gen=$engGen",
             "err=$lastError",
         ).joinToString("|")
     }

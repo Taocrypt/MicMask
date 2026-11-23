@@ -378,7 +378,8 @@ private fun HeroCard(vm: MainViewModel, st: UiState, mode: Int) {
                 }
             }
             if (ai) Text(tr("音色 {0}", if (st.liveVoice.isEmpty()) tr("未安装") else vm.voiceLabel(st.liveVoice)) +
-                (if (st.liveBench.isNotEmpty()) " · ${st.liveBench}" else ""), fontSize = 13.sp, color = fg2, maxLines = 2)
+                (if (st.voicePending.isNotEmpty()) " · " + tr("正在切换到 {0}…", vm.voiceLabel(st.voicePending))
+                 else if (st.liveBench.isNotEmpty()) " · ${st.liveBench}" else ""), fontSize = 13.sp, color = fg2, maxLines = 2)
             if (st.speakerMode && !st.liveOn && mode < 2) {
                 Text(tr("普通模式（录播）：按住下方按钮录一句，松手自动转换并从扬声器播放；悬浮窗里也能按住录音。"),
                     fontSize = 12.sp, color = fg2)

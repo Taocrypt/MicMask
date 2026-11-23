@@ -143,6 +143,8 @@ data class UiState(
     val liveAec: Boolean = true,
     /** 本机性能测试结果（空=还没测） */
     val liveBench: String = "",
+    /** 变声中热切换音色：新音色还没真正生效前记在这里，状态行仍显示旧音色 */
+    val voicePending: String = "",
     val liveVoices: List<String> = emptyList(),
     /** 置顶的本地音色 */
     val voicePins: Set<String> = emptySet(),
@@ -296,7 +298,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // 开始实时变声时引擎会测速/读缓存，把结果记到当前音色上（自动降档的临时结果不记）
         com.taocrypt.micmask.inject.MicInjector.onBench = { r ->
             val v = _state.value.liveVoice
-            if (v.isNotEmpty() && !r.contains("自动")) {
+            if (v.isNotEmpty() && !r.contains("自动") && _state.value.voicePending.isEmpty()) {
                 ctx.getSharedPreferences("live", 0).edit().putString("bench_$v", r).apply()
                 _state.value = _state.value.copy(liveBench = r)
             }
@@ -1557,23 +1559,65 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (v == _state.value.liveVoice) return
         val inj = com.taocrypt.micmask.inject.MicInjector
         val hot = inj.liveOn && _state.value.liveAi
-        ctx.getSharedPreferences("live", 0).edit().putString("voice", v).apply()
+        val old = _state.value.liveVoice
+        val lp = ctx.getSharedPreferences("live", 0)
+        lp.edit().putString("voice", v).apply()
         L.i("UI 切换音色 → $v${if (hot) "（变声中热切换）" else ""}")
-        refreshVoices()
-        if (!hot) return
-        // 变声中：把新音色的合成器送给 shell，只重载合成器（HuBERT/RMVPE 不动），麦克风通道不断
+        if (!hot) { refreshVoices(); return }
+        // 变声中：把新音色的合成器送给 shell，只重载合成器（HuBERT/RMVPE 不动），麦克风通道不断。
+        // 状态行等引擎真正用新音色跑起来（引擎代数 gen 增加）后才换成新音色和它的测速
         voiceSwitching = true
-        _state.value = _state.value.copy(toast = tr("切换到 {0}…", ModelStore.voiceLabel(v)))
+        val label = ModelStore.voiceLabel(v)
+        _state.value = _state.value.copy(voicePending = v, toast = tr("切换到 {0}…", label))
         viewModelScope.launch(Dispatchers.IO) {
+            var msg: String? = null
+            var loadStarted = false
             try {
+                val gen0 = inj.engGenNow()
                 val err = inj.sendLiveModels(ctx, ModelStore.liveNames(ctx))
-                val msg = when {
+                msg = when {
                     err != null -> tr("切换音色失败：{0}", err)
-                    !inj.reloadLive() -> tr("切换音色失败：注入服务没在 AI 变声，重开一次变声试试")
+                    gen0 < 0 || !inj.reloadLive() -> tr("切换音色失败：注入服务没在 AI 变声，重开一次变声试试")
                     else -> null
                 }
+                if (msg == null) {
+                    loadStarted = true
+                    val t0 = System.currentTimeMillis()
+                    while (true) {
+                        kotlinx.coroutines.delay(200)
+                        if (inj.engGenNow() > gen0) break
+                        val es = inj.engState
+                        msg = when {
+                            es.startsWith("失败") -> tr("切换音色失败：{0}", es.removePrefix("失败：").removePrefix("失败"))
+                            !inj.liveOn -> tr("切换音色失败：变声已停止")
+                            System.currentTimeMillis() - t0 > 60_000 -> tr("切换音色超时，重开一次变声试试")
+                            else -> null
+                        }
+                        if (msg != null) break
+                    }
+                }
                 L.i("UI 热切换音色 $v 结果=${msg ?: "成功"}")
-                if (msg != null) _state.value = _state.value.copy(toast = msg)
+                if (msg == null) {
+                    val b = inj.benchNow
+                    if (b.isNotEmpty() && !b.contains("自动")) lp.edit().putString("bench_$v", b).apply()
+                    _state.value = _state.value.copy(voicePending = "")
+                    refreshVoices()
+                    if (b.isNotEmpty()) _state.value = _state.value.copy(liveBench = b)
+                    _state.value = _state.value.copy(toast = tr("已切换到 {0}", label))
+                } else {
+                    // 没切成：音色设置退回旧的；还没开始重载时把旧模型送回去，保持 shell 与界面一致
+                    lp.edit().putString("voice", old).apply()
+                    if (!loadStarted) runCatching { inj.sendLiveModels(ctx, ModelStore.liveNames(ctx)) }
+                    _state.value = _state.value.copy(voicePending = "")
+                    refreshVoices()
+                    _state.value = _state.value.copy(toast = msg)
+                }
+            } catch (t: Throwable) {
+                L.e("UI 热切换音色异常", t)
+                lp.edit().putString("voice", old).apply()
+                _state.value = _state.value.copy(voicePending = "")
+                refreshVoices()
+                _state.value = _state.value.copy(toast = tr("切换音色失败：{0}", t.message ?: t.javaClass.simpleName))
             } finally { voiceSwitching = false }
         }
     }
