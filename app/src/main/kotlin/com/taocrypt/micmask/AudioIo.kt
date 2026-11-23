@@ -272,4 +272,111 @@ object AudioIo {
         }
         return bb.array()
     }
+
+    // ---------------------------------------------------------------- 文件变声体验（P3）
+
+    /** 不解码，先读时长（秒）；读不到返回 null。用来在解码前拦截超长音频 */
+    fun probeDurationSec(ctx: Context, uri: Uri): Float? = runCatching {
+        val r = android.media.MediaMetadataRetriever()
+        try {
+            r.setDataSource(ctx, uri)
+            r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()?.let { it / 1000f }
+        } finally { runCatching { r.release() } }
+    }.getOrNull()
+
+    /** 输入波形缩略图：分 [bins] 段取峰值（0..1） */
+    fun waveOf(x: FloatArray, bins: Int = 160): FloatArray {
+        if (x.isEmpty()) return FloatArray(0)
+        val out = FloatArray(bins); var mx = 1e-6f
+        for (b in 0 until bins) {
+            val a = (x.size.toLong() * b / bins).toInt(); val e = maxOf(a + 1, (x.size.toLong() * (b + 1) / bins).toInt())
+            var p = 0f; var i = a; while (i < e && i < x.size) { val v = abs(x[i]); if (v > p) p = v; i++ }
+            out[b] = p; if (p > mx) mx = p
+        }
+        for (b in 0 until bins) out[b] /= mx
+        return out
+    }
+
+    fun outputDir(ctx: Context): File = File(ctx.getExternalFilesDir(null) ?: ctx.filesDir, "output").also { it.mkdirs() }
+
+    /** 结果历史：output/ 里的 wav/m4a，新→旧 */
+    fun listOutputs(ctx: Context): List<File> = outputDir(ctx).listFiles()
+        ?.filter { it.isFile && it.extension.lowercase() in setOf("wav", "m4a") && !it.name.startsWith("autorun") }
+        ?.sortedByDescending { it.lastModified() } ?: emptyList()
+
+    /** LRU：只留最近 [keep] 条（App 内副本；已存进「音乐/MicMask」的不动） */
+    fun pruneOutputs(ctx: Context, keep: Int = 30): Int {
+        val old = listOutputs(ctx).drop(keep)
+        old.forEach { it.delete() }
+        return old.size
+    }
+
+    /**
+     * WAV → M4A（AAC-LC 单声道 128 kbps），用系统 MediaCodec + MediaMuxer，不引第三方编码库。
+     * AAC 不支持 40 kHz，先重采样到 48 kHz。
+     */
+    fun encodeM4a(src: File, dst: File, bitRate: Int = 128_000) {
+        val w = Wav.read(src)
+        val sr = 48000
+        val pcm = if (w.sampleRate == sr) w.samples else micmask.core.Resampler.convert(w.samples, w.sampleRate, sr)
+        val fmt = android.media.MediaFormat.createAudioFormat(android.media.MediaFormat.MIMETYPE_AUDIO_AAC, sr, 1).apply {
+            setInteger(android.media.MediaFormat.KEY_AAC_PROFILE, android.media.MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+            setInteger(android.media.MediaFormat.KEY_BIT_RATE, bitRate)
+            setInteger(android.media.MediaFormat.KEY_MAX_INPUT_SIZE, 16384)
+        }
+        val enc = android.media.MediaCodec.createEncoderByType(android.media.MediaFormat.MIMETYPE_AUDIO_AAC)
+        enc.configure(fmt, null, null, android.media.MediaCodec.CONFIGURE_FLAG_ENCODE)
+        enc.start()
+        val mux = android.media.MediaMuxer(dst.absolutePath, android.media.MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        var track = -1; var muxing = false
+        val info = android.media.MediaCodec.BufferInfo()
+        var pos = 0; var inDone = false; var outDone = false
+        try {
+            while (!outDone) {
+                if (!inDone) {
+                    val ii = enc.dequeueInputBuffer(10_000)
+                    if (ii >= 0) {
+                        val buf = enc.getInputBuffer(ii)!!; buf.clear()
+                        val n = minOf(buf.remaining() / 2, pcm.size - pos)
+                        val bb = buf.order(ByteOrder.LITTLE_ENDIAN)
+                        for (k in 0 until n) bb.putShort((pcm[pos + k].coerceIn(-1f, 1f) * 32767f).toInt().toShort())
+                        val ptsUs = pos * 1_000_000L / sr
+                        pos += n
+                        if (pos >= pcm.size) { enc.queueInputBuffer(ii, 0, n * 2, ptsUs, android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM); inDone = true }
+                        else enc.queueInputBuffer(ii, 0, n * 2, ptsUs, 0)
+                    }
+                }
+                val oi = enc.dequeueOutputBuffer(info, 10_000)
+                when {
+                    oi == android.media.MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> { track = mux.addTrack(enc.outputFormat); mux.start(); muxing = true }
+                    oi >= 0 -> {
+                        val ob = enc.getOutputBuffer(oi)!!
+                        if (info.flags and android.media.MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) info.size = 0
+                        if (info.size > 0 && muxing) { ob.position(info.offset); ob.limit(info.offset + info.size); mux.writeSampleData(track, ob, info) }
+                        enc.releaseOutputBuffer(oi, false)
+                        if (info.flags and android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outDone = true
+                    }
+                }
+            }
+        } finally {
+            runCatching { enc.stop() }; runCatching { enc.release() }
+            runCatching { if (muxing) mux.stop() }; runCatching { mux.release() }
+        }
+    }
+
+    /** 把 App 内文件复制进系统「音乐/MicMask」，返回显示路径（Android 10 以下返回 null） */
+    fun copyToMusic(ctx: Context, f: File, mime: String): String? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+        return runCatching {
+            val values = ContentValues().apply {
+                put(MediaStore.Audio.Media.DISPLAY_NAME, f.name)
+                put(MediaStore.Audio.Media.MIME_TYPE, mime)
+                put(MediaStore.Audio.Media.RELATIVE_PATH, Environment.DIRECTORY_MUSIC + "/MicMask")
+                put(MediaStore.Audio.Media.IS_MUSIC, 1)
+            }
+            val u = ctx.contentResolver.insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, values) ?: return null
+            ctx.contentResolver.openOutputStream(u)?.use { o -> f.inputStream().use { it.copyTo(o) } }
+            tr("音乐/MicMask/{0}", f.name)
+        }.getOrNull()
+    }
 }

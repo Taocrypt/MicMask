@@ -33,6 +33,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -82,6 +83,9 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
         if (ok) vm.startRecording() else Toast.makeText(ctx, tr("没有麦克风权限，无法录音"), Toast.LENGTH_LONG).show()
     }
     var recList by remember { mutableStateOf<List<File>?>(null) }
+    var resList by remember { mutableStateOf<List<File>?>(null) }
+    var expOpen by remember { mutableStateOf<File?>(null) }
+    val wave by vm.srcWave.collectAsState()
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 24.dp)) {
         // ---- 模型 ----
@@ -116,7 +120,8 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
         Card(Modifier.fillMaxWidth().padding(Pad2)) {
             Column(Modifier.padding(16.dp)) {
                 Text(st.srcName ?: tr("未选择"), fontWeight = FontWeight.Medium)
-                Text(st.srcInfo ?: tr("支持 wav / mp3 / m4a / flac / ogg，或直接录一段"), fontSize = 12.sp, color = Dim)
+                Text(st.srcInfo ?: tr("支持 wav / mp3 / m4a / flac / ogg，最长 {0} 分钟，或直接录一段", MainViewModel.MAX_FILE_SEC / 60), fontSize = 12.sp, color = Dim)
+                wave?.takeIf { it.isNotEmpty() && st.srcName != null }?.let { WaveThumb(it) }
                 Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(if (st.srcName == null) tr("选择音频") else tr("换一个"), onClick = { picker.launch(arrayOf("audio/*")) },
@@ -195,6 +200,7 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
                     Spacer(Modifier.height(10.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton(if (clip.isPlaying("res")) tr("停止") else tr("试听"), onClick = { clip.toggle(ctx, "res", rf) }, modifier = Modifier.weight(1f))
+                        TextButton(tr("导出"), onClick = { expOpen = rf }, modifier = Modifier.weight(1f))
                         TextButton(tr("加入音效包"), onClick = { addOpen = true }, modifier = Modifier.weight(1f))
                         TextButton(if (st.speakerMode) tr("设为待发送") else tr("送麦"), onClick = { clip.stop(); vm.sendOrArm(rf) }, modifier = Modifier.weight(1f),
                             colors = ButtonDefaults.textButtonColorsPrimary())
@@ -228,6 +234,60 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
             }
         }
 
+        val resCount = remember(st.resultFile, resList) { vm.listResults().size }
+        if (resCount > 0) Card(Modifier.fillMaxWidth().padding(Pad2)) {
+            ArrowPreference(title = tr("历史结果"), summary = tr("{0} 条，保留最近 {1} 条", resCount, MainViewModel.MAX_RESULTS), onClick = { resList = vm.listResults() })
+        }
+    }
+
+    expOpen?.let { f ->
+        WindowDialog(show = true, title = tr("导出"), summary = tr("存进「音乐/MicMask」，或直接分享"), onDismissRequest = { expOpen = null }) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(tr("WAV（无损，体积大）"), onClick = { vm.exportResult(f, m4a = false); expOpen = null }, modifier = Modifier.fillMaxWidth())
+                TextButton(tr("M4A（AAC 128kbps，约小 5 倍）"), onClick = { vm.exportResult(f, m4a = true); expOpen = null }, modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.textButtonColorsPrimary())
+                TextButton(tr("分享 WAV"), onClick = { vm.shareResult(f); expOpen = null }, modifier = Modifier.fillMaxWidth())
+                TextButton(tr("取消"), onClick = { expOpen = null }, modifier = Modifier.fillMaxWidth())
+            }
+        }
+    }
+
+    resList?.let { list ->
+        var sel by remember(list) { mutableStateOf(setOf<File>()) }
+        var picking by remember(list) { mutableStateOf(false) }
+        WindowDialog(show = true, title = tr("历史结果"), summary = if (picking) tr("已选 {0} 条", sel.size) else tr("点一条设为当前结果，长按多选"),
+            onDismissRequest = { resList = null }) {
+            Column {
+                Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                    list.forEach { f ->
+                        val on = f in sel
+                        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(14.dp))
+                            .background(if (on) MiuixTheme.colorScheme.primary.copy(alpha = 0.12f) else MiuixTheme.colorScheme.secondaryContainer)
+                            .combinedClickable(
+                                onClick = { if (picking) sel = if (on) sel - f else sel + f else { vm.useResult(f); resList = null } },
+                                onLongClick = { picking = true; sel = sel + f })
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(f.nameWithoutExtension.substringBefore("_micmask_").ifBlank { f.nameWithoutExtension }, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                                Text(java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.US).format(java.util.Date(f.lastModified())) + " · " + recInfo(f), fontSize = 12.sp, color = Dim)
+                            }
+                            if (picking) Checkbox(state = ToggleableState(on), onClick = { sel = if (on) sel - f else sel + f })
+                        }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                if (picking) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(tr("取消多选"), onClick = { picking = false; sel = emptySet() }, modifier = Modifier.weight(1f))
+                        TextButton(tr("删除 {0}", sel.size), enabled = sel.isNotEmpty(), colors = ButtonDefaults.textButtonColorsPrimary(),
+                            onClick = { vm.deleteResults(sel); val left = vm.listResults(); sel = emptySet(); picking = false
+                                resList = if (left.isEmpty()) null else left },
+                            modifier = Modifier.weight(1f))
+                    }
+                } else TextButton(tr("关闭"), onClick = { resList = null }, modifier = Modifier.fillMaxWidth())
+            }
+        }
     }
 
     recList?.let { list ->
@@ -293,6 +353,20 @@ private fun recInfo(f: File): String {
     val kb = f.length() / 1024f
     val size = if (kb >= 1024) "%.1f MB".format(kb / 1024) else "%.0f KB".format(kb)
     return (if (sec != null) tr("%.1f 秒 · ").format(sec) else "") + size
+}
+
+/** 输入波形缩略图（峰值柱状） */
+@Composable
+private fun WaveThumb(w: FloatArray) {
+    val c = MiuixTheme.colorScheme.primary
+    androidx.compose.foundation.Canvas(Modifier.fillMaxWidth().padding(top = 8.dp).height(40.dp)) {
+        val n = w.size; val bw = size.width / n; val mid = size.height / 2
+        for (i in 0 until n) {
+            val h = maxOf(1f, w[i] * size.height * 0.95f)
+            drawRect(c, topLeft = androidx.compose.ui.geometry.Offset(i * bw + bw * 0.15f, mid - h / 2),
+                size = androidx.compose.ui.geometry.Size(bw * 0.7f, h))
+        }
+    }
 }
 
 @Composable

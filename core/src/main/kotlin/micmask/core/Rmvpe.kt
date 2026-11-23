@@ -76,24 +76,49 @@ object Rmvpe {
      * @param pitchShift 半音数（f0_up_key），在转换前作用
      */
     fun f0ToPitch(f0: FloatArray, pitchShift: Int = 0): Pair<LongArray, FloatArray> {
+        // 逐位对齐 numpy 的 float32 计算（RVC / voice-changer 的 f0 是 float32 数组）：
+        // f*2^(k/12)、1+f/700、log、1127*… 都是 float32；减 lo 那步 numpy 升到 float64 再存回 float32。
+        // jfk 1000 万帧随机测试与 numpy 2.5 结果不一致 1 帧（原 double 版约 7.5e-6）
         val n = f0.size
         val pitch = LongArray(n)
         val pitchf = FloatArray(n)
         val lo = 1127.0 * ln(1.0 + 50.0 / 700.0)
         val hi = 1127.0 * ln(1.0 + 1100.0 / 700.0)
-        val scale = 2.0.pow(pitchShift / 12.0)
+        val scale = 2.0.pow(pitchShift / 12.0).toFloat()
 
         for (i in 0 until n) {
-            var f = f0[i].toDouble()
-            if (f > 0.0) f *= scale
-            pitchf[i] = f.toFloat()
-            var m = 1127.0 * ln(1.0 + f / 700.0)
-            if (m > 0.0) m = (m - lo) * 254.0 / (hi - lo) + 1.0
-            if (m <= 1.0) m = 1.0
-            if (m > 255.0) m = 255.0
-            pitch[i] = Math.rint(m).toLong()
+            val f = f0[i] * scale
+            pitchf[i] = f
+            val a = 1f + f / 700f
+            var m = 1127f * ln(a.toDouble()).toFloat()
+            if (m > 0f) m = ((m.toDouble() - lo) * 254.0 / (hi - lo) + 1.0).toFloat()
+            if (m <= 1f) m = 1f
+            if (m > 255f) m = 255f
+            pitch[i] = Math.rint(m.toDouble()).toLong()
         }
         return pitch to pitchf
+    }
+
+    /**
+     * RMVPE 输入：帧数补到 32 的倍数，镜像填充（对齐 voice-changer / Applio 的 F.pad(mode="reflect")）。
+     * 原来补 0：log-mel 里 0 相当于很响的平坦谱，实时窗口尾部（正好是要用的帧）有声/无声误判约 20%，镜像后约 10%（jfk 实测）。
+     * 返回按 [mel][帧] 展平的数组和补齐后的帧数。
+     */
+    fun padMel(mel: Array<FloatArray>): Pair<FloatArray, Int> {
+        val nMels = mel.size
+        val frames = mel[0].size
+        val total = 32 * ((frames - 1) / 32 + 1)
+        val flat = FloatArray(nMels * total)
+        for (m in 0 until nMels) {
+            val row = mel[m]; val o = m * total
+            System.arraycopy(row, 0, flat, o, frames)
+            for (j in frames until total) {
+                var k = 2 * (frames - 1) - j
+                if (k < 0) k = 0                           // 帧数太少（< 补的数）时退化为边缘复制
+                flat[o + j] = row[k]
+            }
+        }
+        return flat to total
     }
 
     /** 最近邻上采样 ×2（等价 F.interpolate(scale_factor=2)，默认 mode='nearest'） */

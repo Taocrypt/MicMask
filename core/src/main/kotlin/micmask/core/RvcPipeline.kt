@@ -198,11 +198,7 @@ class RvcPipeline(
     private fun runRmvpeModel(mel: Array<FloatArray>, audioLen: Int, cap: Boolean): FloatArray {
         val nMels = mel.size
         val frames = mel[0].size
-        val nPad = 32 * ((frames - 1) / 32 + 1) - frames
-        val totalFrames = frames + nPad
-
-        val flat = FloatArray(nMels * totalFrames)
-        for (m in 0 until nMels) System.arraycopy(mel[m], 0, flat, m * totalFrames, frames)
+        val (flat, totalFrames) = Rmvpe.padMel(mel)
 
         val inName = pickName(rmvpe, "input", 0)
         OnnxTensor.createTensor(

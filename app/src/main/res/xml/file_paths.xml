@@ -2,4 +2,7 @@
 <paths>
     <!-- 应用内更新下载的安装包 -->
     <cache-path name="updates" path="updates/" />
+    <!-- 文件变声结果分享 -->
+    <external-files-path name="output" path="output/" />
+    <files-path name="output_int" path="output/" />
 </paths>

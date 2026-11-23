@@ -440,7 +440,6 @@
   "播放完毕，可以松手发送了": "Playback finished, you can release to send",
   "支持": "supported",
   "支持 mp3、m4a、wav、ogg、flac 等常见音频。": "Supports mp3, m4a, wav, ogg, flac and other common formats.",
-  "支持 wav / mp3 / m4a / flac / ogg，或直接录一段": "Supports wav / mp3 / m4a / flac / ogg, or record directly",
   "支持开发": "Support development",
   "收起": "Collapse",
   "收起 ▴": "Collapse ▴",
@@ -873,5 +872,16 @@
   "只支持带音高（f0）的模型": "Only models with pitch (f0) are supported",
   "已按兼容模式导入 {0} 个音色：录音变声可用，实时较慢只建议高性能机；用 convert_rvc.py 转成流式版会快很多": "Imported {0} voice(s) in compatibility mode: clip conversion works; live mode is slow and only suits high-end phones. Converting with convert_rvc.py to a streaming model is much faster",
   "无法导入：{0}": "Cannot import: {0}",
-  "读取模型失败：{0}": "Failed to read model: {0}"
+  "读取模型失败：{0}": "Failed to read model: {0}",
+  "音频太长（{0} 秒），文件变声最长 {1} 秒，先剪短再来": "Audio too long ({0} s). File conversion is limited to {1} s — trim it first",
+  "已删除 {0} 条": "Deleted {0}",
+  "分享失败：{0}": "Share failed: {0}",
+  "支持 wav / mp3 / m4a / flac / ogg，最长 {0} 分钟，或直接录一段": "wav / mp3 / m4a / flac / ogg, up to {0} min, or record one",
+  "历史结果": "Past results",
+  "{0} 条，保留最近 {1} 条": "{0} items, keeps the latest {1}",
+  "存进「音乐/MicMask」，或直接分享": "Save to Music/MicMask, or share directly",
+  "WAV（无损，体积大）": "WAV (lossless, large)",
+  "M4A（AAC 128kbps，约小 5 倍）": "M4A (AAC 128 kbps, ~5× smaller)",
+  "分享 WAV": "Share WAV",
+  "点一条设为当前结果，长按多选": "Tap to set as current result, long-press to multi-select"
 }

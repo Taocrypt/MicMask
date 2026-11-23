@@ -593,9 +593,7 @@ class LiveRvc(private val open: (String) -> Any?) {
         val mel = Mel.logMel(x16)
         val nMels = mel.size
         val frames = mel[0].size
-        val total = 32 * ((frames - 1) / 32 + 1)
-        val flat = FloatArray(nMels * total)
-        for (m in 0 until nMels) System.arraycopy(mel[m], 0, flat, m * total, frames)
+        val (flat, total) = Rmvpe.padMel(mel)
         val s = rmvpe!!
         val name = s.inputInfo.keys.first()
         OnnxTensor.createTensor(env, FloatBuffer.wrap(flat), longArrayOf(1, nMels.toLong(), total.toLong())).use { tin ->

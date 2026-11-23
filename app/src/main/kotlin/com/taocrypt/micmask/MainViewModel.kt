@@ -244,6 +244,10 @@ const val GAIN_MAX = 18f
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     companion object {
+        /** 文件变声最长时长（秒）：整段推理内存随时长涨，超了解码前就拦 */
+        const val MAX_FILE_SEC = 600
+        /** 结果历史保留条数（App 内副本，LRU） */
+        const val MAX_RESULTS = 30
         @Volatile var current: MainViewModel? = null
         /** 不内置任何模型仓库：用户在设置里填自己有权使用的仓库 */
         const val DEFAULT_REPO = ""
@@ -277,6 +281,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var ttsEngine: TtsEngine? = null
     private var pendingSrc: Uri? = null
     private var pending16k: FloatArray? = null
+        set(v) { field = v; _srcWave.value = v?.let { AudioIo.waveOf(it) } }
+    /** 文件变声输入的波形缩略图 */
+    private val _srcWave = MutableStateFlow<FloatArray?>(null)
+    val srcWave: StateFlow<FloatArray?> = _srcWave.asStateFlow()
 
     private val recorder = Recorder(app)
 
@@ -2200,6 +2208,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(busy = true, stage = tr("解码音频"), progress = 0.02f, error = null, resultFile = null)
         viewModelScope.launch(Dispatchers.Default) {
             try {
+                // 解码前先看时长：整段转换内存随时长线性涨，超长直接拦下，不白等解码
+                AudioIo.probeDurationSec(ctx, uri)?.let { sec ->
+                    if (sec > MAX_FILE_SEC) {
+                        L.w("文件太长 %.0f 秒（上限 %d 秒），未解码".format(sec, MAX_FILE_SEC))
+                        _state.value = _state.value.copy(busy = false, error = tr("音频太长（{0} 秒），文件变声最长 {1} 秒，先剪短再来", sec.toInt(), MAX_FILE_SEC))
+                        return@launch
+                    }
+                }
                 val d = AudioIo.decodeTo16k(ctx, uri)
                 pendingSrc = uri
                 pending16k = d.samples
@@ -2260,6 +2276,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val stamp = SimpleDateFormat("MMdd_HHmmss", Locale.US).format(Date())
                 val base = (s.srcName ?: "audio").substringBeforeLast('.') + "_micmask_$stamp"
                 val saved = AudioIo.saveWav(ctx, out, 40000, base)
+                AudioIo.pruneOutputs(ctx, MAX_RESULTS).let { if (it > 0) L.i("结果历史超过 $MAX_RESULTS 条，删掉最旧的 $it 条（App 内副本）") }
                 val srcSec = audio.size / 16000f
                 L.i("完成：输出 ${out.size} 点 @40k，文件 ${saved.file.absolutePath}，耗时 ${ms}ms，RTF=${"%.3f".format(ms / 1000.0 / srcSec)}")
                 _state.value = _state.value.copy(
@@ -2280,6 +2297,51 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
         }
+    }
+
+    // ---------------------------------------------------------------- 结果历史 / 导出
+
+    fun listResults(): List<File> = AudioIo.listOutputs(ctx)
+
+    /** 从历史里挑一条作为当前结果（可试听、送麦、导出） */
+    fun useResult(f: File) {
+        val sec = runCatching { Wav.read(f).let { it.samples.size.toFloat() / it.sampleRate } }.getOrDefault(0f)
+        _state.value = _state.value.copy(resultFile = f, resultDisplay = f.name, resultSeconds = sec, elapsedMs = 0L)
+    }
+
+    fun deleteResults(fs: Set<File>) {
+        fs.forEach { it.delete() }
+        if (_state.value.resultFile in fs) _state.value = _state.value.copy(resultFile = null)
+        _state.value = _state.value.copy(toast = tr("已删除 {0} 条", fs.size))
+    }
+
+    /** 导出：wav 原样，m4a 用系统 AAC 编码；都存进「音乐/MicMask」 */
+    fun exportResult(f: File, m4a: Boolean) {
+        viewModelScope.launch(Dispatchers.Default) {
+            try {
+                val src = if (m4a) File(AudioIo.outputDir(ctx), f.nameWithoutExtension + ".m4a").also { dst ->
+                    if (!dst.exists()) { val t = System.currentTimeMillis(); AudioIo.encodeM4a(f, dst); L.i("导出 m4a ${dst.length() shr 10}KB 用时 ${System.currentTimeMillis() - t}ms") }
+                } else f
+                val where = AudioIo.copyToMusic(ctx, src, if (m4a) "audio/mp4" else "audio/wav") ?: src.absolutePath
+                _state.value = _state.value.copy(toast = tr("已导出到 {0}", where))
+            } catch (t: Throwable) {
+                L.e("导出失败", t)
+                _state.value = _state.value.copy(error = tr("导出失败：{0}", t.message))
+            }
+        }
+    }
+
+    /** 系统分享（发给 QQ / 微信等） */
+    fun shareResult(f: File) {
+        runCatching {
+            val uri = androidx.core.content.FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", f)
+            val i = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                type = if (f.extension == "m4a") "audio/mp4" else "audio/wav"
+                putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            ctx.startActivity(android.content.Intent.createChooser(i, tr("分享")).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+        }.onFailure { L.e("分享失败", it); _state.value = _state.value.copy(error = tr("分享失败：{0}", it.message)) }
     }
 
     // ---------------------------------------------------------------- 调试通路
