@@ -169,7 +169,12 @@ object ModelRepo {
      * 只认合法文件名（ModelStore 认识的或 <音色>_stream_…onnx），防止清单写出奇怪路径。
      */
     fun download(ctx: Context, man: Manifest, m: RModel, progress: (Float, String) -> Unit) {
-        val need = man.base.filter { ModelStore.locate(ctx, it.name) == null } + m.files
+        // 基础文件：缺的下；App 自己下到内部目录、但大小和清单不符的（仓库更新过，如 hubert 加了 v1 特征输出）也重下
+        val inner = ModelStore.internalDir(ctx)
+        val need = man.base.filter { b ->
+            val cur = ModelStore.locate(ctx, b.name)
+            cur == null || (b.size > 0 && cur.parentFile == inner && cur.length() != b.size)
+        } + m.files
         for (f in need) {
             val okName = f.name == f.name.substringAfterLast('/') &&
                 (f.name in ModelStore.required || f.name in ModelStore.optional || ModelStore.VOICE_RE.matches(f.name))

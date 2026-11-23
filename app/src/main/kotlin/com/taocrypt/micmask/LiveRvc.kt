@@ -69,6 +69,28 @@ class LiveRvc(private val open: (String) -> Any?) {
     private var hubert: OrtSession? = null
     private var rmvpe: OrtSession? = null
     private var netG: OrtSession? = null
+    /** 内容特征维度：v2=768（hubert 第 12 层 feat），v1=256（第 9 层 + final_proj，hubert_dyn8.onnx 新版的 feat9 输出） */
+    @Volatile private var emb = 768
+
+    /** 按合成器的 ONNX 元数据（转换器写入 key=micmask 的 JSON）判断特征维度；旧模型没有元数据时看 phone 输入的形状 */
+    private fun embOf(s: OrtSession): Int {
+        runCatching {
+            val j = s.metadata.customMetadata["micmask"]
+            if (!j.isNullOrBlank()) { val e = org.json.JSONObject(j).optInt("embChannels", 0); if (e == 256 || e == 768) return e }
+        }
+        runCatching {
+            val d = ((s.inputInfo["phone"]?.info as? TensorInfo)?.shape ?: longArrayOf()).getOrNull(2)?.toInt() ?: 0
+            if (d == 256 || d == 768) return d
+        }
+        return 768
+    }
+    private fun featOut() = if (emb == 256) "feat9" else "feat"
+    /** v1 音色要新版 hubert（带 feat9 输出），旧文件没有就报错让用户更新基础模型 */
+    private fun checkHubert() {
+        val h = hubert ?: return
+        if (emb == 256 && "feat9" !in h.outputNames)
+            throw IllegalStateException("该音色是 RVC v1 模型，需要新版基础模型（hubert）。请在「模型」页重新下载该音色（会自动更新基础模型）")
+    }
 
     @Volatile var semis: Int = 0
 
@@ -180,7 +202,7 @@ class LiveRvc(private val open: (String) -> Any?) {
         }.onFailure { L.e("live 特征预热失败", it) }
         // 流式合成器：有几个版本就都测一遍，用最快的
         o = opts(synThreads)
-        val ph = FloatArray(T * 768) { (Math.random().toFloat() - 0.5f) }
+        fun phFor(s: OrtSession) = FloatArray(T * embOf(s)) { (Math.random().toFloat() - 0.5f) }
         val pi = LongArray(T) { 120 }; val pf = FloatArray(T) { 300f }
         // 每个候选：测合成耗时 + 读出它的块长；选「特征和合成都在块长 80% 以内」里延迟最低的，都不行就选最从容的
         data class Cand(val name: String, val ms: Long, val len: Int) {
@@ -201,6 +223,7 @@ class LiveRvc(private val open: (String) -> Any?) {
                 if (open(n) == null) continue
                 val s = try { load("测速 $n", n) } catch (t: Throwable) { L.e("live 加载 $n 失败", t); continue }
                 netG?.close(); netG = s
+                val ph = phFor(s)
                 runCatching {
                     val len = runNetG(ph, pi, pf).size / UPP
                     val t = System.nanoTime(); repeat(3) { runNetG(ph, pi, pf) }
@@ -223,7 +246,14 @@ class LiveRvc(private val open: (String) -> Any?) {
         }
         val pick = chosen!!
         netG = load("流式合成器", pick.name)
-        LEN = runNetG(ph, pi, pf).size / UPP
+        emb = embOf(netG!!)
+        L.i("live 特征维度 $emb（${if (emb == 256) "RVC v1" else "RVC v2"}）")
+        if (emb == 256 && hubert?.outputNames?.contains("feat9") == false) {   // 基础模型可能刚更新过：重载一次再判断
+            runCatching { hubert?.close() }; hubert = null
+            o = opts(featThreads); hubert = load("HuBERT", ModelStore.HUBERT); o = opts(synThreads)
+        }
+        checkHubert()
+        LEN = runNetG(phFor(netG!!), pi, pf).size / UPP
         runCatching { pickCache?.writeText("$key\n${pick.name}\n${pick.ms}\n$LEN") }
         val tier = if (BLOCK <= 30) "标准" else "省电"
         benchSummary = "${tier}档：每步 ${BLOCK * 10}ms · 特征 ${featMs}ms · 合成 ${pick.ms}ms · 负载 ${"%.0f".format(ratio(pick) * 100)}%"
@@ -270,7 +300,7 @@ class LiveRvc(private val open: (String) -> Any?) {
                 synExec.execute {
                     val old = netG
                     netG = sess
-                    val ph = FloatArray(T * 768); val pi = LongArray(T) { 120 }; val pf = FloatArray(T) { 300f }
+                    val ph = FloatArray(T * embOf(sess)); val pi = LongArray(T) { 120 }; val pf = FloatArray(T) { 300f }
                     val newLen = runCatching { runNetG(ph, pi, pf).size / UPP }.getOrElse { L.e("live 省电档试跑失败", it); -1 }
                     if (newLen <= 0) { netG = old; runCatching { sess.close() }; shifting = false; return@execute }
                     LEN = newLen
@@ -400,15 +430,16 @@ class LiveRvc(private val open: (String) -> Any?) {
                 val a16 = if (x16.size >= n16) x16.copyOfRange(x16.size - n16, x16.size)
                           else FloatArray(n16).also { System.arraycopy(x16, 0, it, n16 - x16.size, x16.size) }
                 val tH = System.nanoTime()
-                val feats = Rmvpe.nearestUp2(runHubert(a16))           // ~100 x 768
+                val feats = Rmvpe.nearestUp2(runHubert(a16))           // ~100 x emb
                 val tR = System.nanoTime()
                 val f0All = runRmvpe(a16)                                 // ~103
                 val tE = System.nanoTime()
-                val phone = FloatArray(T * 768)
+                val ed = emb
+                val phone = FloatArray(T * ed)
                 val fOff = maxOf(0, feats.size - T)
                 for (i in 0 until T) {
                     val src = feats[minOf(fOff + i, feats.size - 1)]
-                    System.arraycopy(src, 0, phone, i * 768, 768)
+                    System.arraycopy(src, 0, phone, i * ed, minOf(ed, src.size))
                 }
                 val f0 = FloatArray(T) { i -> f0All[minOf(i + 1, f0All.size - 1)] }
                 val (pitch, pitchf) = Rmvpe.f0ToPitch(f0, sh)
@@ -461,7 +492,8 @@ class LiveRvc(private val open: (String) -> Any?) {
         val s = hubert!!
         val name = s.inputInfo.keys.first()
         OnnxTensor.createTensor(env, FloatBuffer.wrap(x), longArrayOf(1, x.size.toLong())).use { tin ->
-            s.run(mapOf(name to tin)).use { res ->
+            val want = featOut().takeIf { it in s.outputNames } ?: s.outputNames.first()
+            s.run(mapOf(name to tin), setOf(want)).use { res ->
                 val o = res.get(0) as OnnxTensor
                 val sh = (o.info as TensorInfo).shape
                 val t = sh[1].toInt(); val d = sh[2].toInt()
@@ -493,7 +525,7 @@ class LiveRvc(private val open: (String) -> Any?) {
 
     private fun runNetG(phone: FloatArray, pitch: LongArray, pitchf: FloatArray): FloatArray {
         val s = netG!!
-        OnnxTensor.createTensor(env, FloatBuffer.wrap(phone), longArrayOf(1, T.toLong(), 768)).use { a ->
+        OnnxTensor.createTensor(env, FloatBuffer.wrap(phone), longArrayOf(1, T.toLong(), (phone.size / T).toLong())).use { a ->
             OnnxTensor.createTensor(env, LongBuffer.wrap(pitch), longArrayOf(1, T.toLong())).use { b ->
                 OnnxTensor.createTensor(env, FloatBuffer.wrap(pitchf), longArrayOf(1, T.toLong())).use { c ->
                     s.run(mapOf("phone" to a, "pitch" to b, "pitchf" to c)).use { res ->
