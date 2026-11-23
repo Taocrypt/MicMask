@@ -220,6 +220,7 @@ class InjectorService : Binder {
                     val n = data.readInt().coerceIn(0, 16)
                     val got = ArrayList<String>()
                     // 换音色时合成器整套换掉：上一个音色多出来的档位不能留着参与测速
+                    val oldSynth = models.filterKeys { it.contains("_stream") }.mapValues { it.value.absolutePath }
                     models.keys.filter { it.contains("_stream") }.forEach { models.remove(it) }
                     repeat(n) {
                         val name = data.readString() ?: ""
@@ -227,27 +228,35 @@ class InjectorService : Binder {
                         if (pfd != null && name.isNotEmpty()) {
                             // shell 读不了 App 私有目录（/proc/self/fd 重开也被 SELinux 拒），拷到 shell 自己的目录
                             pfd.use { p ->
-                                val dst = java.io.File(MODEL_DIR, name)
                                 val size = p.statSize
-                                // 同结构的音色文件大小可能完全一样（如 花火/辉姬），只比大小会沿用上一个音色：再抽样比内容
-                                if (dst.length() != size || sampleCrc(FileInputStream(p.fileDescriptor).channel, size) != dst.takeIf { it.exists() }?.let { f -> java.io.RandomAccessFile(f, "r").use { sampleCrc(it.channel, size) } }) {
-                                    java.io.File(MODEL_DIR).mkdirs()
+                                val ch = FileInputStream(p.fileDescriptor).channel
+                                // 合成器按内容分目录存（s_<抽样校验>），每个音色一份、修改时间不变：
+                                // .ort 缓存和测速结果都能跨音色复用（之前所有音色共用一个文件名，切一次就全部失效重建）
+                                val dir = if (name.contains("_stream")) java.io.File(MODEL_DIR, "s_" + java.lang.Long.toHexString(sampleCrc(ch, size)) + "_" + size) else java.io.File(MODEL_DIR)
+                                val dst = java.io.File(dir, name)
+                                val same = dst.length() == size && (name.contains("_stream") ||
+                                    sampleCrc(ch, size) == dst.takeIf { it.exists() }?.let { f -> java.io.RandomAccessFile(f, "r").use { sampleCrc(it.channel, size) } })
+                                if (!same) {
+                                    dir.mkdirs()
                                     val t0 = System.currentTimeMillis()
-                                    val tmpF = java.io.File(MODEL_DIR, "$name.part")
-                                    FileInputStream(p.fileDescriptor).use { i -> java.io.FileOutputStream(tmpF).use { o -> i.copyTo(o, 1 shl 20) } }
+                                    val tmpF = java.io.File(dir, "$name.part")
+                                    ch.position(0)
+                                    FileInputStream(p.fileDescriptor).use { i -> java.io.FileOutputStream(tmpF).use { o -> i.channel.position(0); i.copyTo(o, 1 shl 20) } }
                                     if (!tmpF.renameTo(dst)) throw java.io.IOException("rename $name")
                                     slog('I', "拷贝模型 $name ${size shr 20}MB 用时 ${System.currentTimeMillis() - t0}ms")
-                                    if (name in loadedNames) engine?.let { e ->
-                                        // 只换了合成器（换音色）：保留已加载的 HuBERT/RMVPE，只丢合成器会话；基础模型变了才整个重建
-                                        if (name.contains("_stream")) e.dropSynth()
-                                        else { engine = null; Thread { e.release() }.start() }
-                                    }
+                                    // 基础模型（HuBERT/RMVPE）内容变了才整个重建引擎
+                                    if (!name.contains("_stream") && name in loadedNames) engine?.let { e -> engine = null; Thread { e.release() }.start() }
                                 }
+                                if (dir.name.startsWith("s_")) dir.setLastModified(System.currentTimeMillis())
                                 models[name] = dst
                             }
-                            got += "$name(${pfd.statSize shr 20}MB)"
+                            got += name
                         }
                     }
+                    // 合成器换了（文件不同，哪怕名字一样，或 流式↔兼容）：标记，下次启动推理时先丢掉旧合成器会话
+                    val newSynth = models.filterKeys { it.contains("_stream") }.mapValues { it.value.absolutePath }
+                    if (newSynth != oldSynth && engine != null) synthDirty = true
+                    pruneSynthDirs()
                     slog('I', "收到模型 ${got.joinToString()}")
                     reply?.writeNoException()
                     reply?.writeString(null)
@@ -257,6 +266,7 @@ class InjectorService : Binder {
                     if (data.dataAvail() >= 16) readTune(data)
                     val r = runCatching {
                         val e = ensureEngine()
+                        synthDirty = false
                         e.load({ msg -> engineState = msg }, force = true)
                         engineState = ""
                         e.benchSummary
@@ -592,6 +602,20 @@ class InjectorService : Binder {
         return crc.value
     }
     private val loadedNames = HashSet<String>()
+    /** 合成器文件变了，下次启动推理前要 dropSynth */
+    @Volatile private var synthDirty = false
+    private val engineLock = Any()
+    @Volatile private var startSeq = 0
+
+    /** 只留最近用过的 8 个音色的合成器目录（连同里面的 .ortcache），并清掉旧版平铺在根目录的合成器 */
+    private fun pruneSynthDirs() = runCatching {
+        val root = java.io.File(MODEL_DIR)
+        val inUse = models.values.map { it.parentFile?.absolutePath }.toSet()
+        root.listFiles()?.filter { it.isFile && it.name.contains("_stream") }?.forEach { it.delete() }
+        root.listFiles()?.filter { it.isDirectory && it.name.startsWith("s_") && it.absolutePath !in inUse }
+            ?.sortedByDescending { it.lastModified() }?.drop(7)?.forEach { it.deleteRecursively(); slog('I', "清理旧音色缓存 ${it.name}") }
+        java.io.File(root, ".ortcache").listFiles()?.filter { it.name.contains("_stream") }?.forEach { it.delete() }
+    }
     private val models = java.util.concurrent.ConcurrentHashMap<String, java.io.File>()
     @Volatile private var engine: com.taocrypt.micmask.LiveRvc? = null
     @Volatile private var engineState = ""
@@ -622,30 +646,38 @@ class InjectorService : Binder {
     private fun startEngine() {
         com.taocrypt.micmask.L.sink = { lv, m -> slog(lv, m) }
         engine?.stop()
+        val my = ++startSeq
         Thread({
-            try {
-                runCatching { android.os.Process.setThreadPriority(-16) }
-                val e = ensureEngine().also { engine = it }
-                e.semis = liveSemis.toInt()
-                e.io = object : com.taocrypt.micmask.LiveRvc.Io {
-                    override fun pull(max: Int): ShortArray {
-                        val tmp = ShortArray(minOf(max, micRing.size()))
-                        val k = micRing.read(tmp, 0, tmp.size)
-                        return if (k == tmp.size) tmp else tmp.copyOf(k)
+            // 串行：上一次启动（比如还在加载模型时就又切了音色）做完再开始，避免两个线程同时 load 同一个引擎
+            synchronized(engineLock) {
+                if (my != startSeq) return@synchronized
+                try {
+                    runCatching { android.os.Process.setThreadPriority(-16) }
+                    val e = ensureEngine().also { engine = it }
+                    if (synthDirty) { synthDirty = false; e.dropSynth() }
+                    e.semis = liveSemis.toInt()
+                    e.io = object : com.taocrypt.micmask.LiveRvc.Io {
+                        override fun pull(max: Int): ShortArray {
+                            val tmp = ShortArray(minOf(max, micRing.size()))
+                            val k = micRing.read(tmp, 0, tmp.size)
+                            return if (k == tmp.size) tmp else tmp.copyOf(k)
+                        }
+                        override fun push(pcm: ShortArray) { outRing.write(pcm, 0, pcm.size) }
                     }
-                    override fun push(pcm: ShortArray) { outRing.write(pcm, 0, pcm.size) }
+                    engineState = "加载模型"
+                    e.load({ msg -> engineState = msg })
+                    if (!running) { engineState = ""; return@synchronized }
+                    if (my != startSeq) { slog('I', "推理启动被新的切换取代"); return@synchronized }
+                    micRing.clear()
+                    e.start()
+                    engineState = "运行"
+                    engGen++
+                    slog('I', "shell 推理已启动（进程内，不经 App）")
+                } catch (t: Throwable) {
+                    if (my != startSeq) { slog('W', "旧的推理启动失败（已被新的切换取代）：${describe(t)}"); return@synchronized }
+                    engineState = "失败：" + describe(t)
+                    slog('E', "shell 推理启动失败", t)
                 }
-                engineState = "加载模型"
-                e.load({ msg -> engineState = msg })
-                if (!running) { engineState = ""; return@Thread }
-                micRing.clear()
-                e.start()
-                engineState = "运行"
-                engGen++
-                slog('I', "shell 推理已启动（进程内，不经 App）")
-            } catch (t: Throwable) {
-                engineState = "失败：" + describe(t)
-                slog('E', "shell 推理启动失败", t)
             }
         }, "engine-start").start()
     }

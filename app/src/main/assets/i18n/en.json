@@ -902,5 +902,7 @@
   "切换音色失败：变声已停止": "Voice switch failed: voice changing stopped",
   "切换音色超时，重开一次变声试试": "Voice switch timed out. Try restarting voice changing",
   "已切换到 {0}": "Switched to {0}",
-  "正在切换到 {0}…": "Switching to {0}…"
+  "正在切换到 {0}…": "Switching to {0}…",
+  "兼容模式 · ": "Compat · ",
+  "·兼容": " · compat"
 }

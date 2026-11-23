@@ -505,7 +505,7 @@ class LiveFloatService : Service() {
             presetRow.removeAllViews()
             if (vm == null || st == null) { presetRow.addView(chip(tr("先打开 App"), 0x33FFFFFF) { openApp() }); return }
             when (mode) {
-                0 -> st.liveVoices.forEach { v -> presetRow.addView(chip(vm.voiceLabel(v), if (v == sel) ACCENT else 0x33FFFFFF) { vm.setLiveVoice(v) }) }
+                0 -> st.liveVoices.forEach { v -> presetRow.addView(chip(vm.voiceLabel(v) + if (vm.isCompatVoice(v)) tr("·兼容") else "", if (v == sel) ACCENT else 0x33FFFFFF) { vm.setLiveVoice(v) }) }
                 1 -> {
                     pitchPresets.forEach { p -> presetRow.addView(chip(tr(p.name), if (p.name == sel) ACCENT else 0x33FFFFFF) { vm.setPitchSemis(p.semis); vm.applyFxPreset(1, p.name, p.fx) }) }
                     st.userPresets[1].orEmpty().forEach { p -> presetRow.addView(chip("★" + p.name, if (p.name == sel) ACCENT else 0x33FFFFFF) { vm.applyUserPreset(p) }) }

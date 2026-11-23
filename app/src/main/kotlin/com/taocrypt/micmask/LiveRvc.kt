@@ -46,6 +46,8 @@ class LiveRvc(private val open: (String) -> Any?) {
 
     /** 测速结果缓存（按模型文件大小做键），下次启动直接用，不再逐个测 */
     var pickCache: File? = null
+    /** 上次特征模型测速（HuBERT+RMVPE+抽取），换音色时沿用 */
+    @Volatile private var benchFeatMs = 0L
 
     fun stats(): String = "特征 ${lastFeatMs}ms / 合成 ${lastSynMs}ms（预算 ${BLOCK * 10}ms）· 丢块 $dropped"
 
@@ -229,11 +231,13 @@ class LiveRvc(private val open: (String) -> Any?) {
             return sess
         }
         L.i("live 配置：T=$T LEN=$LEN BLOCK=${BLOCK * 10}ms XF=${XF * 1000 / SR}ms WIN=${WIN48 * 1000 / SR}ms featThreads=$featThreads synThreads=$synThreads gate=${gateDb}dB tier=$tier")
+        val featWarm = hubert != null && rmvpe != null && benchFeatMs > 0 && !force
         if (hubert == null) hubert = load("HuBERT", ModelStore.HUBERT)
         if (rmvpe == null) rmvpe = load("RMVPE", ModelStore.RMVPE)
         var featMs = 0L
-        // 预热 + 测速特征模型
-        runCatching {
+        // 预热 + 测速特征模型（换音色时特征模型没动，沿用上次结果，省半秒多）
+        if (featWarm) { featMs = benchFeatMs; L.i("live 特征模型已在内存，沿用测速 ${featMs}ms") }
+        else runCatching {
             val z = FloatArray(16320) { (Math.random().toFloat() - 0.5f) * 0.1f }
             runHubert(z); runRmvpe(z)
             var th = 0L; var tr = 0L
@@ -243,6 +247,7 @@ class LiveRvc(private val open: (String) -> Any?) {
             }
             val t = System.nanoTime(); decim3(FloatArray(WIN48)); val td = System.nanoTime() - t
             featMs = th / 3_000_000 + tr / 3_000_000 + td / 1_000_000
+            benchFeatMs = featMs
             L.i("live 测速 hubert=${th / 3_000_000}ms rmvpe=${tr / 3_000_000}ms 抽取=${td / 1_000_000}ms 特征合计≈${featMs}ms")
         }.onFailure { L.e("live 特征预热失败", it) }
         // 流式合成器：有几个版本就都测一遍，用最快的
@@ -254,11 +259,12 @@ class LiveRvc(private val open: (String) -> Any?) {
             val blockMs get() = (len - XF_FR) * 10
         }
         fun ratio(c: Cand) = maxOf(c.ms, featMs).toDouble() / c.blockMs
-        val key = NETG_FILES.joinToString(",") { n -> "$n:" + ((open(n) as? File)?.let { "${it.length()}@${it.lastModified()}" } ?: -1) } + "|t$tier f$featThreads s$synThreads"
+        val key = NETG_FILES.joinToString(",") { n -> "$n:" + ((open(n) as? File)?.let { "${it.parentFile?.name}/${it.length()}@${it.lastModified()}" } ?: -1) } + "|t$tier f$featThreads s$synThreads"
         var chosen: Cand? = null
         runCatching {
-            val c = pickCache?.takeIf { it.exists() }?.readText()?.split("\n")
-            if (c != null && c.size >= 4 && c[0] == key && open(c[1]) != null) chosen = Cand(c[1], c[2].toLong(), c[3].toInt())
+            // 每个音色一条（4 行一组），换来换去不用重测
+            val c = pickCache?.takeIf { it.exists() }?.readText()?.split("\n").orEmpty().chunked(4).firstOrNull { it.size == 4 && it[0] == key }
+            if (c != null && open(c[1]) != null) chosen = Cand(c[1], c[2].toLong(), c[3].toInt())
         }
         if (chosen != null) {
             L.i("live 用首次测速结果：${chosen!!.name}（${chosen!!.ms}ms/块，块长 ${chosen!!.blockMs}ms）")
@@ -300,7 +306,11 @@ class LiveRvc(private val open: (String) -> Any?) {
         }
         checkHubert()
         LEN = runNetG(phFor(netG!!), pi, pf).size / UPP
-        runCatching { pickCache?.writeText("$key\n${pick.name}\n${pick.ms}\n$LEN") }
+        runCatching {
+            val f = pickCache ?: return@runCatching
+            val old = f.takeIf { it.exists() }?.readText()?.split("\n").orEmpty().chunked(4).filter { it.size == 4 && it[0] != key }
+            f.writeText((listOf(listOf(key, pick.name, "${pick.ms}", "$LEN")) + old).take(16).flatten().joinToString("\n"))
+        }
         val tier = if (BLOCK <= 30) "标准" else "省电"
         benchSummary = (if (compatOf(netG!!) != null) "兼容模式·" else "") + "${tier}档：每步 ${BLOCK * 10}ms · 特征 ${featMs}ms · 合成 ${pick.ms}ms · 负载 ${"%.0f".format(ratio(pick) * 100)}%"
         L.i("live 选用 ${pick.name} → $benchSummary")

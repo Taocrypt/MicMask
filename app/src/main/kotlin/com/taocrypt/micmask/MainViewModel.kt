@@ -1492,6 +1492,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun repoInstalled(m: com.taocrypt.micmask.repo.ModelRepo.RModel): Boolean = com.taocrypt.micmask.repo.ModelRepo.installed(ctx, m)
 
     fun voiceLabel(v: String): String = ModelStore.voiceLabel(ctx, v)
+    /** 只有兼容模式模型（w-okada 原版 ONNX，整段推理、比流式版慢很多） */
+    fun isCompatVoice(v: String): Boolean = ModelStore.isCompatOnly(ctx, v)
     fun voiceSizeMb(v: String): Float = ModelStore.voiceSize(ctx, v) / 1048576f
 
     fun renameVoice(v: String, alias: String) {
