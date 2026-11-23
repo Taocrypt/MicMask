@@ -62,6 +62,17 @@ object TtsAssetStore {
         } ?: externalDir(ctx).also { it.mkdirs() }
 
     fun modelsDir(ctx: Context): File = dir(ctx)
+
+    /** 可删的大文件：六个模型 + 共享权重（文本前端和参考特征是 APK 自带的小文件，留着） */
+    private fun bigFiles(ctx: Context): List<File> =
+        candidateDirs(ctx).flatMap { d -> (MODELS.keys + SHARED_DATA).map { File(d, it) } }.filter { it.isFile }
+    fun modelBytes(ctx: Context): Long = bigFiles(ctx).sumOf { it.length() }
+    /** 删除合成模型，返回释放的字节数 */
+    fun deleteModels(ctx: Context): Long {
+        var b = 0L
+        for (f in bigFiles(ctx)) { b += f.length(); OrtLoad.dropCache(f); f.delete() }
+        return b
+    }
     fun refDir(ctx: Context): File = File(dir(ctx), "ref").also { it.mkdirs() }
 
     fun locate(ctx: Context, name: String): File? =

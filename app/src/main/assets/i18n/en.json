@@ -883,5 +883,16 @@
   "WAV（无损，体积大）": "WAV (lossless, large)",
   "M4A（AAC 128kbps，约小 5 倍）": "M4A (AAC 128 kbps, ~5× smaller)",
   "分享 WAV": "Share WAV",
-  "点一条设为当前结果，长按多选": "Tap to set as current result, long-press to multi-select"
+  "点一条设为当前结果，长按多选": "Tap to set as current result, long-press to multi-select",
+  "正在转换或下载，完成后再删": "Converting or downloading — delete after it finishes",
+  "已删除句级模型，释放 {0} MB": "Deleted file conversion models, freed {0} MB",
+  "正在合成或下载，完成后再删": "Synthesizing or downloading — delete after it finishes",
+  "已删除合成模型，释放 {0} MB": "Deleted TTS models, freed {0} MB",
+  "删除句级模型": "Delete file conversion models",
+  "合成器 + 检索索引，约 {0} MB；实时变声共用的特征/音高模型保留": "Synthesizer + index, about {0} MB; feature/pitch models shared with live mode are kept",
+  "删除后文件变声不可用，需要时可重新在线下载或导入。": "File conversion won't work until you download or import the models again.",
+  "模型管理": "Models",
+  "删除合成模型": "Delete TTS models",
+  "约 {0} MB，常用语音保留": "About {0} MB; saved clips are kept",
+  "删除后文字转语音不可用，需要时可重新从仓库下载或导入。": "Text-to-speech won't work until you download or import the models again."
 }

@@ -109,6 +109,7 @@ internal fun TtsPage(vm: MainViewModel, st: UiState) {
     DisposableEffect(Unit) { onDispose { clip.stop() } }
     LaunchedEffect(Unit) { vm.refreshTtsModels(); vm.refreshLibrary(); if (st.repoTtsSize == 0L && st.repoUrl.isNotBlank()) vm.refreshRepo() }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { vm.importTtsFiles(it) }
+    var delOpen by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 24.dp)) {
         // ---- 模型状态 ----
@@ -263,6 +264,25 @@ internal fun TtsPage(vm: MainViewModel, st: UiState) {
                         colors = ButtonDefaults.textButtonColorsPrimary())
                     IconButton(onClick = { vm.deleteLibrary(e) }) { Icon(MiuixIcons.Delete, tr("删除"), tint = Color(0xFFE5484D)) }
                 }
+            }
+        }
+
+        // ---- 模型管理 ----
+        val delBytes = remember(st.ttsModelItems, st.ttsReady) { vm.ttsModelBytes() }
+        if (delBytes > 0 && !dl) {
+            SmallTitle(tr("模型管理"))
+            Card(Modifier.fillMaxWidth().padding(Pad2)) {
+                ArrowPreference(title = tr("删除合成模型"),
+                    summary = tr("约 {0} MB，常用语音保留", "%.0f".format(delBytes / 1048576.0)), onClick = { delOpen = true })
+            }
+        }
+    }
+    if (delOpen) {
+        top.yukonga.miuix.kmp.window.WindowDialog(show = true, title = tr("删除合成模型"), summary = tr("删除后文字转语音不可用，需要时可重新从仓库下载或导入。"), onDismissRequest = { delOpen = false }) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(tr("取消"), onClick = { delOpen = false }, modifier = Modifier.weight(1f))
+                TextButton(tr("删除"), onClick = { clip.stop(); vm.deleteTtsModels(); delOpen = false }, modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.textButtonColorsPrimary())
             }
         }
     }

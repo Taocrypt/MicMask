@@ -98,9 +98,21 @@ object ModelStore {
     /** 删除音色：删文件 + 测速缓存 + 别名 */
     fun deleteVoice(ctx: Context, v: String): Int {
         val fs = voiceFiles(ctx, v)
-        fs.forEach { it.delete() }
+        fs.forEach { OrtLoad.dropCache(it); it.delete() }
         ctx.getSharedPreferences("live", 0).edit().remove("bench_$v").remove("alias_$v").apply()
         return fs.size
+    }
+    /** 只有文件变声用的模型（合成器 + 检索索引）；hubert/rmvpe 实时也要用，不在这里删 */
+    val FILE_ONLY = listOf(NET_G, INDEX)
+    fun fileOnlyBytes(ctx: Context): Long = FILE_ONLY.sumOf { n -> candidateDirs(ctx).sumOf { File(it, n).takeIf { f -> f.isFile }?.length() ?: 0L } }
+    /** 删除文件变声模型，返回释放的字节数 */
+    fun deleteFileModels(ctx: Context): Long {
+        var b = 0L
+        for (d in candidateDirs(ctx)) for (n in FILE_ONLY) {
+            val f = File(d, n)
+            if (f.isFile) { b += f.length(); OrtLoad.dropCache(f); f.delete() }
+        }
+        return b
     }
     fun voices(ctx: Context): List<String> = candidateDirs(ctx)
         .flatMap { d -> d.listFiles()?.filter { it.isFile && it.length() > 1024 }?.mapNotNull { VOICE_RE.matchEntire(it.name)?.groupValues?.get(1) } ?: emptyList() }

@@ -85,6 +85,7 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
     var recList by remember { mutableStateOf<List<File>?>(null) }
     var resList by remember { mutableStateOf<List<File>?>(null) }
     var expOpen by remember { mutableStateOf<File?>(null) }
+    var delFileOpen by remember { mutableStateOf(false) }
     val wave by vm.srcWave.collectAsState()
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 24.dp)) {
@@ -105,6 +106,10 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
                 onClick = { if (st.engineLoaded) vm.unloadEngine() else if (st.modelsReady && !st.loadingEngine) vm.loadEngine() })
             ArrowPreference(title = if (st.importing) tr("导入中 {0}/{1}", st.importDone, st.importTotal) else tr("从手机导入模型"),
                 summary = tr("zip 或 .onnx / .bin"), onClick = { if (!st.importing) modelPicker.launch(arrayOf("*/*")) })
+            val delBytes = remember(st.modelItems) { vm.fileModelBytes() }
+            if (delBytes > 0) ArrowPreference(title = tr("删除句级模型"),
+                summary = tr("合成器 + 检索索引，约 {0} MB；实时变声共用的特征/音高模型保留", "%.0f".format(delBytes / 1048576.0)),
+                onClick = { delFileOpen = true })
             val idxMissing = st.modelItems.any { it.name == ModelStore.INDEX && !it.present }
             if (!st.modelsReady || idxMissing || st.dlId == "file") {
                 val dl = st.dlId == "file"
@@ -237,6 +242,16 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
         val resCount = remember(st.resultFile, resList) { vm.listResults().size }
         if (resCount > 0) Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(top = 12.dp)) {
             ArrowPreference(title = tr("历史结果"), summary = tr("{0} 条，保留最近 {1} 条", resCount, MainViewModel.MAX_RESULTS), onClick = { resList = vm.listResults() })
+        }
+    }
+
+    if (delFileOpen) {
+        WindowDialog(show = true, title = tr("删除句级模型"), summary = tr("删除后文件变声不可用，需要时可重新在线下载或导入。"), onDismissRequest = { delFileOpen = false }) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(tr("取消"), onClick = { delFileOpen = false }, modifier = Modifier.weight(1f))
+                TextButton(tr("删除"), onClick = { clip.stop(); vm.deleteFileModels(); delFileOpen = false }, modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.textButtonColorsPrimary())
+            }
         }
     }
 

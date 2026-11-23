@@ -1477,6 +1477,42 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         refreshVoices()
     }
 
+    /** 删除文件变声模型（合成器 + 检索索引）；先释放内存里的引擎 */
+    fun deleteFileModels() {
+        val s = _state.value
+        if (s.busy || s.loadingEngine || s.dlId == "file") { _state.value = s.copy(toast = tr("正在转换或下载，完成后再删")); return }
+        val e = engine; engine = null
+        _state.value = s.copy(engineLoaded = false, engineLog = "")
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { e?.close() }
+            val b = ModelStore.deleteFileModels(ctx)
+            L.i("UI 删除句级模型 ${b / 1048576}MB")
+            withContext(Dispatchers.Main) {
+                refreshModels()
+                _state.value = _state.value.copy(toast = tr("已删除句级模型，释放 {0} MB", "%.0f".format(b / 1048576.0)))
+            }
+        }
+    }
+
+    /** 删除文字转语音模型；先释放引擎 */
+    fun deleteTtsModels() {
+        val s = _state.value
+        if (s.ttsBusy || s.dlId == "tts" || s.importing) { _state.value = s.copy(toast = tr("正在合成或下载，完成后再删")); return }
+        val e = ttsEngine; ttsEngine = null
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { e?.close() }
+            val b = TtsAssetStore.deleteModels(ctx)
+            L.i("UI 删除 TTS 模型 ${b / 1048576}MB")
+            withContext(Dispatchers.Main) {
+                refreshTtsModels()
+                _state.value = _state.value.copy(toast = tr("已删除合成模型，释放 {0} MB", "%.0f".format(b / 1048576.0)))
+            }
+        }
+    }
+
+    fun fileModelBytes() = ModelStore.fileOnlyBytes(ctx)
+    fun ttsModelBytes() = TtsAssetStore.modelBytes(ctx)
+
     fun deleteVoice(v: String) {
         if (com.taocrypt.micmask.inject.MicInjector.liveOn) { _state.value = _state.value.copy(toast = tr("先停止实时变声再删除")); return }
         val n = ModelStore.deleteVoice(ctx, v)

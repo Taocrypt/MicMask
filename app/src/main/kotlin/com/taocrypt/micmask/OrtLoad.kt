@@ -21,6 +21,11 @@ object OrtLoad {
     private fun ver() = runCatching { OrtEnvironment.getEnvironment().version }.getOrDefault("x").replace(Regex("[^0-9A-Za-z.]"), "")
     private fun cacheOf(f: File) = File(File(f.parentFile, DIR), "${f.name}.${f.length()}.${f.lastModified()}.v${ver()}.ort")
 
+    /** 删掉某个模型的全部 .ort 缓存（删模型时调用，不然缓存会孤零零留着占空间） */
+    fun dropCache(f: File) {
+        File(f.parentFile, DIR).listFiles()?.filter { it.name.startsWith(f.name + ".") }?.forEach { it.delete() }
+    }
+
     /** mk 每次都要返回一个新的 SessionOptions（这里会往里加配置项） */
     fun create(env: OrtEnvironment, f: File, mk: () -> OrtSession.SessionOptions): OrtSession {
         val c = cacheOf(f)
