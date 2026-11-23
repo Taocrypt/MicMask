@@ -147,5 +147,5 @@ object Probe {
 
     /** MicMask 正式版 shell 侧的模型目录；有就测这里的（标准名） */
     const val MM_DIR = "/data/local/tmp/micmask-models"
-    val MODEL_NAMES = listOf("hubert_dyn8.onnx", "rmvpe_q8.onnx", "atri48_stream_qdq.onnx", "atri48_stream_b50_qdq.onnx", "atri48_stream_fp32.onnx")
+    val MODEL_NAMES = listOf("hubert_qnn_a16w8.onnx", "synth_qnn_a16w8.onnx", "synth_f32_static.onnx", "hubert_dyn8.onnx", "rmvpe_q8.onnx", "atri48_stream_qdq.onnx", "atri48_stream_b50_qdq.onnx", "atri48_stream_fp32.onnx")
 }

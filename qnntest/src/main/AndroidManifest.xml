@@ -5,6 +5,7 @@
         android:theme="@android:style/Theme.DeviceDefault">
         <!-- QNN HTP 需要系统里的 libcdsprpc.so（厂商库，需声明） -->
         <uses-native-library android:name="libcdsprpc.so" android:required="false" />
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

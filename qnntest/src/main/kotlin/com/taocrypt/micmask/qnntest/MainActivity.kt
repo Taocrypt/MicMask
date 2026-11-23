@@ -117,7 +117,13 @@ class MainActivity : Activity() {
         for ((m, tier) in tasks()) {
             if (m != null) out("-- ${m.name} · ${Probe.TIERS.first { it.first == tier }.second}")
             val f = File(cacheDir, "probe.log"); f.delete()
-            startService(Intent(this, ProbeService::class.java).putExtra("log", f.path).putExtra("model", m?.path).putExtra("tier", tier))
+            val conn = object : android.content.ServiceConnection {
+                override fun onServiceConnected(n: android.content.ComponentName?, b: android.os.IBinder?) {}
+                override fun onServiceDisconnected(n: android.content.ComponentName?) {}
+            }
+            // 每次用不同的 action，保证 onBind 都会被调用（同一 Intent 的 binder 会被缓存）
+            val it = Intent(this, ProbeService::class.java).setAction("run${System.nanoTime()}").putExtra("log", f.path).putExtra("model", m?.path).putExtra("tier", tier)
+            bindService(it, conn, BIND_AUTO_CREATE or BIND_IMPORTANT or BIND_ABOVE_CLIENT)
             var read = 0; var pid = 0; var done = false; val t0 = System.currentTimeMillis(); var gone = 0
             while (!done) {
                 Thread.sleep(200)
@@ -131,6 +137,7 @@ class MainActivity : Activity() {
                 if (!done && pid != 0 && !File("/proc/$pid").exists()) { if (++gone > 3) { out("  进程崩溃（无输出）"); if (m != null) out("RESULT|${m.name}|$tier|CRASH"); done = true } }
                 if (!done && System.currentTimeMillis() - t0 > 180_000) { out("  超时 180s"); if (m != null) out("RESULT|${m.name}|$tier|TIMEOUT"); done = true }
             }
+            runCatching { unbindService(conn) }; Thread.sleep(300)
         }
         Probe.summary(all.drop(start)).forEach(::out)
     }
