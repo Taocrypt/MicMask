@@ -215,11 +215,13 @@ class LiveRvc(private val open: (String) -> Any?) {
             setInterOpNumThreads(1)
         }
         var o = opts(featThreads)
+        var curTh = featThreads
         fun load(label: String, n: String): OrtSession {
             onLog("加载 $label …")
             val f = need(n); val t = System.nanoTime()
+            val th = curTh
             val sess = when (f) {
-                is File -> env.createSession(f.absolutePath, o)
+                is File -> OrtLoad.create(env, f) { opts(th) }
                 else -> env.createSession(f.toString(), o)
             }
             val mb = when (f) { is File -> f.length(); else -> 0L } shr 20
@@ -244,7 +246,7 @@ class LiveRvc(private val open: (String) -> Any?) {
             L.i("live 测速 hubert=${th / 3_000_000}ms rmvpe=${tr / 3_000_000}ms 抽取=${td / 1_000_000}ms 特征合计≈${featMs}ms")
         }.onFailure { L.e("live 特征预热失败", it) }
         // 流式合成器：有几个版本就都测一遍，用最快的
-        o = opts(synThreads)
+        o = opts(synThreads); curTh = synThreads
         fun phFor(s: OrtSession) = FloatArray(T * embOf(s)) { (Math.random().toFloat() - 0.5f) }
         val pi = LongArray(T) { 120 }; val pf = FloatArray(T) { 300f }
         // 每个候选：测合成耗时 + 读出它的块长；选「特征和合成都在块长 80% 以内」里延迟最低的，都不行就选最从容的
@@ -294,7 +296,7 @@ class LiveRvc(private val open: (String) -> Any?) {
         L.i("live 特征维度 $emb（${if (emb == 256) "RVC v1" else "RVC v2"}）${if (compatOf(netG!!) != null) " 兼容模式" else ""}")
         if (emb == 256 && hubert?.outputNames?.contains("feat9") == false) {   // 基础模型可能刚更新过：重载一次再判断
             runCatching { hubert?.close() }; hubert = null
-            o = opts(featThreads); hubert = load("HuBERT", ModelStore.HUBERT); o = opts(synThreads)
+            o = opts(featThreads); curTh = featThreads; hubert = load("HuBERT", ModelStore.HUBERT); o = opts(synThreads); curTh = synThreads
         }
         checkHubert()
         LEN = runNetG(phFor(netG!!), pi, pf).size / UPP
@@ -358,7 +360,7 @@ class LiveRvc(private val open: (String) -> Any?) {
                 for (n in others) {
                     val f = open(n) ?: continue
                     val t = System.nanoTime()
-                    val sess = runCatching { when (f) { is File -> env.createSession(f.absolutePath, o); else -> env.createSession(f.toString(), o) } }
+                    val sess = runCatching { when (f) { is File -> OrtLoad.create(env, f) { OrtSession.SessionOptions().apply { setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT); setIntraOpNumThreads(synThreads); setInterOpNumThreads(1) } }; else -> env.createSession(f.toString(), o) } }
                         .getOrElse { L.e("live 加载 $n 失败", it); continue }
                     val len = runCatching { synExec.submit(java.util.concurrent.Callable { lenOf(sess) }).get() }.getOrElse { L.e("live 读 $n 块长失败", it); -1 }
                     L.i("live 候选 $n 块长 ${(len - XF_FR) * 10}ms（加载 ${(System.nanoTime() - t) / 1_000_000}ms）")
