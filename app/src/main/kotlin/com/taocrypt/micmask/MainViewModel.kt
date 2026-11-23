@@ -876,17 +876,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         prefs.edit().putString("user_presets_$mode", org.json.JSONArray(l.map { it.toJson() }).toString()).apply()
         _state.value = _state.value.copy(userPresets = _state.value.userPresets + (mode to l))
     }
+    /** 同名时自动追加版本号：名字 → 名字 (2) → 名字 (3)…，不覆盖已有预设 */
+    private fun uniquePresetName(mode: Int, want: String, except: String? = null): String {
+        val taken = _state.value.userPresets[mode].orEmpty().map { it.name }.filter { it != except }.toSet()
+        if (want !in taken) return want
+        val base = Regex("^(.*?) \\((\\d+)\\)$").matchEntire(want)?.groupValues?.get(1) ?: want
+        var n = 2
+        while ("$base ($n)" in taken) n++
+        return "$base ($n)"
+    }
     fun saveCurrentPreset(mode: Int, name: String) {
         val st = _state.value
-        val p = UserPreset(name.trim().ifEmpty { tr("我的预设") }, mode, if (mode == 1) st.pitchSemis else 0f, if (mode == 2) st.fxCard else st.fx)
-        saveUserPresets(mode, (st.userPresets[mode].orEmpty().filter { it.name != p.name }) + p)
+        val p = UserPreset(uniquePresetName(mode, name.trim().ifEmpty { tr("我的预设") }), mode, if (mode == 1) st.pitchSemis else 0f, if (mode == 2) st.fxCard else st.fx)
+        saveUserPresets(mode, st.userPresets[mode].orEmpty() + p)
         if (mode == 2) _state.value = _state.value.copy(fxCardPreset = p.name) else _state.value = _state.value.copy(fxPreset = p.name)
         _state.value = _state.value.copy(toast = tr("已保存「{0}」", p.name))
     }
     fun deleteUserPreset(mode: Int, name: String) = saveUserPresets(mode, _state.value.userPresets[mode].orEmpty().filter { it.name != name })
     fun renameUserPreset(mode: Int, old: String, new: String) {
         if (new.isBlank()) return
-        saveUserPresets(mode, _state.value.userPresets[mode].orEmpty().map { if (it.name == old) it.copy(name = new.trim()) else it })
+        val nm = uniquePresetName(mode, new.trim(), except = old)
+        saveUserPresets(mode, _state.value.userPresets[mode].orEmpty().map { if (it.name == old) it.copy(name = nm) else it })
     }
     fun applyUserPreset(p: UserPreset) {
         if (p.mode == 1) setPitchSemis(p.semis)
@@ -902,9 +912,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun importPresetFromClipboard(): Int {
         val cm = ctx.getSystemService(android.content.ClipboardManager::class.java)
         val text = cm?.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(ctx)?.toString().orEmpty()
-        val p = UserPreset.fromShareCode(text)
-        if (p == null) { _state.value = _state.value.copy(toast = tr("剪贴板里没有预设分享码")); return -1 }
-        saveUserPresets(p.mode, _state.value.userPresets[p.mode].orEmpty().filter { it.name != p.name } + p)
+        val p0 = UserPreset.fromShareCode(text)
+        if (p0 == null) { _state.value = _state.value.copy(toast = tr("剪贴板里没有预设分享码")); return -1 }
+        val p = p0.copy(name = uniquePresetName(p0.mode, p0.name))
+        saveUserPresets(p.mode, _state.value.userPresets[p.mode].orEmpty() + p)
         applyUserPreset(p)
         _state.value = _state.value.copy(toast = tr("已导入「{0}」到{1}", p.name, if (p.mode == 2) tr("声卡") else tr("普通变声")))
         return p.mode
