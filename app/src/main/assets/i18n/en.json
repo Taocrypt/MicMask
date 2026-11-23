@@ -904,5 +904,9 @@
   "已切换到 {0}": "Switched to {0}",
   "正在切换到 {0}…": "Switching to {0}…",
   "兼容模式 · ": "Compat · ",
-  "·兼容": " · compat"
+  "·兼容": " · compat",
+  "导入 {0}/{1} · {2}": "Importing {0}/{1} · {2}",
+  "正在导入到历史录音…": "Importing to recording history…",
+  "正在读取并解码，长音频要几秒…": "Reading and decoding; long audio takes a few seconds…",
+  "正在读取音频…": "Reading audio…"
 }

@@ -143,6 +143,8 @@ data class UiState(
     val liveAec: Boolean = true,
     /** 本机性能测试结果（空=还没测） */
     val liveBench: String = "",
+    /** 文件变声页：正在读取/解码选中的音频（显示在输入卡片里），值为文件名 */
+    val srcLoading: String? = null,
     /** 变声中热切换音色：新音色还没真正生效前记在这里，状态行仍显示旧音色 */
     val voicePending: String = "",
     val liveVoices: List<String> = emptyList(),
@@ -1933,6 +1935,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.Default) {
             var ok = 0; val fail = mutableListOf<String>()
             uris.forEachIndexed { i, u ->
+                val nm = runCatching { AudioIo.displayName(ctx, u) }.getOrDefault("")
+                _state.value = _state.value.copy(srcLoading = tr("导入 {0}/{1} · {2}", i + 1, uris.size, nm), progress = i.toFloat() / uris.size)
                 runCatching {
                     val d = AudioIo.decodeTo16k(ctx, u)
                     val base = d.sourceName.substringBeforeLast('.').replace(Regex("[\\\\/:*?\"<>|\\s]+"), "_").take(40).ifBlank { "audio" }
@@ -1944,7 +1948,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _state.value = _state.value.copy(progress = (i + 1f) / uris.size)
             }
             L.i("导入历史录音 $ok/${uris.size}")
-            _state.value = _state.value.copy(busy = false, recCount = listRecordings().size,
+            _state.value = _state.value.copy(busy = false, srcLoading = null, recCount = listRecordings().size,
                 toast = tr("已导入 {0} 条到历史录音", ok) + if (fail.isNotEmpty()) tr("，{0} 条失败：{1}", fail.size, fail.joinToString("、")) else "")
         }
     }
@@ -2327,14 +2331,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun pickAudio(uri: Uri) {
-        _state.value = _state.value.copy(busy = true, stage = tr("解码音频"), progress = 0.02f, error = null, resultFile = null)
+        val nm = runCatching { AudioIo.displayName(ctx, uri) }.getOrNull() ?: uri.lastPathSegment ?: ""
+        _state.value = _state.value.copy(busy = true, stage = tr("解码音频"), progress = 0.02f, error = null, resultFile = null, srcLoading = nm)
         viewModelScope.launch(Dispatchers.Default) {
             try {
                 // 解码前先看时长：整段转换内存随时长线性涨，超长直接拦下，不白等解码
                 AudioIo.probeDurationSec(ctx, uri)?.let { sec ->
                     if (sec > MAX_FILE_SEC) {
                         L.w("文件太长 %.0f 秒（上限 %d 秒），未解码".format(sec, MAX_FILE_SEC))
-                        _state.value = _state.value.copy(busy = false, error = tr("音频太长（{0} 秒），文件变声最长 {1} 秒，先剪短再来", sec.toInt(), MAX_FILE_SEC))
+                        _state.value = _state.value.copy(busy = false, srcLoading = null, error = tr("音频太长（{0} 秒），文件变声最长 {1} 秒，先剪短再来", sec.toInt(), MAX_FILE_SEC))
                         return@launch
                     }
                 }
@@ -2344,13 +2349,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val sec = d.samples.size / 16000f
                 L.i("解码完成 ${d.sourceName} 原始 ${d.originRate}Hz -> 16k ${d.samples.size} 点 (%.2f 秒)".format(sec))
                 _state.value = _state.value.copy(
-                    busy = false,
+                    busy = false, srcLoading = null,
                     srcName = d.sourceName,
                     srcInfo = tr("原始 {0} Hz · %.1f 秒 · 已重采样到 16 kHz", d.originRate).format(sec),
                 )
             } catch (t: Throwable) {
                 L.e("音频解码失败", t)
-                _state.value = _state.value.copy(busy = false, error = tr("音频解码失败：{0}", t.message))
+                _state.value = _state.value.copy(busy = false, srcLoading = null, error = tr("音频解码失败：{0}", t.message))
             }
         }
     }

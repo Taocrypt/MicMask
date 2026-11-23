@@ -124,9 +124,17 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
         SmallTitle(tr("输入"))
         Card(Modifier.fillMaxWidth().padding(Pad2)) {
             Column(Modifier.padding(16.dp)) {
+                if (st.srcLoading != null) {
+                    // 读取/解码中：大文件要几秒，在这里显示，不然看起来像没反应
+                    Text(st.srcLoading, fontWeight = FontWeight.Medium, maxLines = 1)
+                    Text(if (st.stage == tr("导入音频")) tr("正在导入到历史录音…") else tr("正在读取并解码，长音频要几秒…"), fontSize = 12.sp, color = Dim)
+                    Spacer(Modifier.height(8.dp))
+                    if (st.stage == tr("导入音频")) LinearProgressIndicator(progress = st.progress) else LinearProgressIndicator()
+                } else {
                 Text(st.srcName ?: tr("未选择"), fontWeight = FontWeight.Medium)
                 Text(st.srcInfo ?: tr("支持 wav / mp3 / m4a / flac / ogg，最长 {0} 分钟，或直接录一段", MainViewModel.MAX_FILE_SEC / 60), fontSize = 12.sp, color = Dim)
                 wave?.takeIf { it.isNotEmpty() && st.srcName != null }?.let { WaveThumb(it) }
+                }
                 Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(if (st.srcName == null) tr("选择音频") else tr("换一个"), onClick = { picker.launch(arrayOf("audio/*")) },
@@ -151,6 +159,21 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
             }
             if (st.recCount > 0) ArrowPreference(title = tr("历史录音"), summary = tr("{0} 条", st.recCount), onClick = { recList = vm.listRecordings() })
             ArrowPreference(title = tr("导入到历史录音"), summary = tr("用文件选择器选音频，可多选"), onClick = { impPicker.launch(arrayOf("audio/*")) })
+        }
+
+        // ---- 转换 ----
+        Spacer(Modifier.height(16.dp))
+        Card(Modifier.fillMaxWidth().padding(Pad2)) {
+            Column(Modifier.padding(16.dp)) {
+                TextButton(when { st.recording -> tr("先停止录音"); st.srcLoading != null -> tr("正在读取音频…"); st.busy -> tr("转换中…"); !st.engineLoaded -> tr("请先加载模型"); st.srcName == null -> tr("请先选择音频或录音"); else -> tr("开始变声") },
+                    onClick = { vm.convert() }, enabled = st.srcName != null && st.engineLoaded && !st.busy && !st.recording,
+                    modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.textButtonColorsPrimary())
+                if (st.busy && st.srcLoading == null) {
+                    Spacer(Modifier.height(10.dp))
+                    LinearProgressIndicator(progress = st.progress)
+                    Text("${st.stage}  ${(st.progress * 100).roundToInt()}%", fontSize = 12.sp, color = Dim)
+                }
+            }
         }
 
         // ---- 参数 ----
@@ -178,21 +201,6 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
         Text(tr("恢复默认参数"), Modifier.padding(horizontal = 16.dp).clip(RoundedCornerShape(10.dp))
             .clickable { vm.resetFileParams() }.padding(vertical = 6.dp, horizontal = 4.dp),
             fontSize = 14.sp, color = MiuixTheme.colorScheme.primary)
-
-        // ---- 转换 ----
-        Spacer(Modifier.height(16.dp))
-        Card(Modifier.fillMaxWidth().padding(Pad2)) {
-            Column(Modifier.padding(16.dp)) {
-                TextButton(when { st.recording -> tr("先停止录音"); st.busy -> tr("转换中…"); !st.engineLoaded -> tr("请先加载模型"); st.srcName == null -> tr("请先选择音频或录音"); else -> tr("开始变声") },
-                    onClick = { vm.convert() }, enabled = st.srcName != null && st.engineLoaded && !st.busy && !st.recording,
-                    modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.textButtonColorsPrimary())
-                if (st.busy) {
-                    Spacer(Modifier.height(10.dp))
-                    LinearProgressIndicator(progress = st.progress)
-                    Text("${st.stage}  ${(st.progress * 100).roundToInt()}%", fontSize = 12.sp, color = Dim)
-                }
-            }
-        }
 
         // ---- 结果 ----
         var addOpen by remember { mutableStateOf(false) }
