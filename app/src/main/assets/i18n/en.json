@@ -894,5 +894,9 @@
   "模型管理": "Models",
   "删除合成模型": "Delete TTS models",
   "约 {0} MB，常用语音保留": "About {0} MB; saved clips are kept",
-  "删除后文字转语音不可用，需要时可重新从仓库下载或导入。": "Text-to-speech won't work until you download or import the models again."
+  "删除后文字转语音不可用，需要时可重新从仓库下载或导入。": "Text-to-speech won't work until you download or import the models again.",
+  "切换到 {0}…": "Switching to {0}…",
+  "切换音色失败：{0}": "Voice switch failed: {0}",
+  "切换音色失败：注入服务没在 AI 变声，重开一次变声试试": "Voice switch failed: the injector isn't running AI mode — restart voice changing",
+  "播放中 {0}s · 按住重录": "Playing {0}s · hold to re-record"
 }

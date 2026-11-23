@@ -408,6 +408,9 @@ object MicInjector {
         runCatching { call(InjectorService.TX_LIVE_PUSH, { it.writeByteArray(bytes) }) { } }
     }
 
+    /** 变声中换音色：先 [sendLiveModels] 送新合成器，再调这个让 shell 重启推理；返回是否生效 */
+    fun reloadLive(): Boolean = liveOn && runCatching { call(InjectorService.TX_LIVE_RELOAD) { r -> r.readInt() == 1 } }.getOrDefault(false)
+
     fun setLiveSemis(semis: Float) {
         if (!liveOn) return
         runCatching { call(InjectorService.TX_LIVE_SET, { it.writeFloat(semis) }) { } }
@@ -454,9 +457,11 @@ object MicInjector {
         runCatching { call(InjectorService.TX_LIVE_MONITOR, { it.writeInt(if (on) 1 else 0) }) { } }
     }
 
-    fun capturePreview(sec: Int) {
-        if (!liveOn) return
-        runCatching { call(InjectorService.TX_LIVE_CAPTURE, { it.writeInt(sec) }) { } }
+    /** 返回 [尾巴 ms, 回放时长 ms]（只有 sec=0 有意义）；旧版 shell 服务不回包时读到 0 */
+    fun capturePreview(sec: Int): IntArray {
+        if (!liveOn) return intArrayOf(0, 0)
+        return runCatching { call(InjectorService.TX_LIVE_CAPTURE, { it.writeInt(sec) }) { r ->
+            if (r.dataAvail() >= 8) intArrayOf(r.readInt(), r.readInt()) else intArrayOf(0, 0) } }.getOrDefault(intArrayOf(0, 0))
     }
 
     fun stopLive() {

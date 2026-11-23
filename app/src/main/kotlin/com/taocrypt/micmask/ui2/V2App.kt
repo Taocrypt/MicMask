@@ -474,7 +474,8 @@ private fun HoldToRecord(vm: MainViewModel, st: UiState, enabled: Boolean) {
                 vm.holdPreview(false, cancel); pressed = false; cancel = false
             }
         }, contentAlignment = Alignment.Center) {
-        Text(when { !enabled -> tr("开始变声后可按住录制预览"); cancel -> tr("松开取消"); pressed -> tr("录制中 {0}s · 松手回放，上滑取消", st.previewLeft); else -> tr("按住 录制预览") },
+        Text(when { !enabled -> tr("开始变声后可按住录制预览"); cancel -> tr("松开取消"); pressed -> tr("录制中 {0}s · 松手回放，上滑取消", st.previewLeft)
+            st.previewPhase == 2 -> tr("转换中…"); st.previewPhase == 3 -> tr("播放中 {0}s · 按住重录", st.previewLeft); else -> tr("按住 录制预览") },
             color = fgc, fontWeight = FontWeight.SemiBold)
     }
 }

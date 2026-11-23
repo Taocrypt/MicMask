@@ -92,6 +92,8 @@ class InjectorService : Binder {
         const val TX_OUT_STATE = 23
         /** 实时 AI 高级参数：tier(int) gateDb(float) featThreads(int) synThreads(int) */
         const val TX_LIVE_TUNE = 24
+        /** 变声中换音色：新合成器已由 TX_LIVE_MODELS 送到，重启推理（麦克风通道不断，换的这一两秒输出静音） */
+        const val TX_LIVE_RELOAD = 25
         const val TX_DESTROY = 16777115
 
         const val SR = 48000
@@ -277,19 +279,26 @@ class InjectorService : Binder {
                     return true
                 }
                 TX_LIVE_CAPTURE -> {
-                    // sec>0：开始录（最长 sec 秒，满了自动回放）；0：停止并回放已录部分；-1：取消
+                    // sec>0：开始录（最长 sec 秒）；0：松手 —— 再多录一段管线延迟（变声还没吐完的尾巴），录满后回放；-1：取消
+                    // 回包：尾巴还要多久(ms)、回放时长(ms)；没录到东西两个都是 0
                     val sec = data.readInt()
-                    var play: ShortArray? = null
+                    var tailMs = 0; var durMs = 0
                     synchronized(capLock) {
                         when {
-                            sec > 0 -> { capBuf = ShortArray(SR * sec.coerceAtMost(30)); capPos = 0 }
-                            sec == 0 -> { val cb = capBuf; if (cb != null && capPos > SR / 5) play = cb.copyOf(capPos); capBuf = null }
+                            sec > 0 -> { val tail = SR * 2; capBuf = ShortArray(SR * sec.coerceAtMost(30) + tail); capPos = 0; capStopAt = Int.MAX_VALUE }
+                            sec == 0 -> {
+                                val cb = capBuf
+                                if (cb != null && capPos > SR / 5) {
+                                    if (capStopAt == Int.MAX_VALUE) capStopAt = minOf(cb.size, capPos + SR * previewTailMs() / 1000)
+                                    tailMs = ((capStopAt - capPos).coerceAtLeast(0) * 1000L / SR).toInt(); durMs = (capStopAt * 1000L / SR).toInt()
+                                } else capBuf = null
+                            }
                             else -> capBuf = null
                         }
                     }
-                    slog('I', "录制预览 cmd=$sec")
-                    play?.let { pcm -> Thread { playPreview(pcm) }.start() }
+                    slog('I', "录制预览 cmd=$sec 尾巴=${tailMs}ms 时长=${durMs}ms")
                     reply?.writeNoException()
+                    reply?.writeInt(tailMs); reply?.writeInt(durMs)
                     return true
                 }
                 TX_LIVE_FX -> {
@@ -297,6 +306,14 @@ class InjectorService : Binder {
                     val a = FloatArray(n) { data.readFloat() }
                     fx.set(a); fxLast = a
                     reply?.writeNoException()
+                    return true
+                }
+                TX_LIVE_RELOAD -> {
+                    val ok = running && liveExternal && engine != null
+                    slog('I', "变声中换音色：${if (ok) "重启推理" else "未在 AI 变声，忽略"}")
+                    if (ok) startEngine()
+                    reply?.writeNoException()
+                    reply?.writeInt(if (ok) 1 else 0)
                     return true
                 }
                 TX_LIVE_TUNE -> {
@@ -654,6 +671,10 @@ class InjectorService : Binder {
     private val capLock = Any()
     private var capBuf: ShortArray? = null
     private var capPos = 0
+    /** 录到这个位置就结束并回放（松手后 = 松手位置 + 管线延迟） */
+    private var capStopAt = Int.MAX_VALUE
+    /** 松手后还要多录多久：预缓冲 + 一块推理，AI 档约 0.5~1 s，普通变调约 0.3 s */
+    private fun previewTailMs() = (livePrimeMs * 2 + 100).coerceIn(250, 1500)
 
     private fun newMediaTrack(bufMs: Int): AudioTrack {
         val attrs = android.media.AudioAttributes.Builder()
@@ -695,9 +716,10 @@ class InjectorService : Binder {
         var done: ShortArray? = null
         synchronized(capLock) {
             val cb = capBuf ?: return@synchronized
-            val k = minOf(n, cb.size - capPos)
-            System.arraycopy(mono, 0, cb, capPos, k); capPos += k
-            if (capPos >= cb.size) { done = cb; capBuf = null }
+            val end = minOf(cb.size, capStopAt)
+            val k = minOf(n, end - capPos)
+            if (k > 0) { System.arraycopy(mono, 0, cb, capPos, k); capPos += k }
+            if (capPos >= end) { done = cb.copyOf(capPos); capBuf = null }
         }
         done?.let { playPreview(it) }
     }

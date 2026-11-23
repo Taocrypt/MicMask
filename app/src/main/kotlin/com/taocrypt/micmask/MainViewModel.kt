@@ -214,6 +214,8 @@ data class UiState(
     val userPresets: Map<Int, List<UserPreset>> = emptyMap(),
     /** 录制预览倒计时（秒，0=空闲） */
     val previewLeft: Int = 0,
+    /** 录制预览阶段：0 空闲 1 录制中 2 转换中（等变声尾巴） 3 播放中；previewLeft 在 3 时是剩余秒数 */
+    val previewPhase: Int = 0,
     /** 变声页当前显示 0=AI 1=音调 */
     val voiceTab: Int = 0,
     // ---------------- 语音包 ----------------
@@ -1240,19 +1242,37 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val inj = com.taocrypt.micmask.inject.MicInjector
         if (down) {
             if (!inj.liveOn) { _state.value = _state.value.copy(toast = tr("先开始变声，再按住录制预览")); return }
-            inj.capturePreview(30)
             recJob?.cancel()
+            inj.capturePreview(30)
             recJob = viewModelScope.launch {
                 var t = 0
-                while (t <= 30) { _state.value = _state.value.copy(previewLeft = t.coerceAtLeast(1)); kotlinx.coroutines.delay(1000); t++ }
-                _state.value = _state.value.copy(previewLeft = 0)
+                while (t < 30) { _state.value = _state.value.copy(previewPhase = 1, previewLeft = t.coerceAtLeast(1)); kotlinx.coroutines.delay(1000); t++ }
+                finishPreview()   // 录满 30 秒自动结束
             }
         } else {
-            if (_state.value.previewLeft == 0) return
-            recJob?.cancel(); _state.value = _state.value.copy(previewLeft = 0)
-            inj.capturePreview(if (cancel) -1 else 0)
-            L.i("UI 预览 ${if (cancel) "取消" else "松手回放"}")
+            if (_state.value.previewPhase != 1) return
+            recJob?.cancel()
+            if (cancel) {
+                inj.capturePreview(-1); _state.value = _state.value.copy(previewPhase = 0, previewLeft = 0)
+                L.i("UI 预览 取消")
+            } else recJob = viewModelScope.launch { finishPreview() }
         }
+    }
+
+    /** 松手：等变声尾巴（转换中）→ 回放（播放中，倒计时）→ 空闲 */
+    private suspend fun finishPreview() {
+        val r = withContext(Dispatchers.IO) { com.taocrypt.micmask.inject.MicInjector.capturePreview(0) }
+        val tail = r[0]; val dur = r[1]
+        L.i("UI 预览 松手回放 尾巴=${tail}ms 时长=${dur}ms")
+        if (dur <= 0) { _state.value = _state.value.copy(previewPhase = 0, previewLeft = 0, toast = tr("太短了，按住多说一会儿")); return }
+        _state.value = _state.value.copy(previewPhase = 2, previewLeft = 0)
+        kotlinx.coroutines.delay(tail.toLong() + 150)
+        var left = dur
+        while (left > 0) {
+            _state.value = _state.value.copy(previewPhase = 3, previewLeft = (left + 999) / 1000)
+            val step = minOf(left, 1000); kotlinx.coroutines.delay(step.toLong()); left -= step
+        }
+        _state.value = _state.value.copy(previewPhase = 0, previewLeft = 0)
     }
 
     fun exportLogs() {
@@ -1531,11 +1551,31 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             liveBench = ctx.getSharedPreferences("live", 0).getString("bench_$v", "") ?: "")
     }
 
+    @Volatile private var voiceSwitching = false
     fun setLiveVoice(v: String) {
-        if (com.taocrypt.micmask.inject.MicInjector.liveOn || _state.value.liveBenching) return
+        if (_state.value.liveBenching || voiceSwitching) return
+        if (v == _state.value.liveVoice) return
+        val inj = com.taocrypt.micmask.inject.MicInjector
+        val hot = inj.liveOn && _state.value.liveAi
         ctx.getSharedPreferences("live", 0).edit().putString("voice", v).apply()
-        L.i("UI 切换音色 → $v")
+        L.i("UI 切换音色 → $v${if (hot) "（变声中热切换）" else ""}")
         refreshVoices()
+        if (!hot) return
+        // 变声中：把新音色的合成器送给 shell，只重载合成器（HuBERT/RMVPE 不动），麦克风通道不断
+        voiceSwitching = true
+        _state.value = _state.value.copy(toast = tr("切换到 {0}…", ModelStore.voiceLabel(v)))
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val err = inj.sendLiveModels(ctx, ModelStore.liveNames(ctx))
+                val msg = when {
+                    err != null -> tr("切换音色失败：{0}", err)
+                    !inj.reloadLive() -> tr("切换音色失败：注入服务没在 AI 变声，重开一次变声试试")
+                    else -> null
+                }
+                L.i("UI 热切换音色 $v 结果=${msg ?: "成功"}")
+                if (msg != null) _state.value = _state.value.copy(toast = msg)
+            } finally { voiceSwitching = false }
+        }
     }
 
     fun setLiveAec(on: Boolean) {
