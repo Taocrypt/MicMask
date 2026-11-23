@@ -74,16 +74,59 @@ class LiveRvc(private val open: (String) -> Any?) {
 
     /** 按合成器的 ONNX 元数据（转换器写入 key=micmask 的 JSON）判断特征维度；旧模型没有元数据时看 phone 输入的形状 */
     private fun embOf(s: OrtSession): Int {
-        runCatching {
-            val j = s.metadata.customMetadata["micmask"]
+        for (k in listOf("micmask", "metadata")) runCatching {   // metadata = w-okada 导出的元数据
+            val j = s.metadata.customMetadata[k]
             if (!j.isNullOrBlank()) { val e = org.json.JSONObject(j).optInt("embChannels", 0); if (e == 256 || e == 768) return e }
         }
         runCatching {
-            val d = ((s.inputInfo["phone"]?.info as? TensorInfo)?.shape ?: longArrayOf()).getOrNull(2)?.toInt() ?: 0
+            val d = ((s.inputInfo["phone"]?.info ?: s.inputInfo["feats"]?.info) as? TensorInfo)?.shape?.getOrNull(2)?.toInt() ?: 0
             if (d == 256 || d == 768) return d
         }
         return 768
     }
+    // ---- 兼容模式：w-okada 导出的整段模型（feats/p_len/pitch/pitchf/sid → 模型采样率整段波形）
+    /** 每块取最后 compatFrames 帧、重采样到 48k；手动标准档 35 帧，其余 55 帧（整段推理慢，留余量） */
+    private val compatFrames get() = if (tier == 1) 35 else 55
+    private class Compat(val sr: Int, val hop: Int, val up: Int, val dn: Int, val h: FloatArray) {
+        /** 多相 FIR 重采样 sr→48k（与 convert_rvc.py 同一设计：UP*24 抽头 Kaiser-sinc） */
+        fun to48k(x: FloatArray): FloatArray {
+            if (up == dn) return x
+            val taps = h.size; val off = (taps - 1) / 2
+            val n = (x.size.toLong() * up / dn).toInt(); val y = FloatArray(n)
+            for (m in 0 until n) {
+                val pos = m.toLong() * dn + off
+                var k = maxOf(0L, Math.floorDiv(pos - taps + 1 + up - 1, up.toLong())).toInt()
+                val k1 = minOf((x.size - 1).toLong(), Math.floorDiv(pos, up.toLong())).toInt()
+                var acc = 0f
+                while (k <= k1) { acc += x[k] * h[(pos - k.toLong() * up).toInt()]; k++ }
+                y[m] = acc
+            }
+            return y
+        }
+    }
+    private val compatInfo = java.util.WeakHashMap<OrtSession, Compat?>()
+    private fun compatOf(s: OrtSession): Compat? = synchronized(compatInfo) {
+        if (compatInfo.containsKey(s)) return compatInfo[s]
+        val c = if ("feats" in s.inputInfo && "p_len" in s.inputInfo) {
+            val m = runCatching { org.json.JSONObject(s.metadata.customMetadata["metadata"] ?: "{}") }.getOrNull()
+            val sr = m?.optInt("samplingRate", 40000)?.takeIf { it > 0 } ?: 40000
+            var g = 48000; var b = sr; while (b != 0) { val t = g % b; g = b; b = t }
+            val up = 48000 / g; val dn = sr / g
+            val taps = up * 24; val fc = 0.5 / maxOf(up, dn) * 0.92
+            fun i0(x: Double): Double { var a = 1.0; var t = 1.0; for (k in 1..40) { t *= (x / (2 * k)) * (x / (2 * k)); a += t }; return a }
+            val h = FloatArray(taps) { j ->
+                val n = j - (taps - 1) / 2.0
+                val sinc = if (n == 0.0) 1.0 else kotlin.math.sin(PI * 2 * fc * n) / (PI * 2 * fc * n)
+                val r = 2.0 * j / (taps - 1) - 1
+                (2 * fc * sinc * i0(8.0 * sqrt(maxOf(0.0, 1 - r * r))) / i0(8.0) * up).toFloat()
+            }
+            L.i("live 兼容模式模型：${sr}Hz → 48k（${up}/${dn}），每块取 $compatFrames 帧")
+            Compat(sr, sr / 100, up, dn, h)
+        } else null
+        compatInfo[s] = c
+        c
+    }
+
     private fun featOut() = if (emb == 256) "feat9" else "feat"
     /** v1 音色要新版 hubert（带 feat9 输出），旧文件没有就报错让用户更新基础模型 */
     private fun checkHubert() {
@@ -247,7 +290,7 @@ class LiveRvc(private val open: (String) -> Any?) {
         val pick = chosen!!
         netG = load("流式合成器", pick.name)
         emb = embOf(netG!!)
-        L.i("live 特征维度 $emb（${if (emb == 256) "RVC v1" else "RVC v2"}）")
+        L.i("live 特征维度 $emb（${if (emb == 256) "RVC v1" else "RVC v2"}）${if (compatOf(netG!!) != null) " 兼容模式" else ""}")
         if (emb == 256 && hubert?.outputNames?.contains("feat9") == false) {   // 基础模型可能刚更新过：重载一次再判断
             runCatching { hubert?.close() }; hubert = null
             o = opts(featThreads); hubert = load("HuBERT", ModelStore.HUBERT); o = opts(synThreads)
@@ -256,7 +299,7 @@ class LiveRvc(private val open: (String) -> Any?) {
         LEN = runNetG(phFor(netG!!), pi, pf).size / UPP
         runCatching { pickCache?.writeText("$key\n${pick.name}\n${pick.ms}\n$LEN") }
         val tier = if (BLOCK <= 30) "标准" else "省电"
-        benchSummary = "${tier}档：每步 ${BLOCK * 10}ms · 特征 ${featMs}ms · 合成 ${pick.ms}ms · 负载 ${"%.0f".format(ratio(pick) * 100)}%"
+        benchSummary = (if (compatOf(netG!!) != null) "兼容模式·" else "") + "${tier}档：每步 ${BLOCK * 10}ms · 特征 ${featMs}ms · 合成 ${pick.ms}ms · 负载 ${"%.0f".format(ratio(pick) * 100)}%"
         L.i("live 选用 ${pick.name} → $benchSummary")
         if (ratio(pick) > 1.0) L.w("live 本机最快的档位也超预算，会断音")
         onConfig?.invoke(BLOCK * 10)
@@ -525,6 +568,7 @@ class LiveRvc(private val open: (String) -> Any?) {
 
     private fun runNetG(phone: FloatArray, pitch: LongArray, pitchf: FloatArray): FloatArray {
         val s = netG!!
+        compatOf(s)?.let { return runCompat(s, it, phone, pitch, pitchf) }
         OnnxTensor.createTensor(env, FloatBuffer.wrap(phone), longArrayOf(1, T.toLong(), (phone.size / T).toLong())).use { a ->
             OnnxTensor.createTensor(env, LongBuffer.wrap(pitch), longArrayOf(1, T.toLong())).use { b ->
                 OnnxTensor.createTensor(env, FloatBuffer.wrap(pitchf), longArrayOf(1, T.toLong())).use { c ->
@@ -536,6 +580,26 @@ class LiveRvc(private val open: (String) -> Any?) {
                 }
             }
         }
+    }
+
+    private fun runCompat(s: OrtSession, c: Compat, phone: FloatArray, pitch: LongArray, pitchf: FloatArray): FloatArray {
+        val d = (phone.size / T).toLong(); val n = T.toLong()
+        val ins = LinkedHashMap<String, OnnxTensor>()
+        try {
+            ins["feats"] = OnnxTensor.createTensor(env, FloatBuffer.wrap(phone), longArrayOf(1, n, d))
+            ins["p_len"] = OnnxTensor.createTensor(env, LongBuffer.wrap(longArrayOf(n)), longArrayOf(1))
+            ins["pitch"] = OnnxTensor.createTensor(env, LongBuffer.wrap(pitch), longArrayOf(1, n))
+            ins["pitchf"] = OnnxTensor.createTensor(env, FloatBuffer.wrap(pitchf), longArrayOf(1, n))
+            if ("sid" in s.inputInfo) ins["sid"] = OnnxTensor.createTensor(env, LongBuffer.wrap(longArrayOf(0)), longArrayOf(1))
+            s.run(ins).use { res ->
+                val fb = (res.get(0) as OnnxTensor).floatBuffer; val y = FloatArray(fb.remaining()); fb.get(y)
+                val lc = compatFrames
+                val seg = y.copyOfRange(maxOf(0, y.size - (lc + 4) * c.hop), y.size)   // 多取 4 帧给滤波器
+                val r = c.to48k(seg)
+                val want = lc * UPP
+                return if (r.size >= want) r.copyOfRange(r.size - want, r.size) else FloatArray(want - r.size) + r
+            }
+        } finally { ins.values.forEach { runCatching { it.close() } } }
     }
 
     @Suppress("unused") private fun rms(x: FloatArray) = sqrt(x.sumOf { (it * it).toDouble() } / x.size)

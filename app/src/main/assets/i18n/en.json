@@ -866,5 +866,12 @@
   "已按当前音色重新转换，点 ▶ 播放": "Re-converted with the current voice. Tap ▶ to play",
   "首次 {0}": "Since {0}",
   "最近 {0}": "Latest {0}",
-  "有效至 {0}": "Until {0}"
+  "有效至 {0}": "Until {0}",
+  "不支持的特征：{0} 维 第 {1} 层（只支持 hubert_base v1/v2）": "Unsupported features: {0} dims, layer {1} (only hubert_base v1/v2)",
+  "不是 RVC 模型（缺 feats/p_len 输入）": "Not an RVC model (missing feats/p_len inputs)",
+  "只支持 fp32 模型（导出时关掉半精度）": "Only fp32 models are supported (disable half precision when exporting)",
+  "只支持带音高（f0）的模型": "Only models with pitch (f0) are supported",
+  "已按兼容模式导入 {0} 个音色：录音变声可用，实时较慢只建议高性能机；用 convert_rvc.py 转成流式版会快很多": "Imported {0} voice(s) in compatibility mode: clip conversion works; live mode is slow and only suits high-end phones. Converting with convert_rvc.py to a streaming model is much faster",
+  "无法导入：{0}": "Cannot import: {0}",
+  "读取模型失败：{0}": "Failed to read model: {0}"
 }

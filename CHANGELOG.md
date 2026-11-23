@@ -4,6 +4,11 @@
 格式：每个版本一个 `## [版本号] - YYYY-MM-DD` 小节，版本号与 `app/build.gradle.kts` 的 `versionName` 一致，标签为 `v版本号`。
 强制更新：在小节中单独写一行 `最低支持版本: x`，低于该版本的应用必须更新（该行不会出现在发布说明中）。
 
+## [2.0-alpha75] - 2026-11-23
+- 新增：兼容模式导入 w-okada voice-changer 导出的 RVC ONNX（fp32、带音高、hubert_base v1/v2），导入时校验并存为 <名字>_stream_compat.onnx
+- 兼容模式实时/录音变声：整段推理取尾部 35/55 帧，多相 FIR 重采样到 48k；速度慢，实时只建议高性能机，建议用 convert_rvc.py 转流式版
+- 特征维度也可从 w-okada 元数据（metadata.embChannels）读取
+
 ## [2.0-alpha74] - 2026-11-23
 
 - 支持 RVC v1 音色实时变声：基础模型 hubert 增加第 9 层 + final_proj 的 256 维输出（v2 用的 768 维输出不变）

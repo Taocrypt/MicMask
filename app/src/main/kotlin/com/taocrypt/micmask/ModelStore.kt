@@ -31,8 +31,10 @@ object ModelStore {
     const val INDEX = "index_mobile.bin"
     /** 实时变声用的流式合成器（48k，可选） */
     const val LIVE_NETG = "atri48_stream_qdq.onnx"
+    /** 兼容模式：直接导入的 w-okada voice-changer 导出 ONNX（整段动态长度、fp32），存成 <音色>_stream_compat.onnx */
+    const val COMPAT_CANON = "atri48_stream_compat.onnx"
     /** 流式合成器候选：App 启动实时时逐个测速，用最快的 */
-    val LIVE_NETG_ALL = listOf("atri48_stream_qdq.onnx", "atri48_stream_b50_qdq.onnx", "atri48_stream_fp32.onnx", "atri48_stream_d8.onnx")
+    val LIVE_NETG_ALL = listOf("atri48_stream_qdq.onnx", "atri48_stream_b50_qdq.onnx", "atri48_stream_fp32.onnx", "atri48_stream_d8.onnx", COMPAT_CANON)
 
     val required = listOf(NET_G, HUBERT, RMVPE)
     val optional = listOf(INDEX) + LIVE_NETG_ALL
@@ -47,7 +49,7 @@ object ModelStore {
 
     // ---------------------------------------------------------------- 多音色
     /** 实时音色文件：<音色>_stream[_b50]_<qdq|fp32|d8>.onnx；DEFAULT_VOICE 是内部标准名（历史沿用，仅作文件名约定） */
-    val VOICE_RE = Regex("^(.+?)_stream(_b50)?_(qdq|fp32|d8)\\.onnx$")
+    val VOICE_RE = Regex("^(.+?)_stream(_b50)?_(qdq|fp32|d8|compat)\\.onnx$")
     const val DEFAULT_VOICE = "atri48"
     /** 把标准名（atri48_stream_xxx）换成某个音色的文件名 */
     fun voiceFile(voice: String, canonical: String) = voice + canonical.removePrefix(DEFAULT_VOICE)
@@ -55,6 +57,33 @@ object ModelStore {
     fun canonicalName(file: String): String =
         VOICE_RE.matchEntire(file)?.let { DEFAULT_VOICE + file.removePrefix(it.groupValues[1]) } ?: file
     fun voiceLabel(v: String) = if (v == DEFAULT_VOICE) tr("默认音色") else v
+    /** 该音色只有兼容模式模型（w-okada 导出，没转流式版） */
+    fun isCompatOnly(ctx: Context, v: String): Boolean {
+        val fs = voiceFiles(ctx, v).map { it.name }
+        return fs.isNotEmpty() && fs.all { it.endsWith("_stream_compat.onnx") }
+    }
+
+    /**
+     * 检查一个 ONNX 是不是 w-okada voice-changer 导出的 RVC 模型（输入 feats/p_len/pitch/pitchf/sid）。
+     * 返回 null 表示可以作为兼容模式导入，否则返回不能导入的原因。
+     */
+    fun checkCompatOnnx(f: File): String? = runCatching {
+        val env = ai.onnxruntime.OrtEnvironment.getEnvironment()
+        env.createSession(f.absolutePath, ai.onnxruntime.OrtSession.SessionOptions()).use { s ->
+            val ins = s.inputInfo
+            if ("feats" !in ins || "p_len" !in ins) return tr("不是 RVC 模型（缺 feats/p_len 输入）")
+            if ("pitch" !in ins || "pitchf" !in ins) return tr("只支持带音高（f0）的模型")
+            val ft = (ins["feats"]!!.info as? ai.onnxruntime.TensorInfo)
+            if (ft?.type != ai.onnxruntime.OnnxJavaType.FLOAT) return tr("只支持 fp32 模型（导出时关掉半精度）")
+            val m = s.metadata.customMetadata["metadata"]?.let { org.json.JSONObject(it) }
+            val emb = m?.optInt("embChannels", 0)?.takeIf { it > 0 } ?: ft.shape.getOrNull(2)?.toInt() ?: 0
+            val layer = m?.optInt("embOutputLayer", if (emb == 256) 9 else 12) ?: if (emb == 256) 9 else 12
+            val proj = m?.optBoolean("useFinalProj", emb == 256) ?: (emb == 256)
+            val ok = (emb == 768 && layer == 12 && !proj) || (emb == 256 && layer == 9 && proj)
+            if (!ok) return tr("不支持的特征：{0} 维 第 {1} 层（只支持 hubert_base v1/v2）", emb, layer)
+            null
+        }
+    }.getOrElse { tr("读取模型失败：{0}", it.message) }
     /** 用户给音色起的显示名（编辑），没起就用默认 */
     fun voiceLabel(ctx: Context, v: String): String =
         ctx.getSharedPreferences("live", 0).getString("alias_$v", null)?.takeIf { it.isNotBlank() } ?: voiceLabel(v)

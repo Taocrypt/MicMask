@@ -456,6 +456,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * 从手机里选模型导入：可以选模型 zip 包，也可以直接多选那几个 .onnx/.bin。
      * 只认 ModelStore 里的四个文件名，写到内部私有目录（先写 .part 再改名）。
      */
+    private var compat = 0
+    private var compatErr: String? = null
     fun importModelFiles(uris: List<Uri>) {
         if (uris.isEmpty() || _state.value.importing) return
         val known0 = (ModelStore.required + ModelStore.optional).toSet()
@@ -467,6 +469,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 runCatching {
                     val dir = ModelStore.internalDir(ctx).also { it.mkdirs() }
                     var n = 0
+                    compat = 0; compatErr = null
                     fun save(name: String, input: java.io.InputStream) {
                         _state.value = _state.value.copy(importName = name)
                         val tmp = File(dir, "$name.part")
@@ -493,6 +496,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                             }
                         } else if (base in known) {
                             ctx.contentResolver.openInputStream(u)!!.use { save(base, it) }
+                        } else if (base.lowercase().endsWith(".onnx")) {
+                            // 兼容模式：w-okada voice-changer 导出的 RVC ONNX，先落盘检查再改名成 <音色>_stream_compat.onnx
+                            val tmp = File(dir, "compat_import.part")
+                            _state.value = _state.value.copy(importName = base)
+                            ctx.contentResolver.openInputStream(u)!!.use { i -> tmp.outputStream().use { i.copyTo(it, 1 shl 20) } }
+                            val why = ModelStore.checkCompatOnnx(tmp)
+                            if (why != null) { tmp.delete(); L.w("兼容导入 $base 失败：$why"); compatErr = "$base：$why"; continue }
+                            val vid = base.substringBeforeLast('.').replace(Regex("[^\\p{L}\\p{N}-]+"), "_").replace("_stream", "").trim('_').ifEmpty { "compat" }
+                            val dst = File(dir, "${vid}_stream_compat.onnx")
+                            dst.delete()
+                            if (!tmp.renameTo(dst)) throw java.io.IOException(tr("改名失败：{0}", dst.name))
+                            L.i("兼容模式导入 $base → ${dst.name}")
+                            n++; compat++
+                            _state.value = _state.value.copy(importDone = n)
                         } else {
                             L.w("跳过不认识的文件：$base")
                         }
@@ -504,7 +521,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             refreshModels()
             _state.value = _state.value.copy(
                 toast = result.fold(
-                    { if (it > 0) tr("已导入 {0} 个模型文件", it) else tr("没找到模型文件（要选模型 zip 或那几个 .onnx/.bin）") },
+                    { when {
+                        compat > 0 -> tr("已按兼容模式导入 {0} 个音色：录音变声可用，实时较慢只建议高性能机；用 convert_rvc.py 转成流式版会快很多", compat)
+                        it > 0 -> tr("已导入 {0} 个模型文件", it)
+                        compatErr != null -> tr("无法导入：{0}", compatErr)
+                        else -> tr("没找到模型文件（要选模型 zip 或那几个 .onnx/.bin）")
+                    } },
                     { L.e("模型导入失败", it); tr("模型导入失败：{0}", it.message) },
                 )
             )
