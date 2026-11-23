@@ -145,6 +145,8 @@ data class UiState(
     val liveBench: String = "",
     /** 文件变声页：正在读取/解码选中的音频（显示在输入卡片里），值为文件名 */
     val srcLoading: String? = null,
+    /** 热切换音色时 shell 引擎当前阶段（显示在音色列表项上），空=没在切换 */
+    val voiceStage: String = "",
     /** 变声中热切换音色：新音色还没真正生效前记在这里，状态行仍显示旧音色 */
     val voicePending: String = "",
     val liveVoices: List<String> = emptyList(),
@@ -1587,10 +1589,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (msg == null) {
                     loadStarted = true
                     val t0 = System.currentTimeMillis()
+                    _state.value = _state.value.copy(voiceStage = tr("准备中…"))
                     while (true) {
                         kotlinx.coroutines.delay(200)
                         if (inj.engGenNow() > gen0) break
                         val es = inj.engState
+                        val stage = when {
+                            es.contains("测速") -> tr("首次使用，测速中…")
+                            es.contains("合成器") -> tr("加载合成器…")
+                            es.contains("HuBERT") || es.contains("RMVPE") -> tr("加载特征模型…")
+                            es.contains("加载模型") -> tr("加载模型…")
+                            es.contains("就绪") -> tr("启动中…")
+                            else -> null
+                        }
+                        if (stage != null && stage != _state.value.voiceStage) _state.value = _state.value.copy(voiceStage = stage)
                         msg = when {
                             es.startsWith("失败") -> tr("切换音色失败：{0}", es.removePrefix("失败：").removePrefix("失败"))
                             !inj.liveOn -> tr("切换音色失败：变声已停止")
@@ -1604,7 +1616,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (msg == null) {
                     val b = inj.benchNow
                     if (b.isNotEmpty() && !b.contains("自动")) lp.edit().putString("bench_$v", b).apply()
-                    _state.value = _state.value.copy(voicePending = "")
+                    _state.value = _state.value.copy(voicePending = "", voiceStage = "")
                     refreshVoices()
                     if (b.isNotEmpty()) _state.value = _state.value.copy(liveBench = b)
                     _state.value = _state.value.copy(toast = tr("已切换到 {0}", label))
@@ -1612,14 +1624,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     // 没切成：音色设置退回旧的；还没开始重载时把旧模型送回去，保持 shell 与界面一致
                     lp.edit().putString("voice", old).apply()
                     if (!loadStarted) runCatching { inj.sendLiveModels(ctx, ModelStore.liveNames(ctx)) }
-                    _state.value = _state.value.copy(voicePending = "")
+                    _state.value = _state.value.copy(voicePending = "", voiceStage = "")
                     refreshVoices()
                     _state.value = _state.value.copy(toast = msg)
                 }
             } catch (t: Throwable) {
                 L.e("UI 热切换音色异常", t)
                 lp.edit().putString("voice", old).apply()
-                _state.value = _state.value.copy(voicePending = "")
+                _state.value = _state.value.copy(voicePending = "", voiceStage = "")
                 refreshVoices()
                 _state.value = _state.value.copy(toast = tr("切换音色失败：{0}", t.message ?: t.javaClass.simpleName))
             } finally { voiceSwitching = false }

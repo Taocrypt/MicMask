@@ -161,21 +161,6 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
             ArrowPreference(title = tr("导入到历史录音"), summary = tr("用文件选择器选音频，可多选"), onClick = { impPicker.launch(arrayOf("audio/*")) })
         }
 
-        // ---- 转换 ----
-        Spacer(Modifier.height(16.dp))
-        Card(Modifier.fillMaxWidth().padding(Pad2)) {
-            Column(Modifier.padding(16.dp)) {
-                TextButton(when { st.recording -> tr("先停止录音"); st.srcLoading != null -> tr("正在读取音频…"); st.busy -> tr("转换中…"); !st.engineLoaded -> tr("请先加载模型"); st.srcName == null -> tr("请先选择音频或录音"); else -> tr("开始变声") },
-                    onClick = { vm.convert() }, enabled = st.srcName != null && st.engineLoaded && !st.busy && !st.recording,
-                    modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.textButtonColorsPrimary())
-                if (st.busy && st.srcLoading == null) {
-                    Spacer(Modifier.height(10.dp))
-                    LinearProgressIndicator(progress = st.progress)
-                    Text("${st.stage}  ${(st.progress * 100).roundToInt()}%", fontSize = 12.sp, color = Dim)
-                }
-            }
-        }
-
         // ---- 参数 ----
         SmallTitle(tr("参数"))
         Card(Modifier.fillMaxWidth().padding(Pad2)) {
@@ -201,6 +186,21 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
         Text(tr("恢复默认参数"), Modifier.padding(horizontal = 16.dp).clip(RoundedCornerShape(10.dp))
             .clickable { vm.resetFileParams() }.padding(vertical = 6.dp, horizontal = 4.dp),
             fontSize = 14.sp, color = MiuixTheme.colorScheme.primary)
+
+        // ---- 转换 ----
+        Spacer(Modifier.height(16.dp))
+        Card(Modifier.fillMaxWidth().padding(Pad2)) {
+            Column(Modifier.padding(16.dp)) {
+                TextButton(when { st.recording -> tr("先停止录音"); st.srcLoading != null -> tr("正在读取音频…"); st.busy -> tr("转换中…"); !st.engineLoaded -> tr("请先加载模型"); st.srcName == null -> tr("请先选择音频或录音"); else -> tr("开始变声") },
+                    onClick = { vm.convert() }, enabled = st.srcName != null && st.engineLoaded && !st.busy && !st.recording,
+                    modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.textButtonColorsPrimary())
+                if (st.busy && st.srcLoading == null) {
+                    Spacer(Modifier.height(10.dp))
+                    LinearProgressIndicator(progress = st.progress)
+                    Text("${st.stage}  ${(st.progress * 100).roundToInt()}%", fontSize = 12.sp, color = Dim)
+                }
+            }
+        }
 
         // ---- 结果 ----
         var addOpen by remember { mutableStateOf(false) }

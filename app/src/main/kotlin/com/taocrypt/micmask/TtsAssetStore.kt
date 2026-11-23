@@ -139,9 +139,18 @@ object TtsAssetStore {
 
     /** assets 里是否带了 TTS 大模型（= 这是全量包） */
     fun hasBundledModels(ctx: Context): Boolean = try {
-        !ctx.assets.list("tts").isNullOrEmpty()
+        val have = ctx.assets.list("tts").orEmpty().toSet()
+        MODELS.any { (name, _) -> name in have }
     } catch (e: Exception) {
         false
+    }
+
+    /** assets 里实际存在的文件（tts/xxx、tts/ref/xxx），精简包里没有大模型和参考特征 */
+    private fun bundledPaths(ctx: Context): Set<String> {
+        val s = HashSet<String>()
+        runCatching { ctx.assets.list("tts").orEmpty().forEach { s += "tts/$it" } }
+        runCatching { ctx.assets.list("tts/ref").orEmpty().forEach { s += "tts/ref/$it" } }
+        return s
     }
 
     /**
@@ -172,8 +181,12 @@ object TtsAssetStore {
 
         var done = 0
         var copied = 0
+        val bundled = bundledPaths(ctx)
+        var absent = 0
         for ((assetPath, out, byMagic) in jobs) {
             done++
+            // 精简包不带大模型/参考特征：不存在就跳过，不再逐个报「导入失败」
+            if (assetPath !in bundled) { absent++; onProgress?.invoke(done, jobs.size, out.name); continue }
             // refbin 只认当前魔数：旧版 v01 缺 phones 段，必须覆盖重解
             val upToDate = if (byMagic) {
                 out.exists() && out.length() > 64 && magicOf(out) == RefFeatureStore.MAGIC
@@ -197,6 +210,7 @@ object TtsAssetStore {
             }
             onProgress?.invoke(done, jobs.size, out.name)
         }
+        if (absent > 0 && copied == 0) L.d("TTS：安装包未自带 $absent 个文件，需从模型仓库下载")
         return copied
     }
 

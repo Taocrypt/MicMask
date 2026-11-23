@@ -827,6 +827,12 @@ private fun VoiceItem(vm: MainViewModel, st: UiState, v: String, handle: Modifie
             Column(Modifier.weight(1f).padding(start = 12.dp)) {
                 Text(label, fontWeight = FontWeight.SemiBold, color = if (sel) primary else MiuixTheme.colorScheme.onSurface)
                 val compat = remember(v, st.liveVoices) { vm.isCompatVoice(v) }
+                val loading = v == st.voicePending
+                if (loading) {
+                    Text(tr("正在切换 · {0}", st.voiceStage.ifEmpty { tr("准备中…") }), fontSize = 12.sp, color = primary)
+                    Spacer(Modifier.height(6.dp))
+                    top.yukonga.miuix.kmp.basic.LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(end = 8.dp))
+                } else
                 Text("${if (compat) tr("兼容模式 · ") else ""}${if (pinned) tr("已置顶 · ") else ""}${if (sel) tr("使用中 · ") else ""}%.1f MB".format(vm.voiceSizeMb(v)), fontSize = 12.sp, color = Summary)
             }
             Text(if (pinned) tr("取消置顶") else tr("置顶"), Modifier.clip(RoundedCornerShape(8.dp)).clickable { vm.togglePinVoice(v) }
