@@ -89,6 +89,8 @@ object Probe {
 
     private fun cpu(th: Int) = OrtSession.SessionOptions().apply {
         setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT); setIntraOpNumThreads(th); setInterOpNumThreads(1)
+        // QNN 只认静态形状：把动态维固定成实时推理用的长度
+        setSymbolicDimensionValue("T", 16320); setSymbolicDimensionValue("time", 128)
     }
 
     private fun qnn(backend: String, strict: Boolean) = cpu(4).apply {
@@ -97,24 +99,50 @@ object Probe {
         if (backend.contains("Htp")) { m["htp_performance_mode"] = "burst"; m["enable_htp_fp16_precision"] = "1" }
         addQnn(m)
         if (strict) addConfigEntry("session.disable_cpu_ep_fallback", "1")
+        setSessionLogLevel(ai.onnxruntime.OrtLoggingLevel.ORT_LOGGING_LEVEL_INFO)
     }
 
-    fun runAll(models: List<File>, out: (String) -> Unit) {
-        if (models.isEmpty()) { out("没有找到模型文件"); return }
-        val summary = ArrayList<String>()
-        for (f in models) {
-            out("-- ${f.name} (${f.length() shr 20}MB)")
-            val c = bench(f.absolutePath, "CPU 4线程", cpu(4), out)
-            val g = bench(f.absolutePath, "GPU(QNN)", qnn("libQnnGpu.so", false), out)
-            val n = bench(f.absolutePath, "NPU(QNN HTP)", qnn("libQnnHtp.so", false), out)
-            val ns = bench(f.absolutePath, "NPU 整图(禁回退)", qnn("libQnnHtp.so", true), out)
-            if (g != null) out("  GPU 与 CPU 输出误差 ${relErr(c?.out, g.out)}")
-            if (n != null) out("  NPU 与 CPU 输出误差 ${relErr(c?.out, n.out)}")
-            fun ms(r: R?) = r?.let { "%.1f".format(it.ms) } ?: "×"
-            summary += "${f.name}: CPU ${ms(c)} · GPU ${ms(g)} · NPU ${ms(n)} · NPU整图 ${if (ns != null) "可以" else "不行"}"
+    val TIERS = listOf("cpu" to "CPU 4线程", "gpu" to "GPU(QNN)", "htp" to "NPU(QNN HTP)", "htp_strict" to "NPU 整图(禁回退)")
+
+    /** ORT 在安卓把日志写 logcat：抓本进程里 QNN 分区/失败原因相关的行 */
+    private fun qnnLogs(since: String, out: (String) -> Unit) {
+        runCatching {
+            val p = ProcessBuilder("logcat", "-d", "-v", "tag", "--pid=${android.os.Process.myPid()}", "-T", since).redirectErrorStream(true).start()
+            val keys = Regex("(?i)partition|supported|failed|error|fastrpc|transport|backend|op type|validation|qnn")
+            var n = 0
+            p.inputStream.bufferedReader().forEachLine { l ->
+                if (keys.containsMatchIn(l) && n < 40) { out("    log: " + l.take(220)); n++ }
+            }
+            p.waitFor()
         }
-        out("== 汇总（平均 ms/次，× = 失败）==")
-        summary.forEach(out)
+    }
+
+    /** 单个模型 × 单个档位（每项放在独立进程里跑，崩了只丢这一项）。最后输出 RESULT|模型|档位|平均ms 或 FAIL */
+    fun runOne(f: File, tier: String, out: (String) -> Unit) {
+        val label = TIERS.firstOrNull { it.first == tier }?.second ?: tier
+        val since = java.text.SimpleDateFormat("MM-dd HH:mm:ss.SSS", java.util.Locale.US).format(java.util.Date())
+        val opts = when (tier) {
+            "cpu" -> cpu(4); "gpu" -> qnn("libQnnGpu.so", false)
+            "htp" -> qnn("libQnnHtp.so", false); else -> qnn("libQnnHtp.so", true)
+        }
+        val r = bench(f.absolutePath, label, opts, out)
+        if (tier != "cpu") qnnLogs(since, out)
+        if (r != null && tier != "cpu") {
+            val c = bench(f.absolutePath, "对照 CPU", cpu(4)) {}
+            out("  [$label] 与 CPU 输出误差 ${relErr(c?.out, r.out)}")
+        }
+        out("RESULT|${f.name}|$tier|${r?.let { "%.1f".format(it.ms) } ?: "FAIL"}")
+    }
+
+    /** 把 RESULT 行汇总 */
+    fun summary(lines: List<String>): List<String> {
+        val res = LinkedHashMap<String, MutableMap<String, String>>()
+        lines.filter { it.startsWith("RESULT|") }.forEach { l ->
+            val p = l.split('|'); if (p.size >= 4) res.getOrPut(p[1]) { HashMap() }[p[2]] = p[3]
+        }
+        return listOf("== 汇总（平均 ms/次；FAIL=失败，CRASH=进程崩溃）==") + res.map { (m, t) ->
+            "$m: " + TIERS.joinToString(" · ") { (k, n) -> "$n ${t[k] ?: "-"}" }
+        }
     }
 
     /** MicMask 正式版 shell 侧的模型目录；有就测这里的（标准名） */

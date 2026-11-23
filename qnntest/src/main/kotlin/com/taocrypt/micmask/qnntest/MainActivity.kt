@@ -26,6 +26,7 @@ import java.io.File
 class MainActivity : Activity() {
     private lateinit var log: TextView
     private val sb = StringBuilder()
+    private val all = java.util.Collections.synchronizedList(ArrayList<String>())
     private val modelDir by lazy { File(getExternalFilesDir(null), "models").also { it.mkdirs() } }
     private val libDir by lazy { applicationInfo.nativeLibraryDir }
     private val adsp by lazy { "$libDir;/vendor/dsp/cdsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/dsp" }
@@ -54,7 +55,7 @@ class MainActivity : Activity() {
         out("提示：测试时保持亮屏、App 在前台；整个过程约 1–3 分钟。")
     }
 
-    private fun out(s: String) { runOnUiThread { sb.append(s).append('\n'); log.text = sb } }
+    private fun out(s: String) { all.add(s); runOnUiThread { sb.append(s).append('\n'); log.text = sb } }
     private fun models() = Probe.MODEL_NAMES.map { File(modelDir, it) }.filter { it.isFile } +
         (modelDir.listFiles()?.filter { it.isFile && it.name.endsWith(".onnx") && it.name !in Probe.MODEL_NAMES } ?: emptyList())
 
@@ -107,22 +108,46 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun tasks(): List<Pair<File?, String>> = listOf<Pair<File?, String>>(null to "header") +
+        models().flatMap { m -> Probe.TIERS.map { m to it.first } }
+
+    /** App 进程：每项起一次 :probe 进程，跟踪它写的日志文件；进程消失却没写 END 就记为崩溃 */
     private fun appTest() = bg {
-        Probe.header(::out, "App 进程")
-        Probe.runAll(models(), ::out)
+        val start = all.size
+        for ((m, tier) in tasks()) {
+            if (m != null) out("-- ${m.name} · ${Probe.TIERS.first { it.first == tier }.second}")
+            val f = File(cacheDir, "probe.log"); f.delete()
+            startService(Intent(this, ProbeService::class.java).putExtra("log", f.path).putExtra("model", m?.path).putExtra("tier", tier))
+            var read = 0; var pid = 0; var done = false; val t0 = System.currentTimeMillis(); var gone = 0
+            while (!done) {
+                Thread.sleep(200)
+                val lines = if (f.exists()) f.readLines() else emptyList()
+                for (l in lines.drop(read)) when {
+                    l.startsWith("PID|") -> pid = l.substring(4).toInt()
+                    l == "END" -> done = true
+                    else -> out(l)
+                }
+                read = lines.size
+                if (!done && pid != 0 && !File("/proc/$pid").exists()) { if (++gone > 3) { out("  进程崩溃（无输出）"); if (m != null) out("RESULT|${m.name}|$tier|CRASH"); done = true } }
+                if (!done && System.currentTimeMillis() - t0 > 180_000) { out("  超时 180s"); if (m != null) out("RESULT|${m.name}|$tier|TIMEOUT"); done = true }
+            }
+        }
+        Probe.summary(all.drop(start)).forEach(::out)
     }
 
     private fun shellTest() {
         if (!shizukuOk()) return
         bg {
+            val start = all.size
             val apk = applicationInfo.sourceDir
-            // shell 读得到本 App 的外部目录（/sdcard/Android/data/…），模型直接用这里的
-            val cmd = "export LD_LIBRARY_PATH='$libDir'; export ADSP_LIBRARY_PATH='$adsp'; " +
-                "CLASSPATH='$apk' app_process -Djava.class.path='$apk' -Djava.library.path='$libDir' /system/bin " +
-                "com.taocrypt.micmask.qnntest.ShellProbe '$modelDir'"
-            out("启动 shell 进程…")
-            val rc = sh(cmd) { out(it) }
-            out("shell 进程退出 rc=$rc")
+            val base = "export LD_LIBRARY_PATH='$libDir'; export ADSP_LIBRARY_PATH='$adsp'; " +
+                "CLASSPATH='$apk' app_process -Djava.class.path='$apk' -Djava.library.path='$libDir' /system/bin com.taocrypt.micmask.qnntest.ShellProbe"
+            for ((m, tier) in tasks()) {
+                if (m != null) out("-- ${m.name} · ${Probe.TIERS.first { it.first == tier }.second}（shell）")
+                val rc = sh(if (m == null) "$base header" else "$base '${m.path}' $tier") { out(it) }
+                if (rc != 0 && m != null) { out("  shell 进程异常退出 rc=$rc"); out("RESULT|${m.name}|$tier|CRASH") }
+            }
+            Probe.summary(all.drop(start)).forEach(::out)
         }
     }
 }
