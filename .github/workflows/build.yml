@@ -81,6 +81,11 @@ jobs:
           echo "SIGNING_PROPS=$K/signing.properties" >> "$GITHUB_ENV"
 
       - name: Build APK
+        # Beacon 后台密钥（client_key 是公开的只读/上报密钥）；fork 没有 Secrets 时为空，App 内 Beacon 自动关闭
+        env:
+          BEACON_URL: ${{ secrets.BEACON_URL }}
+          BEACON_APP_ID: ${{ secrets.BEACON_APP_ID }}
+          BEACON_KEY: ${{ secrets.BEACON_KEY }}
         run: |
           chmod +x gradlew
           ./gradlew --no-daemon :app:assembleRelease -PsigningProps="$SIGNING_PROPS"

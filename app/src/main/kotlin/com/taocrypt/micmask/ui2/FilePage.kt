@@ -247,6 +247,8 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
             }
         }
 
+        if (st.resultFile != null) BeaconSlotCard("file_result", st.liveOn, Modifier.fillMaxWidth().padding(Pad2).padding(top = 12.dp))
+
         val resCount = remember(st.resultFile, resList) { vm.listResults().size }
         if (resCount > 0) Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(top = 12.dp)) {
             ArrowPreference(title = tr("历史结果"), summary = tr("{0} 条，保留最近 {1} 条", resCount, MainViewModel.MAX_RESULTS), onClick = { resList = vm.listResults() })

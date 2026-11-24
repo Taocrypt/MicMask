@@ -14,8 +14,13 @@ android {
         applicationId = "com.taocrypt.micmask"
         minSdk = 26
         targetSdk = 34
-        versionCode = 115
-        versionName = "2.0-alpha88"
+        versionCode = 116
+        versionName = "2.0-alpha89"
+        // Beacon 后台（公告 / 推荐位 / 匿名统计 / 反馈）：CI 从 Secrets 注入，源码与本地构建为空 → SDK 关闭
+        fun env(k: String) = (System.getenv(k) ?: "").replace("\\", "").replace("\"", "")
+        buildConfigField("String", "BEACON_URL", "\"${env("BEACON_URL")}\"")
+        buildConfigField("String", "BEACON_APP_ID", "\"${env("BEACON_APP_ID")}\"")
+        buildConfigField("String", "BEACON_KEY", "\"${env("BEACON_KEY")}\"")
         ndk {
             // 目前只做离线文件转换，纯 Kotlin + ONNX Runtime（自带 x86_64/arm64 原生库）
             abiFilters += listOf("arm64-v8a")
@@ -86,6 +91,7 @@ android {
 
 dependencies {
     implementation(project(":core"))
+    implementation(project(":beacon"))
 
     implementation(platform("androidx.compose:compose-bom:2026.03.01"))
     implementation("androidx.core:core-ktx:1.16.0")

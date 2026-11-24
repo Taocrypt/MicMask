@@ -61,3 +61,5 @@ MicMask 完全免费、开源。喜欢的话可以在 [爱发电](https://afdian
 ## 许可
 
 [GPL-3.0](LICENSE)。上游与第三方声明见 [NOTICE.md](NOTICE.md)。
+
+公告、推荐位、反馈与可选匿名统计使用 Beacon SDK（MIT，见 [beacon/LICENSE](beacon/LICENSE)）；源码或本地构建未注入后台地址时自动关闭，匿名统计默认关闭，需用户同意。

@@ -106,7 +106,7 @@ internal fun openUrl(ctx: Context, url: String) {
         .onFailure { Toast.makeText(ctx, tr("没有可打开链接的应用"), Toast.LENGTH_SHORT).show() }
 }
 
-private fun openQqGroup(ctx: Context) {
+internal fun openQqGroup(ctx: Context) {
     val ok = runCatching {
         ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(AboutLinks.QQ_GROUP_APP)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }.isSuccess
@@ -198,6 +198,8 @@ fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit =
             ArrowPreference(title = tr("加群交流"), summary = tr("加入MicMask用户交流Q群"), onClick = { openQqGroup(ctx) })
             ArrowPreference(title = tr("提交问题"), summary = tr("GitHub Issues，附上日志更快定位"), onClick = { openUrl(ctx, AboutLinks.ISSUES) })
         }
+        val liveOn = vm.state.collectAsState().value.liveOn
+        BeaconSlotCard("about", liveOn, Modifier.fillMaxWidth().padding(pad).padding(top = 12.dp))
 
         // ---- 赞赏 ----
         SmallTitle(tr("支持开发"))

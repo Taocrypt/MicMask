@@ -339,6 +339,7 @@ object MicInjector {
                     }) { r -> r.readString() }
                 }.getOrElse { it.message ?: tr("调用失败") }
                 if (err != null) { main.post { status(tr("启动失败：{0}", err)) }; setPhase(Phase.ERROR, tr("实时变声启动失败：{0}", err)); return@Thread }
+                recPathNow = ""; underNow = -1L
                 liveOn = true
                 var lastBench = ""
                 setPhase(Phase.LIVE, tr("实时变声中"))
@@ -356,6 +357,8 @@ object MicInjector {
                     engGen = kv["gen"]?.toIntOrNull() ?: -1
                     engState = kv["eng"].orEmpty()
                     benchNow = kv["bench"].orEmpty()
+                    kv["recPath"]?.takeIf { it.isNotEmpty() }?.let { recPathNow = it }
+                    kv["under"]?.toLongOrNull()?.let { underNow = it }
                     kv["bench"]?.takeIf { it.isNotEmpty() && it != lastBench }?.let { b -> lastBench = b; onBench?.invoke(b) }
                     main.post { status((modeLabel ?: if (external) tr("AI 变声") else tr("普通变声")) + tr(" · 麦电平 {0} · 目标在录={1} · 缓冲 {2} ms · 断流 {3}", kv["live"], kv["recs"], (kv["outBuf"]?.toIntOrNull() ?: 0) / 48, kv["under"]) + (kv["eng"]?.takeIf { it.isNotEmpty() }?.let { " · $it" } ?: statusExtra?.invoke()?.let { " · $it" } ?: "")) }
                     Thread.sleep(300)
@@ -372,6 +375,9 @@ object MicInjector {
     @Volatile var engGen = -1
     @Volatile var engState = ""
     @Volatile var benchNow = ""
+    /** 本次实时变声的录音路径（shell 状态 recPath=）、断流计数（under=）；统计用，取不到为 ""/-1 */
+    @Volatile var recPathNow = ""
+    @Volatile var underNow = -1L
     /** 状态栏显示的模式名（AI 变声 / 普通变声 / 虚拟声卡），由界面在启动时设置 */
     @Volatile var modeLabel: String? = null
 

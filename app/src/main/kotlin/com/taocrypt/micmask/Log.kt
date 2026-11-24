@@ -203,12 +203,71 @@ object L {
     /** 只清空 App 内查看用的缓冲，文件不动 */
     fun clearView() = synchronized(ring) { ring.clear(); version++ }
 
+    /** 把日志文件 + 本进程 logcat 写进一个 zip 流（导出与反馈共用） */
+    private fun writeZip(os: java.io.OutputStream, files: List<File>, logcatLines: Int, tailBytes: Long = 0L) {
+        ZipOutputStream(os).use { z ->
+            for (f in files) {
+                z.putNextEntry(ZipEntry(f.name))
+                f.inputStream().use { ins ->
+                    // tailBytes>0：只留文件末尾（反馈附件超限时的最后手段）
+                    if (tailBytes > 0 && f.length() > tailBytes) ins.skip(f.length() - tailBytes)
+                    ins.copyTo(z)
+                }
+                z.closeEntry()
+            }
+            // 附带本进程的系统 logcat（含原生崩溃、系统音频报错）
+            if (logcatLines > 0) runCatching {
+                val p = ProcessBuilder("logcat", "-d", "-v", "threadtime", "-t", "$logcatLines", "--pid=${Process.myPid()}").redirectErrorStream(true).start()
+                z.putNextEntry(ZipEntry("logcat.txt"))
+                p.inputStream.use { it.copyTo(z) }
+                z.closeEntry(); p.destroy()
+            }
+        }
+    }
+
+    private fun flushQueue() {
+        val t0 = System.currentTimeMillis()
+        while (q.isNotEmpty() && System.currentTimeMillis() - t0 < 2000) Thread.sleep(20)
+    }
+
+    /**
+     * 反馈附件：日志 zip 生成到 cache/feedback/，保证不超过 [maxBytes]。
+     * 超了就从最旧的日志开始丢；只剩最新一个还超就只留它的末尾。
+     */
+    fun zipForFeedback(ctx: Context, maxBytes: Long): File {
+        val d = dir ?: throw IllegalStateException("日志未初始化")
+        flushQueue()
+        val out = File(ctx.cacheDir, "feedback").apply { mkdirs(); listFiles()?.forEach { it.delete() } }
+            .let { File(it, "micmask-logs-" + SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date()) + ".zip") }
+        val all = d.listFiles()?.filter { it.isFile }?.sortedByDescending { it.lastModified() } ?: emptyList()
+        var n = all.size
+        var logcat = 20000
+        while (true) {
+            out.outputStream().use { writeZip(it, all.take(n).reversed(), logcat) }
+            if (out.length() <= maxBytes) break
+            when {
+                logcat > 2000 -> logcat = 2000
+                n > 1 -> n--
+                else -> {
+                    var tail = 4L shl 20
+                    while (true) {
+                        out.outputStream().use { writeZip(it, all.take(1), 0, tail) }
+                        if (out.length() <= maxBytes || tail < (64L shl 10)) break
+                        tail /= 2
+                    }
+                    break
+                }
+            }
+        }
+        i("反馈日志：${out.name} ${out.length() / 1024}KB（${minOf(n, all.size)}/${all.size} 个日志文件）")
+        return out
+    }
+
     /** 打包全部日志到「下载/MicMask/micmask-logs-时间.zip」，返回给用户看的路径 */
     fun exportToDownloads(ctx: Context): String {
         val d = dir ?: throw IllegalStateException("日志未初始化")
         // 等写线程把队列写完
-        val t0 = System.currentTimeMillis()
-        while (q.isNotEmpty() && System.currentTimeMillis() - t0 < 2000) Thread.sleep(20)
+        flushQueue()
         val name = "micmask-logs-" + SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date()) + ".zip"
         val files = d.listFiles()?.filter { it.isFile }?.sortedBy { it.lastModified() } ?: emptyList()
         val cv = ContentValues().apply {
@@ -218,20 +277,7 @@ object L {
         }
         val uri = ctx.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv)
             ?: throw IllegalStateException("无法在下载目录创建文件")
-        ctx.contentResolver.openOutputStream(uri)!!.use { os ->
-            ZipOutputStream(os).use { z ->
-                for (f in files) {
-                    z.putNextEntry(ZipEntry(f.name)); f.inputStream().use { it.copyTo(z) }; z.closeEntry()
-                }
-                // 附带本进程的系统 logcat（含原生崩溃、系统音频报错）
-                runCatching {
-                    val p = ProcessBuilder("logcat", "-d", "-v", "threadtime", "-t", "20000", "--pid=${Process.myPid()}").redirectErrorStream(true).start()
-                    z.putNextEntry(ZipEntry("logcat.txt"))
-                    p.inputStream.use { it.copyTo(z) }
-                    z.closeEntry(); p.destroy()
-                }
-            }
-        }
+        ctx.contentResolver.openOutputStream(uri)!!.use { os -> writeZip(os, files, 20000) }
         i("日志已导出：$name（${files.size} 个文件）")
         return "下载/MicMask/$name"
     }

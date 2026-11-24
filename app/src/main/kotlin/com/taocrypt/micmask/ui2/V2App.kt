@@ -245,6 +245,8 @@ fun V2App(vm: MainViewModel) {
                     "mirrors" -> SubPage(tr("下载镜像"), { sub = "about" }) { com.taocrypt.micmask.update.MirrorPage() }
                     "logs" -> SubPage(tr("日志"), { sub = null }) { LogPage(vm) }
                     "mim3" -> SubPage(tr("制作音效包"), { sub = null }) { Mim3Page(vm, st) }
+                    "feedback" -> SubPage(tr("反馈问题"), { sub = null }) { FeedbackPage(st.aiTier, st.speakerMode) }
+                    "privacy" -> SubPage(tr("隐私说明"), { sub = null }) { PrivacyPage() }
                     else -> MainTabs(vm, st, ui, mainPage, { mainPage = it }) { sub = it }
                 }
             }
@@ -255,6 +257,16 @@ fun V2App(vm: MainViewModel) {
                 LinearProgressIndicator(progress = st.importDone.toFloat() / st.importTotal.coerceAtLeast(1))
             }
         }
+        // 首启同意弹窗：等导入弹窗、更新弹窗都结束再弹（启动后稍等一下，让启动时的更新检查先出结果）
+        val updShow by com.taocrypt.micmask.update.Updater.dialog.collectAsStateWithLifecycle()
+        val updForced by com.taocrypt.micmask.update.Updater.forced.collectAsStateWithLifecycle()
+        var consentNeed by remember { mutableStateOf(com.taocrypt.micmask.BeaconHub.consentNeeded(ctx)) }
+        var settled by remember { mutableStateOf(false) }
+        LaunchedEffect(Unit) { kotlinx.coroutines.delay(1500); settled = true }
+        val otherDialog = st.importing || updShow || updForced != null
+        BeaconConsentDialog(show = consentNeed && settled && !otherDialog) { consentNeed = false }
+        // dialog 公告：同意之后、变声中不弹
+        BeaconNoticeDialogs(blocked = !settled || consentNeed || otherDialog || st.liveOn)
     }
 }
 
@@ -592,8 +604,10 @@ private fun PresetBar(vm: MainViewModel, st: UiState, mode: Int, builtins: List<
 // ------------------------------------------------------------------ 变声（AI / 音调 双模式）
 
 private fun LazyListScope.voicePage(vm: MainViewModel, st: UiState, open: (String) -> Unit) {
+    if (com.taocrypt.micmask.BeaconHub.banners.isNotEmpty()) item(key = "beacon_banners") { BeaconBanners() }
     item(key = "mode_switch") { ModeSwitch(vm, st) }
     if (st.voiceTab == 0) aiPage(vm, st, open) else pitchPage(vm, st)
+    item(key = "slot_home_bottom") { BeaconSlotCard("home_bottom", st.liveOn, Modifier.fillMaxWidth().padding(PagePad).padding(top = 12.dp)) }
 }
 
 @Composable
@@ -1330,13 +1344,51 @@ private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (St
     item { PermModeCard(vm, st) }
     item { SmallTitle(tr("模型仓库")) }
     item { RepoSetting(vm, st) }
+    item { SmallTitle(tr("隐私")) }
+    item { PrivacySettings(vm, open) }
     item { SmallTitle(tr("其他")) }
     item {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
             ArrowPreference(title = tr("外观"), summary = tr("深浅色、莫奈取色、液态玻璃"), onClick = { open("theme") })
             ArrowPreference(title = tr("日志"), summary = tr("查看、筛选、导出日志"), onClick = { open("logs") })
+            ArrowPreference(title = tr("反馈问题"), summary = if (com.taocrypt.micmask.BeaconHub.enabled) tr("描述问题，可附带日志和截图")
+                else tr("QQ 群 {0} · GitHub Issues", AboutLinks.QQ_GROUP_NO), onClick = { open("feedback") })
             ArrowPreference(title = tr("音频还原"), summary = tr("应用没声音时点这里还原"), onClick = { vm.repairAudio() })
             ArrowPreference(title = tr("关于 MicMask"), summary = tr("v{0} · 更新、反馈、赞赏", com.taocrypt.micmask.BuildConfig.VERSION_NAME), onClick = { open("about") })
+        }
+    }
+}
+
+/** 设置 → 隐私：匿名统计开关、删除统计数据、显示推荐、隐私说明 */
+@Composable
+private fun PrivacySettings(vm: MainViewModel, open: (String) -> Unit) {
+    val ctx = LocalContext.current
+    val hub = com.taocrypt.micmask.BeaconHub
+    var confirm by remember { mutableStateOf(false) }
+    var forgetting by remember { mutableStateOf(false) }
+    Card(Modifier.fillMaxWidth().padding(PagePad)) {
+        if (hub.enabled) {
+            SwitchPreference(checked = hub.analytics, onCheckedChange = { hub.setAnalytics(it) }, title = tr("匿名统计"),
+                summary = if (hub.analytics) tr("已开：上报版本、机型、功能使用与崩溃信息，不含录音") else tr("已关：不上报任何统计"))
+            ArrowPreference(title = tr("删除我的统计数据"), summary = if (forgetting) tr("正在删除…") else tr("删除服务器上本机的全部统计记录并重置安装 ID"),
+                enabled = !forgetting, onClick = { confirm = true })
+            SwitchPreference(checked = hub.showSlots, onCheckedChange = { hub.setShowSlots(ctx, it) }, title = tr("显示推荐"),
+                summary = tr("在首页、结果页和关于页显示作者的推荐内容"))
+        }
+        ArrowPreference(title = tr("隐私说明"), summary = if (hub.enabled) tr("收集什么、不收集什么") else tr("当前版本未启用统计"), onClick = { open("privacy") })
+    }
+    if (confirm) WindowDialog(show = true, title = tr("删除我的统计数据"), summary = tr("将删除服务器上本机的全部统计记录，并关闭匿名统计。此操作不可撤销。"),
+        onDismissRequest = { confirm = false }) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(tr("取消"), onClick = { confirm = false }, modifier = Modifier.weight(1f))
+            TextButton(tr("删除"), onClick = {
+                confirm = false; forgetting = true
+                hub.forgetMe { ok ->
+                    forgetting = false
+                    if (ok) hub.setAnalytics(false)
+                    Toast.makeText(ctx, if (ok) tr("已删除，匿名统计已关闭") else tr("删除失败，请检查网络后重试"), Toast.LENGTH_LONG).show()
+                }
+            }, modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary())
         }
     }
 }

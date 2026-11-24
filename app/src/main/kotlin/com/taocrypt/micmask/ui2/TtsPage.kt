@@ -244,6 +244,8 @@ internal fun TtsPage(vm: MainViewModel, st: UiState) {
             }
         }
 
+        if (st.ttsResultFile != null) BeaconSlotCard("file_result", st.liveOn, Modifier.fillMaxWidth().padding(Pad2).padding(top = 12.dp))
+
         // ---- 常用语音 ----
         SmallTitle(tr("常用语音  {0}/{1}", st.library.size, TtsLibrary.MAX))
         Card(Modifier.fillMaxWidth().padding(Pad2)) {

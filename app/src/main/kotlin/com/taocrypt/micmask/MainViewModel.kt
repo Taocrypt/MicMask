@@ -686,6 +686,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 无条件停止（悬浮窗/通知用）：不看状态，一律下发 DISARM */
     fun stopAll() {
+        statLiveEnd()
         stopSoundLocal(); stopPreview()
         com.taocrypt.micmask.inject.MicInjector.stopLive()
         LiveService.stop(ctx)
@@ -800,6 +801,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             res.onSuccess { (f, sec) ->
                 clipSigDone = sig
+                BeaconHub.event("normal_record", mapOf("ai" to (mode == 0), "sec" to sec.toInt()))
+                if (mode == 0) BeaconHub.event("ai_start", mapOf("tier" to _state.value.aiTier, "mode" to "normal"))
                 armQqPending(f)
                 L.i("录播 ${if (mode == 0) "AI" else "普通"} → ${f.name} %.1fs".format(sec))
                 // 松手转换完直接外放（不再需要单独的悬浮球/外放按钮）
@@ -817,6 +820,39 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ---------------- 匿名统计（Beacon，未同意时空操作） ----------------
+    private var liveStatAt = 0L
+    private var liveStatSeq = 0
+
+    /** ai_start：等 shell 报出录音路径（最多 15 秒）再发，取不到就不带 recPath */
+    private fun statLiveStart() {
+        liveStatAt = System.currentTimeMillis()
+        val seq = ++liveStatSeq
+        val tier = _state.value.aiTier
+        val inj = com.taocrypt.micmask.inject.MicInjector
+        inj.recPathNow = ""
+        viewModelScope.launch {
+            var n = 0
+            while (n < 60 && inj.recPathNow.isEmpty() && seq == liveStatSeq) { kotlinx.coroutines.delay(250); n++ }
+            BeaconHub.event("ai_start", buildMap {
+                put("tier", tier); put("mode", "shizuku")
+                inj.recPathNow.takeIf { it.isNotEmpty() }?.let { put("recPath", it) }
+            })
+        }
+    }
+
+    /** ai_stop：时长（秒）、断流次数（shell 状态 under=，取不到不带）；同一次只发一回 */
+    private fun statLiveEnd() {
+        val t0 = liveStatAt
+        if (t0 == 0L) return
+        liveStatAt = 0L; liveStatSeq++
+        val under = com.taocrypt.micmask.inject.MicInjector.underNow
+        BeaconHub.event("ai_stop", buildMap {
+            put("sec", ((System.currentTimeMillis() - t0) / 1000L).coerceAtLeast(0L))
+            if (under >= 0) put("underruns", under)
+        })
+    }
+
     fun toggleLive() {
         val inj = com.taocrypt.micmask.inject.MicInjector
         if (!inj.liveOn && !_state.value.liveOn && speakerMode()) {
@@ -824,6 +860,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         if (inj.liveOn || _state.value.liveOn) {
+            statLiveEnd()
             stopSoundLocal()
             inj.stopLive()
             // 推理在 shell 进程，随 DISARM 停止
@@ -841,6 +878,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val ended = msg.startsWith("已停止") || msg.contains("失败") || msg.startsWith("缺") || msg.startsWith("没找到") || msg.contains("Shizuku") ||
                 msg.startsWith("Stopped") || msg.contains("fail", true) || msg.startsWith("Missing") || msg.startsWith("Not found") || msg.startsWith("Couldn't find")
             _state.value = _state.value.copy(liveOn = inj.liveOn || !ended, liveMsg = msg)
+            if (ended && !inj.liveOn) statLiveEnd()
             if (ended && !inj.liveOn && !_state.value.liveAi) LiveService.stop(ctx)
         }
         if (_state.value.liveAi) {
@@ -850,6 +888,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             LiveService.onStop = { stopAll() }
             LiveService.start(ctx, liveTarget(), _state.value.liveSemis.toInt(), src, cb)
+            statLiveStart()
         } else {
             LiveService.onStop = { stopAll() }
             LiveService.notifyOnly(ctx)
@@ -958,6 +997,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (mode == 2) { _state.value = _state.value.copy(fxCard = l, fxCardPreset = name); prefs.edit().putString("fx_card", l.joinToString(",")).putString("fx_card_preset", name).apply() }
         else { _state.value = _state.value.copy(fx = l, fxPreset = name); prefs.edit().putString("fx", l.joinToString(",")).putString("fx_preset", name).apply() }
         L.i("UI 效果预设[$mode] → $name"); pushIfActive(mode)
+        BeaconHub.event("preset_apply", mapOf("mode" to mode, "user" to (_state.value.userPresets[mode].orEmpty().any { it.name == name })))
     }
     fun setPitchSemis(v: Float) {
         _state.value = _state.value.copy(pitchSemis = v); prefs.edit().putFloat("pitch_semis", v).apply()
@@ -1581,6 +1621,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val lp = ctx.getSharedPreferences("live", 0)
         lp.edit().putString("voice", v).apply()
         L.i("UI 切换音色 → $v${if (hot) "（变声中热切换）" else ""}")
+        BeaconHub.event("voice_switch", mapOf("hot" to hot, "builtin" to (v == ModelStore.DEFAULT_VOICE)))
         if (!hot) { refreshVoices(); return }
         // 变声中：把新音色的合成器送给 shell，只重载合成器（HuBERT/RMVPE 不动），麦克风通道不断。
         // 状态行等引擎真正用新音色跑起来（引擎代数 gen 增加）后才换成新音色和它的测速
@@ -2169,6 +2210,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // 同时收进「常用语音」收藏：合成一次要几十秒，不留下就得重跑
                 TtsLibrary.add(ctx, file, text, emo)
                 refreshLibrary()
+                BeaconHub.event("tts", mapOf("sec" to info.seconds.toInt(), "chars" to text.length))
                 _state.value = _state.value.copy(
                     ttsBusy = false, ttsResultFile = file, ttsResultSeconds = info.seconds,
                     ttsElapsedMs = info.totalMs, ttsStage = tr("完成"),
@@ -2439,6 +2481,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val saved = AudioIo.saveWav(ctx, out, 40000, base)
                 AudioIo.pruneOutputs(ctx, MAX_RESULTS).let { if (it > 0) L.i("结果历史超过 $MAX_RESULTS 条，删掉最旧的 $it 条（App 内副本）") }
                 val srcSec = audio.size / 16000f
+                BeaconHub.event("file_vc", mapOf("sec" to srcSec.toInt(), "ms" to ms))
                 L.i("完成：输出 ${out.size} 点 @40k，文件 ${saved.file.absolutePath}，耗时 ${ms}ms，RTF=${"%.3f".format(ms / 1000.0 / srcSec)}")
                 _state.value = _state.value.copy(
                     busy = false, stage = "", progress = 1f,

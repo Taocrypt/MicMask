@@ -19,4 +19,5 @@ rootProject.name = "MicMask"
 include(":core")
 include(":cli")
 include(":app")
+include(":beacon")
 include(":qnntest")
