@@ -979,5 +979,13 @@
   "将删除服务器上本机的全部统计记录，并关闭匿名统计。此操作不可撤销。": "All statistics for this device will be deleted from the server and anonymous statistics turned off. This cannot be undone.",
   "已删除，匿名统计已关闭": "Deleted; anonymous statistics turned off",
   "删除失败，请检查网络后重试": "Delete failed; check your network and try again",
-  "关闭推荐": "Close ad"
+  "关闭推荐": "Close ad",
+  "暂停使用：{0}": "Temporarily unavailable: {0}",
+  "重要公告": "Important",
+  "风险提醒": "Risk alert",
+  "活动通知": "Event",
+  "我已阅读": "I have read it",
+  "暂停使用": "Temporarily unavailable",
+  "重新检查": "Check again",
+  "退出": "Exit"
 }

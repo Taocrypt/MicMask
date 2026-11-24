@@ -74,9 +74,11 @@ object BeaconHub {
             synchronized(pickedMulti) { pickedMulti.clear() }
             if (!queued && c != null) {
                 queued = true
-                val p = Beacon.pendingNotices()
-                dialogQueue.addAll(p.filter { it.style == "dialog" }.sortedByDescending { it.priority })
-                banners.addAll(p.filter { it.style == "banner" }.sortedByDescending { it.priority })
+                // 阻断公告不进队列（由 [blockingNotice] 随配置实时判断）；强制阅读（ack）不论 style 都按弹窗处理并排在最前
+                val p = Beacon.pendingNotices().filter { it.force != "block" }
+                dialogQueue.addAll(p.filter { it.style == "dialog" || it.force == "ack" }
+                    .sortedWith(compareBy<Notice> { if (it.force == "ack") 0 else 1 }.thenByDescending { it.priority }))
+                banners.addAll(p.filter { it.style == "banner" && it.force != "ack" }.sortedByDescending { it.priority })
             }
         }
     }
@@ -270,6 +272,28 @@ object BeaconHub {
     // ------------------------------------------------ 公告
 
     fun noticeShown(n: Notice) = Beacon.markNoticeShown(n)
+    /** 强制阅读公告点了确认：同一版本（rev）不再弹 */
+    fun noticeAcked(n: Notice) = Beacon.markNoticeAcked(n)
+    /**
+     * 当前生效的阻断公告（force=block，停服维护等）。读 [config]（Compose 状态），配置刷新后公告下线/过期即自动解除。
+     * SDK 关闭时恒为 null。
+     */
+    fun blockingNotice(): Notice? {
+        if (!enabled) return null
+        val c = config ?: return null
+        val now = System.currentTimeMillis()
+        return c.notices.firstOrNull { it.force == "block" && endOf(c, it.id).let { e -> e == null || e > now } }
+    }
+
+    /** 公告结束时间（下发 JSON 的 end，模型里没有）：离线用缓存配置时，已过期的阻断公告不再拦人 */
+    private fun endOf(c: BeaconConfig, id: Long): Long? {
+        val arr = c.raw.optJSONArray("notices") ?: return null
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            if (o.optLong("id") == id) return if (o.isNull("end") || !o.has("end")) null else o.optLong("end")
+        }
+        return null
+    }
     fun noticeClick(n: Notice, button: String) = Beacon.reportNoticeClick(n, button)
 
     // ------------------------------------------------ 反馈

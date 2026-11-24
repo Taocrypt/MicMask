@@ -264,9 +264,11 @@ fun V2App(vm: MainViewModel) {
         var settled by remember { mutableStateOf(false) }
         LaunchedEffect(Unit) { kotlinx.coroutines.delay(1500); settled = true }
         val otherDialog = st.importing || updShow || updForced != null
-        BeaconConsentDialog(show = consentNeed && settled && !otherDialog) { consentNeed = false }
+        // 阻断公告（停服维护）优先于同意弹窗与其他公告；变声中不打断，停止后再弹（期间不能开始新的变声，见 MainViewModel.toggleLive）
+        val blockShown = BeaconBlockDialog(blocked = !settled || otherDialog || st.liveOn)
+        BeaconConsentDialog(show = consentNeed && settled && !otherDialog && !blockShown) { consentNeed = false }
         // dialog 公告：同意之后、变声中不弹
-        BeaconNoticeDialogs(blocked = !settled || consentNeed || otherDialog || st.liveOn)
+        BeaconNoticeDialogs(blocked = !settled || consentNeed || otherDialog || st.liveOn || blockShown)
     }
 }
 

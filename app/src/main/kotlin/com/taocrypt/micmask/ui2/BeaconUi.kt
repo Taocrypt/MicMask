@@ -14,6 +14,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -39,6 +40,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -188,7 +190,47 @@ fun BeaconConsentDialog(show: Boolean, onDone: () -> Unit) {
 
 // ------------------------------------------------------------------ dialog 公告
 
-/** dialog 公告逐条弹出；[blocked]（变声中、同意弹窗/更新弹窗/导入中）时不弹 */
+/** 公告类型标签：normal 不显示；important 重要公告 / risk 风险提醒 / event 活动通知（颜色同 SDK 自带弹窗） */
+@Composable
+private fun NoticeKindTag(n: Notice, modifier: Modifier = Modifier) {
+    val (label, color) = when (n.kind) {
+        "important" -> tr("重要公告") to Color(0xFF2F6FEB)
+        "risk" -> tr("风险提醒") to Color(0xFFD1242F)
+        "event" -> tr("活动通知") to Color(0xFFBF8700)
+        else -> return
+    }
+    Text(label, fontSize = 11.sp, fontWeight = FontWeight.Medium, color = color,
+        modifier = modifier.background(color.copy(alpha = 0.12f), RoundedCornerShape(6.dp)).padding(horizontal = 7.dp, vertical = 2.dp))
+}
+
+/** 公告头图：加载成功才占位，宽度铺满，按原图比例（限制在 1:1 ~ 3:1 之间），圆角裁切 */
+@Composable
+private fun NoticeHeaderImage(n: Notice, modifier: Modifier = Modifier) {
+    val img = rememberBeaconImage(n.image, header = true) ?: return
+    val ratio = (img.width.toFloat() / img.height.coerceAtLeast(1)).coerceIn(1f, 3f)
+    Image(img, null, modifier.fillMaxWidth().aspectRatio(ratio).clip(RoundedCornerShape(12.dp)), contentScale = ContentScale.Crop)
+}
+
+/** 弹窗正文：类型标签 + 头图 + Markdown 正文（可滚动） */
+@Composable
+private fun NoticeBody(n: Notice) {
+    Column(Modifier.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+        if (n.kind in KINDS) { NoticeKindTag(n); Spacer(Modifier.height(10.dp)) }
+        NoticeHeaderImage(n, Modifier.padding(bottom = 12.dp))
+        if (n.body.isNotBlank()) Text(md(n.body), fontSize = 14.sp, lineHeight = 21.sp)
+    }
+    Spacer(Modifier.height(12.dp))
+}
+
+private val KINDS = setOf("important", "risk", "event")
+
+/**
+ * dialog 公告逐条弹出（强制阅读 ack 排最前）；[blocked]（变声中、同意弹窗/更新弹窗/导入中、阻断公告显示中）时不弹。
+ * - 普通：可关闭；按钮点了也关闭。
+ * - force=ack 强制阅读：不能点外部/返回关闭；倒计时 ackSeconds 结束后第一个按钮（缺省「我已阅读」）才可点，
+ *   点了 markNoticeAcked（同一 rev 不再弹，后台改内容会重新要求确认）并打开它的链接；其余按钮只打开链接、不关闭。
+ *   变声中同普通公告一样等停止后再弹（不打断通话）；被打断后再弹时倒计时重新开始。
+ */
 @Composable
 fun BeaconNoticeDialogs(blocked: Boolean) {
     val ctx = LocalContext.current
@@ -196,19 +238,59 @@ fun BeaconNoticeDialogs(blocked: Boolean) {
     if (blocked || n == null) return
     LaunchedEffect(n.id) { BeaconHub.noticeShown(n) }
     val close = { if (BeaconHub.dialogQueue.isNotEmpty()) BeaconHub.dialogQueue.removeAt(0); Unit }
-    WindowDialog(show = true, title = n.title.ifBlank { tr("公告") }, onDismissRequest = { close() }) {
+    val ack = n.force == "ack"
+    var left by remember(n.id) { mutableStateOf(if (ack) n.ackSeconds.coerceIn(0, 60) else 0) }
+    if (ack) LaunchedEffect(n.id) { while (left > 0) { kotlinx.coroutines.delay(1000); left-- } }
+    WindowDialog(show = true, title = n.title.ifBlank { tr("公告") }, onDismissRequest = { if (!ack) close() }) {
         Column {
-            if (n.body.isNotBlank()) {
-                Column(Modifier.fillMaxWidth().heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
-                    Text(md(n.body), fontSize = 14.sp, lineHeight = 21.sp)
+            NoticeBody(n)
+            if (ack) {
+                val first = n.buttons.firstOrNull()
+                val okText = first?.text?.ifBlank { null } ?: tr("我已阅读")
+                n.buttons.drop(1).take(2).forEach { b ->
+                    TextButton(b.text.ifBlank { tr("打开") }, onClick = { BeaconHub.noticeClick(n, b.text); b.url?.let { openUrl(ctx, it) } },
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp))
                 }
-                Spacer(Modifier.height(12.dp))
+                TextButton(if (left > 0) "$okText（$left）" else okText, enabled = left <= 0, onClick = {
+                    BeaconHub.noticeAcked(n)
+                    first?.let { b -> BeaconHub.noticeClick(n, b.text); b.url?.let { openUrl(ctx, it) } }
+                    close()
+                }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.textButtonColorsPrimary())
+            } else {
+                NoticeButtons(n, primaryLast = true) { close() }
+                if (n.buttons.isEmpty()) TextButton(tr("知道了"), onClick = { close() }, modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.textButtonColorsPrimary())
             }
-            NoticeButtons(n, primaryLast = true) { close() }
-            if (n.buttons.isEmpty()) TextButton(tr("知道了"), onClick = { close() }, modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.textButtonColorsPrimary())
         }
     }
+}
+
+/**
+ * 阻断公告（force=block，停服维护等）：生效期间盖住整个 App，返回/点外部都关不掉；
+ * 按钮只打开链接（弹窗留着），「重新检查」重新拉配置（后台下线/到期即自动消失），「退出」结束 App。
+ * [blocked]：变声中（不打断正在进行的通话，停止后立即弹；期间 toggleLive 拒绝开始新的变声）、导入/更新弹窗时先不弹。
+ */
+@Composable
+fun BeaconBlockDialog(blocked: Boolean): Boolean {
+    val n = BeaconHub.blockingNotice() ?: return false
+    if (blocked) return false
+    val ctx = LocalContext.current
+    LaunchedEffect(n.id) { BeaconHub.noticeShown(n) }
+    WindowDialog(show = true, title = n.title.ifBlank { tr("暂停使用") }, onDismissRequest = {}) {
+        Column {
+            NoticeBody(n)
+            n.buttons.filter { it.url != null }.take(2).forEach { b ->
+                TextButton(b.text.ifBlank { tr("打开") }, onClick = { BeaconHub.noticeClick(n, b.text); openUrl(ctx, b.url!!) },
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp))
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(tr("重新检查"), onClick = { BeaconHub.fetch() }, modifier = Modifier.weight(1f))
+                TextButton(tr("退出"), onClick = { (ctx as? Activity)?.finishAffinity() }, modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.textButtonColorsPrimary())
+            }
+        }
+    }
+    return true
 }
 
 @Composable
@@ -230,7 +312,7 @@ private fun NoticeButtons(n: Notice, primaryLast: Boolean, after: () -> Unit) {
 
 // ------------------------------------------------------------------ 横幅
 
-/** 变声页顶部的横幅公告，可关闭（本次启动内不再显示） */
+/** 变声页顶部的横幅公告（style=banner 且非强制），可关闭（本次启动内不再显示）；有类型时标题前加标签，有头图时显示在正文上方 */
 @Composable
 fun BeaconBanners() {
     if (!BeaconHub.enabled) return
@@ -239,12 +321,14 @@ fun BeaconBanners() {
         Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 12.dp)) {
             Column(Modifier.padding(start = 16.dp, top = 8.dp, bottom = 12.dp, end = 4.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (n.kind in KINDS) { NoticeKindTag(n); Spacer(Modifier.width(8.dp)) }
                     Text(n.title.ifBlank { tr("公告") }, fontWeight = FontWeight.Medium, fontSize = 15.sp, modifier = Modifier.weight(1f),
                         maxLines = 2, overflow = TextOverflow.Ellipsis)
                     IconButton(onClick = { BeaconHub.banners.remove(n) }) {
                         Icon(MiuixIcons.Close, tr("关闭"), tint = Dim, modifier = Modifier.size(18.dp))
                     }
                 }
+                NoticeHeaderImage(n, Modifier.padding(end = 12.dp, bottom = 8.dp).heightIn(max = 140.dp))
                 if (n.body.isNotBlank()) Text(md(n.body), fontSize = 13.sp, lineHeight = 19.sp, color = Dim, modifier = Modifier.padding(end = 12.dp))
                 if (n.buttons.isNotEmpty()) {
                     Spacer(Modifier.height(8.dp))
@@ -257,31 +341,67 @@ fun BeaconBanners() {
 
 // ------------------------------------------------------------------ 推荐位
 
-private val slotImgCache = HashMap<String, ImageBitmap?>()
+/**
+ * 推荐位图标 / 公告头图共用的图片缓存：LruCache 按字节计（最多 maxMemory/16），失败的地址本次启动不再重试。
+ * 图片来自后台上传（/v1/img/<app>/<sha256>.<ext>，单张 ≤5MB）或任意 https 地址。
+ */
+private val imgCache = object : android.util.LruCache<String, ImageBitmap>(((Runtime.getRuntime().maxMemory() / 1024) / 16).toInt()) {
+    override fun sizeOf(key: String, value: ImageBitmap) = (value.width * value.height * (if (value.config == androidx.compose.ui.graphics.ImageBitmapConfig.Rgb565) 2 else 4)) / 1024
+}
+private val imgFailed = HashSet<String>()
 
 private fun httpGet(url: String, limit: Int): ByteArray? = runCatching {
     val c = (URL(url).openConnection() as HttpURLConnection).apply {
-        connectTimeout = 8000; readTimeout = 8000
+        connectTimeout = 8000; readTimeout = 15000; instanceFollowRedirects = true
         setRequestProperty("User-Agent", "MicMask/${BuildConfig.VERSION_NAME}")
     }
-    if (c.responseCode != 200) null else c.inputStream.use { it.readBytes() }.takeIf { it.size <= limit }
+    try {
+        if (c.responseCode != 200) null else c.inputStream.use { input ->
+            // 边读边限长，超限直接放弃（不把超大文件整个读进内存）
+            val out = java.io.ByteArrayOutputStream()
+            val buf = ByteArray(16384); var total = 0
+            while (true) { val n = input.read(buf); if (n < 0) break; total += n; if (total > limit) return@use null; out.write(buf, 0, n) }
+            out.toByteArray()
+        }
+    } finally { c.disconnect() }
 }.getOrNull()
 
-/** 按 SponsorWall 的写法：先读尺寸再按 2 的幂降采样，RGB_565 省内存 */
-private suspend fun loadSlotImage(url: String): ImageBitmap? {
-    if (url.isBlank()) return null
-    synchronized(slotImgCache) { if (slotImgCache.containsKey(url)) return slotImgCache[url] }
+/**
+ * 按 SponsorWall 的写法：先读尺寸，再按 2 的幂降采样到不小于 [minSide]（短边）/ [maxW]（宽）；
+ * [opaque]=true 用 RGB_565 省内存（小图标），头图保留 ARGB（PNG 透明）。
+ */
+private suspend fun loadBeaconImage(url: String, minSide: Int, maxW: Int, opaque: Boolean): ImageBitmap? {
+    if (!url.startsWith("https://") && !url.startsWith("http://")) return null
+    val key = "$minSide|$maxW|$url"
+    imgCache.get(key)?.let { return it }
+    synchronized(imgFailed) { if (key in imgFailed) return null }
     val bmp = withContext(Dispatchers.IO) {
-        httpGet(url, 4 shl 20)?.let { b ->
+        httpGet(url, 5 shl 20)?.let { b ->
             val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeByteArray(b, 0, b.size, o)
-            var s = 1; while (o.outWidth / (s * 2) >= 160 && o.outHeight / (s * 2) >= 160) s *= 2
-            BitmapFactory.decodeByteArray(b, 0, b.size, BitmapFactory.Options().apply { inSampleSize = s; inPreferredConfig = Bitmap.Config.RGB_565 })
-                ?.asImageBitmap()
+            if (o.outWidth <= 0 || o.outHeight <= 0) return@let null
+            var s = 1
+            while (o.outWidth / (s * 2) >= maxW || (o.outWidth / (s * 2) >= minSide && o.outHeight / (s * 2) >= minSide)) s *= 2
+            BitmapFactory.decodeByteArray(b, 0, b.size, BitmapFactory.Options().apply {
+                inSampleSize = s; inPreferredConfig = if (opaque) Bitmap.Config.RGB_565 else Bitmap.Config.ARGB_8888
+            })?.asImageBitmap()
         }
     }
-    synchronized(slotImgCache) { slotImgCache[url] = bmp }
+    if (bmp != null) imgCache.put(key, bmp) else synchronized(imgFailed) { imgFailed += key }
     return bmp
+}
+
+/** 推荐位图标：短边降到 ~160px */
+private suspend fun loadSlotImage(url: String): ImageBitmap? = loadBeaconImage(url, 160, 4096, true)
+
+@Composable
+private fun rememberBeaconImage(url: String?, header: Boolean): ImageBitmap? {
+    if (url.isNullOrBlank()) return null
+    val w = LocalContext.current.resources.displayMetrics.widthPixels.coerceIn(480, 1080)
+    val key = if (header) "4096|$w|$url" else "160|4096|$url"
+    var img by remember(url, header) { mutableStateOf(imgCache.get(key)) }
+    LaunchedEffect(url, header) { if (img == null) img = if (header) loadBeaconImage(url, 4096, w, false) else loadSlotImage(url) }
+    return img
 }
 
 /**
@@ -315,11 +435,7 @@ private fun SlotClose(onClose: () -> Unit) {
 }
 
 @Composable
-private fun slotImage(s: Slot): ImageBitmap? {
-    var img by remember(s.image) { mutableStateOf<ImageBitmap?>(s.image?.let { u -> synchronized(slotImgCache) { slotImgCache[u] } }) }
-    LaunchedEffect(s.image) { s.image?.let { u -> if (img == null) img = loadSlotImage(u) } }
-    return img
-}
+private fun slotImage(s: Slot): ImageBitmap? = rememberBeaconImage(s.image, header = false)
 
 /**
  * 自营推荐位卡片。position：home_bottom / file_result / about / model_download。

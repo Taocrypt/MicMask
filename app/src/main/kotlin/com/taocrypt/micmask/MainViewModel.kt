@@ -872,6 +872,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _state.value = _state.value.copy(liveOn = false, liveMsg = tr("已停止"))
             return
         }
+        // Beacon 阻断公告（停服维护等）生效期间不允许开始新的变声；已在变声中的不打断，停止后再弹阻断弹窗
+        com.taocrypt.micmask.BeaconHub.blockingNotice()?.let { n ->
+            L.i("阻断公告 #${n.id} 生效中，不开始变声")
+            _state.value = _state.value.copy(toast = tr("暂停使用：{0}", n.title.ifBlank { tr("公告") }))
+            return
+        }
         val src = if (_state.value.liveAec) android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION else android.media.MediaRecorder.AudioSource.MIC
         if (whitelist().isEmpty()) L.i("UI 白名单为空：只做本机试听（目标=自身）")
         Thread { runCatching { com.taocrypt.micmask.inject.MicInjector.auditPlayAudio() } }.start()

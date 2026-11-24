@@ -1,4 +1,4 @@
-// Beacon 客户端 SDK（MIT，见 LICENSE），复制自 Taocrypt/beacon sdk/android/beacon。
+// Beacon 客户端 SDK（MIT，见 LICENSE），复制自 Taocrypt/beacon sdk/android/beacon（同步至 fcb38dd）。
 // 按 MicMask 的 AGP 9（内置 Kotlin）/ compileSdk 调整，去掉了发布配置。
 // 本副本改动：trackSync（崩溃时同步写入本地队列）、反馈错误带 HTTP 状态码。
 plugins {

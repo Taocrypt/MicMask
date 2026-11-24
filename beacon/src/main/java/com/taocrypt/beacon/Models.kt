@@ -10,6 +10,22 @@ data class Notice(
     /** dialog | banner */ val style: String,
     /** once | every_launch | daily */ val frequency: String,
     val priority: Int, val rev: Long,
+    /** none 普通 | ack 必须点「我已阅读」| block 生效期间 App 不可用 */ val force: String = "none",
+    /** force=ack 时的阅读倒计时（秒） */ val ackSeconds: Int = 0,
+    /** normal 普通公告 | important 重要公告 | risk 风险提醒 | event 活动通知 */ val kind: String = "normal",
+    /** 头图地址，可空 */ val image: String? = null,
+)
+
+/** 轮播图，已按权重从大到小排好 */
+data class Banner(
+    val id: Long,
+    /** normal 普通（图上文下）| large 大封面（文字压图）| small 小封面（左图右文） */ val style: String,
+    /** 大标题 */ val title: String,
+    /** 小标题 */ val subtitle: String,
+    /** 标签，如 广告 / 推荐 / 上新，可空 */ val tag: String,
+    /** 按钮文案，空=不显示按钮 */ val button: String,
+    /** 点击后的弹窗内容（Markdown），空=直接跳转 */ val popup: String,
+    val image: String, val url: String?,
 )
 
 data class Slot(
@@ -30,12 +46,20 @@ class BeaconConfig internal constructor(val raw: JSONObject) {
             it.optLong("id"), it.optString("title"), it.optString("body"),
             it.optJSONArray("buttons").objs().map { b -> NoticeButton(b.optString("text"), b.optStringOrNull("url")) },
             it.optString("style", "dialog"), it.optString("frequency", "once"), it.optInt("priority"), it.optLong("rev"),
+            it.optString("force", "none"), it.optInt("ackSeconds"),
+            it.optString("kind", "normal"), it.optStringOrNull("image"),
         )
     }
     val slots: List<Slot> = raw.optJSONArray("slots").objs().map {
         Slot(
             it.optLong("id"), it.optString("position"), it.optString("title"), it.optString("subtitle"),
             it.optStringOrNull("image"), it.optStringOrNull("url"), it.optInt("weight", 1), it.optInt("priority"),
+        )
+    }
+    val banners: List<Banner> = raw.optJSONArray("banners").objs().map {
+        Banner(
+            it.optLong("id"), it.optString("style", "normal"), it.optString("title"), it.optString("subtitle"), it.optString("tag"),
+            it.optString("button"), it.optString("popup"), it.optString("image"), it.optStringOrNull("url"),
         )
     }
     val flags: JSONObject = raw.optJSONObject("flags") ?: JSONObject()

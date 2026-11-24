@@ -218,13 +218,30 @@ object Beacon {
     fun pendingNotices(): List<Notice> {
         val c = config ?: return emptyList()
         val today = System.currentTimeMillis() / 86_400_000L
-        return c.notices.filter {
-            when (it.frequency) {
+        val list = c.notices.filter {
+            when {
+                it.force == "block" -> true
+                it.force == "ack" -> prefs.getLong("na_${it.id}", -1) != it.rev && !shownThisLaunch.contains(it.id)
+                else -> when (it.frequency) {
                 "once" -> prefs.getLong("n_${it.id}", -1) != it.rev
                 "daily" -> prefs.getLong("nd_${it.id}", -1) != today
-                else -> !shownThisLaunch.contains(it.id)
+                    else -> !shownThisLaunch.contains(it.id)
+                }
             }
         }
+        // 阻断 > 强制阅读 > 普通
+        return list.sortedBy { when (it.force) { "block" -> 0; "ack" -> 1; else -> 2 } }
+    }
+
+    /** 当前生效的阻断公告（停服维护等）；不为 null 时应阻止用户继续使用。自带弹窗会自动处理 */
+    @JvmStatic
+    fun blockingNotice(): Notice? = config?.notices?.firstOrNull { it.force == "block" }
+
+    /** 用户确认已阅读强制公告（自带弹窗会自动调用）；同一版本不再弹出，公告修改后会重新要求确认 */
+    @JvmStatic
+    fun markNoticeAcked(n: Notice) {
+        prefs.edit().putLong("na_${n.id}", n.rev).apply()
+        track("\$notice_ack", mapOf("notice" to n.id))
     }
 
     private val shownThisLaunch = HashSet<Long>()
@@ -242,7 +259,25 @@ object Beacon {
 
     /** 用系统 AlertDialog 依次展示待显示的 dialog 公告 */
     @JvmStatic
-    fun showNotices(activity: Activity) = Ui.showNotices(activity, pendingNotices().filter { it.style == "dialog" })
+    fun showNotices(activity: Activity) = Ui.showNotices(activity, pendingNotices().filter { it.style == "dialog" || it.force != "none" })
+
+    // ---------------- 轮播图 ----------------
+
+    /** 当前应显示的轮播图（已按后台顺序排好，已过滤时间和条件） */
+    @JvmStatic fun banners(): List<Banner> = config?.banners ?: emptyList()
+    /** 某张轮播图第一次进入屏幕时调用（同一次启动内同一张只会上报一次） */
+    @JvmStatic fun reportBannerView(b: Banner) { if (bannerSeen.add(b.id)) track("\$banner_view", mapOf("banner" to b.id)) }
+    @JvmStatic fun reportBannerClick(b: Banner) = track("\$banner_click", mapOf("banner" to b.id))
+    /** 上报点击；有弹窗内容且传入的是 Activity 时先弹窗（按钮再跳转），否则直接用浏览器打开链接 */
+    @JvmStatic fun openBanner(context: Context, b: Banner) {
+        reportBannerClick(b)
+        if (b.popup.isNotBlank() && context is android.app.Activity) Ui.showBannerPopup(context, b)
+        else b.url?.let { Ui.openUrl(context, it) }
+    }
+
+    /** 零依赖的小型图片加载（后台线程下载 + 内存缓存），回调在主线程；失败回调 null。已用 Glide/Coil 的项目直接用它们即可 */
+    @JvmStatic fun loadImage(url: String, maxWidthPx: Int = 1080, callback: (android.graphics.Bitmap?) -> Unit) = Images.load(url, maxWidthPx, callback)
+    private val bannerSeen = HashSet<Long>()
 
     // ---------------- 推荐位 ----------------
 
