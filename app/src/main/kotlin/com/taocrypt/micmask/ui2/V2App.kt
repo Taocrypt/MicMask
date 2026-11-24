@@ -753,21 +753,31 @@ private fun LazyListScope.aiPage(vm: MainViewModel, st: UiState, open: (String) 
     if (st.repoModels.isNotEmpty() && shown.isEmpty()) item {
         Text(if (st.repoQuery.isNotBlank()) tr("没有找到「{0}」", st.repoQuery.trim()) else tr("这个分类下还没有模型"), Modifier.padding(horizontal = 28.dp, vertical = 8.dp), fontSize = 13.sp, color = Summary)
     }
-    // 推荐位 repo_list（alpha91 支持多条）：第 3 个音色后插第 1 条，之后每隔 5 个音色插下一条；音色不够就不插剩下的
-    val repoSlots = if (st.liveOn) emptyList() else com.taocrypt.micmask.BeaconHub.slots("repo_list")
+    // 推荐位 repo_list（alpha92）：用户未关闭的全部显示。priority 降序、同优先级按 weight 随机（BeaconHub.slots）；
+    // 第 3 个音色后插第 1 条、之后每隔 5 个音色插一条；插入点用完后剩下的依次追加到最后一个音色之后；
+    // 音色不足 3 个（含 0 个）时全部放在已有音色之后。仓库加载中/出错（含未配置）不显示。
+    val repoSlots = if (st.liveOn || st.repoLoading || !st.repoOk) emptyList() else com.taocrypt.micmask.BeaconHub.slots("repo_list")
     var from = 0
     var at = 3
-    for ((n, sl) in repoSlots.withIndex()) {
-        if (shown.size < at) break
-        val seg = shown.subList(from, at)
-        items(seg, key = { "r_${it.id}" }) { m -> RepoItem(vm, st, m) }
+    var n = 0
+    while (n < repoSlots.size && at <= shown.size) {
+        val sl = repoSlots[n]
+        items(shown.subList(from, at), key = { "r_${it.id}" }) { m -> RepoItem(vm, st, m) }
         item(key = "slot_repo_list_${sl.id}_$n") {
             BeaconSlotRepoItem(sl, "repo_list", st.liveOn, Modifier.fillMaxWidth().padding(PagePad).padding(bottom = 8.dp))
         }
         from = at
         at += 5
+        n++
     }
     items(shown.subList(from, shown.size), key = { "r_${it.id}" }) { m -> RepoItem(vm, st, m) }
+    while (n < repoSlots.size) {
+        val sl = repoSlots[n]
+        item(key = "slot_repo_list_${sl.id}_$n") {
+            BeaconSlotRepoItem(sl, "repo_list", st.liveOn, Modifier.fillMaxWidth().padding(PagePad).padding(bottom = 8.dp))
+        }
+        n++
+    }
     item { SmallTitle(tr("更多")) }
     item {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {

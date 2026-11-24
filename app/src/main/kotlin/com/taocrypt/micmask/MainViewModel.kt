@@ -175,6 +175,8 @@ data class UiState(
     val repoModels: List<com.taocrypt.micmask.repo.ModelRepo.RModel> = emptyList(),
     val repoLoading: Boolean = false,
     val repoMsg: String = "",
+    /** 最近一次获取模型仓库成功（含部分仓库失败、仓库为空）；加载中/全部失败/未配置为 false（alpha92 repo_list 推荐位用） */
+    val repoOk: Boolean = false,
     /** AI 页模型仓库分类 tab：female / male / other */
     val repoTab: String = "female",
     /** AI 页模型仓库：搜索词、只看某个仓库（地址，空 = 全部） */
@@ -1424,13 +1426,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val urls = _state.value.repos.filter { it.on }.map { it.url }
         if (urls.isEmpty()) {
             repoManifest = null
-            _state.value = _state.value.copy(repoModels = emptyList(), repoSounds = emptyList(), repoTtsSize = 0L, repoMsg = if (_state.value.repos.isEmpty()) tr("还没填模型仓库地址（设置页）") else tr("模型仓库都已关闭（设置页）")); return
+            _state.value = _state.value.copy(repoModels = emptyList(), repoSounds = emptyList(), repoTtsSize = 0L, repoOk = false, repoMsg = if (_state.value.repos.isEmpty()) tr("还没填模型仓库地址（设置页）") else tr("模型仓库都已关闭（设置页）")); return
         }
-        _state.value = _state.value.copy(repoLoading = true, repoMsg = tr("正在获取模型列表…"))
+        _state.value = _state.value.copy(repoLoading = true, repoOk = false, repoMsg = tr("正在获取模型列表…"))
         viewModelScope.launch {
             val r = kotlinx.coroutines.withContext(Dispatchers.IO) { runCatching { com.taocrypt.micmask.repo.ModelRepo.fetchAll(urls) } }
             r.onSuccess { repoManifest = it; _state.value = _state.value.copy(repoSounds = it.sounds, repoTtsSize = it.ttsSize) }
             _state.value = _state.value.copy(repoLoading = false,
+                repoOk = r.getOrNull()?.let { m -> !(m.errors.isNotEmpty() && m.models.isEmpty()) } ?: false,
                 repoModels = r.getOrNull()?.models ?: _state.value.repoModels,
                 // 多仓库时部分失败也照常显示能拿到的
                 repoMsg = r.fold({ m -> when { m.errors.isNotEmpty() && m.models.isEmpty() -> tr("获取失败：") + m.errors.joinToString("；")
