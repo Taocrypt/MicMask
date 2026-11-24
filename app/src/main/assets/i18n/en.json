@@ -1031,7 +1031,6 @@
   "文件变声 {0}": "File voice change {0}",
   "文件变声进度": "File voice change progress",
   "普通模式（录播）": "Normal mode (record & play)",
-  "暂不支持直接导入 .pth，需要先在电脑上转换成实时/文件变声模型（见仓库 CONTRIBUTING.md）": ".pth can't be imported directly yet; convert it on a computer first (see CONTRIBUTING.md in the repo)",
   "正在取消…": "Cancelling…",
   "正在转换，完成后再分享音频过来": "Converting; share the audio again when it's done",
   "特征 {0} / {1} ms（中位/p95）": "Features {0} / {1} ms (median/p95)",
@@ -1049,5 +1048,16 @@
   "降噪关": "NS off",
   "降噪开": "NS on",
   "安卓端 RVC 推理方案参考（性能优化思路）": "Android RVC inference reference (performance ideas)",
-  "手机端实时变声参考（状态行、分享导入、文件变声分段等思路）": "Mobile real-time voice changer reference (status line, share import, file segmentation ideas)"
+  "手机端实时变声参考（状态行、分享导入、文件变声分段等思路）": "Mobile real-time voice changer reference (status line, share import, file segmentation ideas)",
+  "已从 .pth 生成 {0} 个音色（标准档+省电档）；手机量化与电脑转换音质接近，但没有 index 检索": "Created {0} voice(s) from .pth (standard + battery-saver tiers). On-phone quantization sounds close to PC conversion, but index retrieval is not included",
+  "读取 .pth": "Reading .pth",
+  "不支持无音高（f0=0）模型": "Models without pitch (f0=0) are not supported",
+  "不支持的版本 {0}": "Unsupported version {0}",
+  "不支持的采样率 {0}": "Unsupported sample rate {0}",
+  "模板缺失：{0}": "Template missing: {0}",
+  "标准档": "Standard",
+  "省电档": "Battery saver",
+  "校准 {0}": "Calibrating {0}",
+  "拼装模型": "Assembling model",
+  "量化": "Quantizing"
 }

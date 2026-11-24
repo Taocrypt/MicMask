@@ -483,6 +483,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     private var compat = 0
     private var compatErr: String? = null
+    private var pthOk = 0
     fun importModelFiles(uris: List<Uri>) {
         if (uris.isEmpty() || _state.value.importing) return
         val known0 = (ModelStore.required + ModelStore.optional).toSet()
@@ -494,7 +495,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 runCatching {
                     val dir = ModelStore.internalDir(ctx).also { it.mkdirs() }
                     var n = 0
-                    compat = 0; compatErr = null
+                    compat = 0; compatErr = null; pthOk = 0
                     fun save(name: String, input: java.io.InputStream) {
                         _state.value = _state.value.copy(importName = name)
                         val tmp = File(dir, "$name.part")
@@ -535,6 +536,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                             L.i("兼容模式导入 $base → ${dst.name}")
                             n++; compat++
                             _state.value = _state.value.copy(importDone = n)
+                        } else if (base.lowercase().endsWith(".pth")) {
+                            // 手机直接导入 RVC .pth：模板 + 权重配方 + 校准量化（PthConvert），生成标准档/省电档两个流式模型
+                            val why = runCatching { PthConvert.run(ctx, u, base) { s -> _state.value = _state.value.copy(importName = "$base · $s") } }
+                                .fold({ n += it; pthOk++; _state.value = _state.value.copy(importDone = n); null }, { L.e("pth 导入 $base 失败", it); it.message ?: it.toString() })
+                            if (why != null) compatErr = "$base：$why"
                         } else {
                             L.w("跳过不认识的文件：$base")
                         }
@@ -547,6 +553,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _state.value = _state.value.copy(
                 toast = result.fold(
                     { when {
+                        pthOk > 0 -> tr("已从 .pth 生成 {0} 个音色（标准档+省电档）；手机量化与电脑转换音质接近，但没有 index 检索", pthOk) + (compatErr?.let { "；" + tr("无法导入：{0}", it) } ?: "")
                         compat > 0 -> tr("已按兼容模式导入 {0} 个音色：录音变声可用，实时较慢只建议高性能机；用 convert_rvc.py 转成流式版会快很多", compat)
                         it > 0 -> tr("已导入 {0} 个模型文件", it)
                         compatErr != null -> tr("无法导入：{0}", compatErr)
@@ -2478,11 +2485,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val pth = uris.filter { names[it]!!.endsWith(".pth") }
         val audio = uris - models.toSet() - pth.toSet()
         L.i("分享导入：模型 ${models.size} 个，pth ${pth.size} 个，其他 ${audio.size} 个（${names.values.joinToString().take(200)}）")
-        if (pth.isNotEmpty() && models.isEmpty() && audio.isEmpty()) {
-            _state.value = _state.value.copy(error = tr("暂不支持直接导入 .pth，需要先在电脑上转换成实时/文件变声模型（见仓库 CONTRIBUTING.md）"))
-            return null
-        }
-        if (models.isNotEmpty()) importModelFiles(models)
+        if (models.isNotEmpty() || pth.isNotEmpty()) importModelFiles(models + pth)
         if (audio.isNotEmpty()) {
             if (_state.value.busy) { _state.value = _state.value.copy(toast = tr("正在转换，完成后再分享音频过来")); return null }
             pickAudio(audio.first())
