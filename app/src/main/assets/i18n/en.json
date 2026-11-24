@@ -1002,5 +1002,8 @@
   "获取公告与推荐时会发送版本号、系统语言与安装 ID；主动提交反馈时，会上传你填写的内容、联系方式，以及你选择附带的日志与截图。从 App 内跳转爱发电赞赏时，下单链接会带上安装 ID，用来关联赞助、关闭推广；安装 ID 不会显示在赞赏墙上。": "Fetching announcements and recommendations sends the version, system language and install ID. When you submit feedback, what you write, your contact info, and any logs and screenshots you choose to attach are uploaded. When you sponsor via Afdian from inside the app, the order link includes the install ID to link your sponsorship and turn off promotions; it is never shown on the sponsor wall.",
   "（每位赞助者最多 {0} 台设备，已替换最早绑定的设备）": " (Each sponsor can link up to {0} devices; the oldest linked device was replaced.)",
   "这笔赞助用订单号关联的次数已用完（每 30 天最多 3 次），{0} 后可再试，或在交流群联系作者。": "This sponsorship has used up its order-number links (max 3 per 30 days). Try again after {0}, or contact the author in the group.",
-  "这笔赞助用订单号关联的次数已用完（每 30 天最多 3 次），请稍后再试或在交流群联系作者。": "This sponsorship has used up its order-number links (max 3 per 30 days). Please try again later or contact the author in the group."
+  "这笔赞助用订单号关联的次数已用完（每 30 天最多 3 次），请稍后再试或在交流群联系作者。": "This sponsorship has used up its order-number links (max 3 per 30 days). Please try again later or contact the author in the group.",
+  "没有收到麦克风数据，正在重建录音": "No microphone data, rebuilding the recorder",
+  "采集到的是纯静音（麦克风可能被系统静音或被占用）": "Captured pure silence (the mic may be muted by the system or in use)",
+  "麦克风被系统静音（其他应用可能占用了录音）": "Mic muted by the system (another app may be recording)"
 }

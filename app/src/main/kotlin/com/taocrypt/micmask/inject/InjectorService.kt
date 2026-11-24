@@ -458,6 +458,7 @@ class InjectorService : Binder {
                 .invoke(audioManager, pol) as Int
             if (rc != 0) return "registerAudioPolicy 返回 $rc"
             policy = pol
+            mixObj = mix
 
             val t = polCls.getMethod("createAudioTrackSource", mixCls).invoke(pol, mix) as AudioTrack?
             if (t == null || t.state != AudioTrack.STATE_INITIALIZED) {
@@ -693,6 +694,12 @@ class InjectorService : Binder {
     /** 强制走 native_setup 兜底录音（App 设置「兼容录音」，经 TX_LIVE_START 的 source 高位传入） */
     @Volatile private var recCompat = false
     @Volatile private var recPath = ""
+    /** 麦克风健康提示（空=正常）：没收到数据 / 纯静音 / 被系统静音；App 状态行显示 */
+    @Volatile private var micHint = ""
+    @Volatile private var lastReadNs = 0L
+    @Volatile private var curRec: android.media.AudioRecord? = null
+    @Volatile private var mixObj: Any? = null
+    private var recRebuilds = 0
     private var aec: android.media.audiofx.AcousticEchoCanceler? = null
     private var ns: android.media.audiofx.NoiseSuppressor? = null
     @Volatile private var liveExternal = false
@@ -787,34 +794,75 @@ class InjectorService : Binder {
     private fun liveLoop() {
         val c = shellCtx
         var rec: android.media.AudioRecord? = null
+        var watchdog: Thread? = null
         try {
             val minBuf = android.media.AudioRecord.getMinBufferSize(SR,
                 AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
             val bufBytes = maxOf(minBuf, SR / 50 * 2 * 2)
             val log: (Char, String) -> Unit = { lv, m -> slog(lv, m) }
-            // 常规 Builder → 失败则 native_setup 兜底（vivo 等 ROM 改了构造）；recCompat=强制兜底，用于测试
-            var res = ShellAudioRecord.create(liveSource, SR, bufBytes, c, recCompat, log)
-            if (res.rec == null && liveSource != android.media.MediaRecorder.AudioSource.MIC) {
-                slog('W', "录音源 $liveSource 初始化失败，退回 MIC")
-                liveSource = android.media.MediaRecorder.AudioSource.MIC
-                res = ShellAudioRecord.create(liveSource, SR, bufBytes, c, recCompat, log)
+            /** 建录音 + AEC/NS + 开始；失败返回 null（lastError 已写） */
+            fun openRec(): android.media.AudioRecord? {
+                // 常规 Builder → 失败则 native_setup 兜底（vivo 等 ROM 改了构造）；recCompat=强制兜底，用于测试
+                var res = ShellAudioRecord.create(liveSource, SR, bufBytes, c, recCompat, log)
+                if (res.rec == null && liveSource != android.media.MediaRecorder.AudioSource.MIC) {
+                    slog('W', "录音源 $liveSource 初始化失败，退回 MIC")
+                    liveSource = android.media.MediaRecorder.AudioSource.MIC
+                    res = ShellAudioRecord.create(liveSource, SR, bufBytes, c, recCompat, log)
+                }
+                recPath = res.path
+                val r = res.rec
+                if (r == null || r.state != android.media.AudioRecord.STATE_INITIALIZED) {
+                    runCatching { r?.release() }
+                    lastError = "shell 录音初始化失败（${res.error}）"
+                    return null
+                }
+                slog('I', "LIVE 录音路径=${res.path} 强制兼容=$recCompat sdk=${Build.VERSION.SDK_INT} ${Build.MANUFACTURER}/${Build.MODEL}")
+                // 回声消除 / 降噪：扬声器外放的声音会被真麦录进去，用系统（多为高通硬件）AEC 去掉
+                val sid = r.audioSessionId
+                runCatching { aec?.release() }; runCatching { ns?.release() }
+                aec = if (android.media.audiofx.AcousticEchoCanceler.isAvailable())
+                    runCatching { android.media.audiofx.AcousticEchoCanceler.create(sid)?.apply { enabled = true } }.getOrNull() else null
+                ns = if (android.media.audiofx.NoiseSuppressor.isAvailable())
+                    runCatching { android.media.audiofx.NoiseSuppressor.create(sid)?.apply { enabled = true } }.getOrNull() else null
+                slog('I', "LIVE 回声消除 可用=${android.media.audiofx.AcousticEchoCanceler.isAvailable()} 已开=${aec?.enabled} 降噪 已开=${ns?.enabled}")
+                r.startRecording()
+                lastReadNs = System.nanoTime()
+                slog('I', "LIVE 开始：src=$liveSource semis=$liveSemis dev=${runCatching { r.routedDevice?.productName }.getOrNull()}")
+                return r
             }
-            recPath = res.path
-            rec = res.rec
-            if (rec == null || rec.state != android.media.AudioRecord.STATE_INITIALIZED) {
-                lastError = "shell 录音初始化失败（${res.error}）"
-                return
+            rec = openRec() ?: return
+            curRec = rec
+            micHint = ""; recRebuilds = 0
+            // 看门狗：0.6 s 读不到麦克风数据（流失效、切路由、音频服务重启）就停掉当前录音，让主循环重建
+            watchdog = Thread({
+                while (running) {
+                    runCatching { Thread.sleep(200) }
+                    val r = curRec ?: continue
+                    if (System.nanoTime() - lastReadNs > 600_000_000L) {
+                        micHint = "没有收到麦克风数据，正在重建录音"
+                        slog('W', "0.6 s 没有麦克风数据，停止当前录音以重建")
+                        lastReadNs = System.nanoTime()
+                        runCatching { r.stop() }
+                    }
+                }
+            }, "micmask-mic-watchdog").apply { isDaemon = true; start() }
+            var rebuildWindow = System.currentTimeMillis()
+            /** 重建录音：1 分钟内最多 5 次，超了才结束变声 */
+            fun rebuildRec(why: String): Boolean {
+                val now = System.currentTimeMillis()
+                if (now - rebuildWindow > 60_000L) { rebuildWindow = now; recRebuilds = 0 }
+                if (++recRebuilds > 5) { lastError = "麦克风反复失效（$why），已停止"; return false }
+                slog('W', "重建录音（$why）第 $recRebuilds 次")
+                curRec = null
+                runCatching { rec?.stop() }; runCatching { rec?.release() }
+                rec = null
+                runCatching { Thread.sleep(150) }
+                if (!running) return false
+                rec = openRec() ?: return false
+                curRec = rec
+                return true
             }
-            slog('I', "LIVE 录音路径=${res.path} 强制兼容=$recCompat sdk=${Build.VERSION.SDK_INT} ${Build.MANUFACTURER}/${Build.MODEL}")
-            // 回声消除 / 降噪：扬声器外放的声音会被真麦录进去，用系统（多为高通硬件）AEC 去掉
-            val sid = rec.audioSessionId
-            aec = if (android.media.audiofx.AcousticEchoCanceler.isAvailable())
-                runCatching { android.media.audiofx.AcousticEchoCanceler.create(sid)?.apply { enabled = true } }.getOrNull() else null
-            ns = if (android.media.audiofx.NoiseSuppressor.isAvailable())
-                runCatching { android.media.audiofx.NoiseSuppressor.create(sid)?.apply { enabled = true } }.getOrNull() else null
-            slog('I', "LIVE 回声消除 可用=${android.media.audiofx.AcousticEchoCanceler.isAvailable()} 已开=${aec?.enabled} 降噪 已开=${ns?.enabled}")
-            rec.startRecording()
-            slog('I', "LIVE 开始：src=$liveSource semis=$liveSemis dev=${runCatching { rec.routedDevice?.productName }.getOrNull()}")
+            var zeroFrames = 0
             val shifter = PitchShifter(SR)
             val hop = SR / 100            // 10 ms
             val inBuf = ShortArray(hop)
@@ -831,11 +879,22 @@ class InjectorService : Binder {
             while (running) {
                 var got = 0
                 val tr0 = System.nanoTime()
+                var zeroReads = 0
                 while (got < hop && running) {
-                    val r = rec.read(inBuf, got, hop - got)
-                    if (r < 0) { lastError = "AudioRecord.read=$r"; return }
-                    got += r
+                    val rr = rec ?: break
+                    val r = rr.read(inBuf, got, hop - got)
+                    if (r < 0 || (r == 0 && ++zeroReads > 3)) {
+                        if (!rebuildRec("read=$r")) return
+                        got = 0; zeroReads = 0; continue
+                    }
+                    if (r > 0) { got += r; lastReadNs = System.nanoTime() }
                 }
+                if (!running) break
+                // 真麦克风不会给出连续的纯数字 0：连续 1 s 全零 = 被系统静音或被别的录音占用
+                var allZero = true
+                for (i in 0 until hop) if (inBuf[i].toInt() != 0) { allZero = false; break }
+                if (allZero) { if (++zeroFrames == 100) { micHint = "采集到的是纯静音（麦克风可能被系统静音或被占用）"; slog('W', micHint) } }
+                else { if (zeroFrames >= 100 || micHint.startsWith("没有收到")) micHint = ""; zeroFrames = 0 }
                 rdMax = maxOf(rdMax, System.nanoTime() - tr0)
                 if (liveExternal) {
                     micRing.write(inBuf, 0, hop)
@@ -862,17 +921,21 @@ class InjectorService : Binder {
                         val o = i * FRAME_BYTES
                         outBytes[o] = lo; outBytes[o + 1] = hi; outBytes[o + 2] = lo; outBytes[o + 3] = hi
                     }
-                    val t = track ?: break
                     val tw0 = System.nanoTime()
-                    val w = t.write(outBytes, 0, outBytes.size)
+                    if (!writeOut(outBytes)) break
                     wrMax = maxOf(wrMax, System.nanoTime() - tw0)
-                    if (w < 0) { lastError = "AudioTrack.write=$w"; break }
                     val now = System.nanoTime()
                     if (now - statT >= 1_000_000_000L) {
                         val rc = recCount()
                         slog('M', "live/s mic=${"%.0f".format(liveLevelDb)}dB readMax=${rdMax / 1_000_000}ms writeMax=${wrMax / 1_000_000}ms " +
                             "outBuf=${obMin * 1000 / SR}~${obMax * 1000 / SR}ms 断流+${underruns - lastUnder} 积压mic=${micRing.size() * 1000 / SR}ms 目标在录=$rc")
                         if (rc != lastRec) { slog('I', "目标录音数 $lastRec → $rc"); lastRec = rc }
+                        if (Build.VERSION.SDK_INT >= 29) runCatching {
+                            val sid = rec?.audioSessionId ?: -1
+                            val me = am?.activeRecordingConfigurations?.firstOrNull { it.clientAudioSessionId == sid }
+                            if (me?.isClientSilenced == true) { if (!micHint.startsWith("麦克风被系统静音")) { micHint = "麦克风被系统静音（其他应用可能占用了录音）"; slog('W', micHint) } }
+                            else if (micHint.startsWith("麦克风被系统静音")) micHint = ""
+                        }
                         statT = now; rdMax = 0; wrMax = 0; obMin = Int.MAX_VALUE; obMax = 0; lastUnder = underruns
                     }
                     continue
@@ -897,19 +960,45 @@ class InjectorService : Binder {
                 }
                 liveLevelDb = (10 * Math.log10(e / hop + 1e-12)).toFloat()
                 liveFrames++
-                val t = track ?: break
-                val w = t.write(outBytes, 0, outBytes.size)
-                if (w < 0) { lastError = "AudioTrack.write=$w"; break }
+                if (!writeOut(outBytes)) break
             }
         } catch (t: Throwable) {
             lastError = describe(t)
             slog('E', "liveLoop", t)
         } finally {
+            curRec = null
+            watchdog?.interrupt()
             runCatching { rec?.stop() }
             runCatching { aec?.release() }; runCatching { ns?.release() }; aec = null; ns = null
             runCatching { rec?.release() }
             if (running) disarm("live-end")
         }
+    }
+
+    /** 注入轨道失效（系统音频服务重启等）时从同一个策略重建一条；失败返回 false */
+    private fun rebuildTrack(): Boolean = runCatching {
+        val pol = policy ?: return false
+        val mix = mixObj ?: return false
+        val polCls = Class.forName("android.media.audiopolicy.AudioPolicy")
+        val mixCls = Class.forName("android.media.audiopolicy.AudioMix")
+        runCatching { track?.stop() }; runCatching { track?.release() }
+        val t = polCls.getMethod("createAudioTrackSource", mixCls).invoke(pol, mix) as AudioTrack?
+        if (t == null || t.state != AudioTrack.STATE_INITIALIZED) { runCatching { t?.release() }; track = null; false }
+        else { t.play(); track = t; slog('W', "注入轨道已重建"); true }
+    }.getOrElse { slog('W', "注入轨道重建失败", it); false }
+
+    /** 写注入轨道；写失败先重建一次再写，仍失败返回 false（结束变声） */
+    private fun writeOut(b: ByteArray): Boolean {
+        var t = track ?: return false
+        var w = t.write(b, 0, b.size)
+        if (w < 0) {
+            slog('W', "AudioTrack.write=$w，尝试重建注入轨道")
+            if (!rebuildTrack()) { lastError = "AudioTrack.write=$w"; return false }
+            t = track ?: return false
+            w = t.write(b, 0, b.size)
+            if (w < 0) { lastError = "AudioTrack.write=$w"; return false }
+        }
+        return true
     }
 
     @Synchronized
@@ -920,6 +1009,7 @@ class InjectorService : Binder {
         synchronized(capLock) { capBuf = null }
         sfx = null
         slog('I', "DISARM ($why)")
+        micHint = ""
         engine?.stop()
         val w = worker
         worker = null
@@ -1007,6 +1097,7 @@ class InjectorService : Binder {
             "bench=${engine?.benchSummary ?: ""}",
             "gen=$engGen",
             "recPath=$recPath",
+            "mic=$micHint",
             "err=$lastError",
         ).joinToString("|")
     }
