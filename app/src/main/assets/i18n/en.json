@@ -995,10 +995,12 @@
   "关联本设备": "Link this device",
   "已关联，推广已隐藏至 {0}。": "Linked. Promotions are hidden until {0}.",
   "没找到这个订单，请检查订单号；刚付款的话等一两分钟再试。": "Order not found. Check the number; if you just paid, try again in a minute or two.",
-  "这笔赞助关联设备的次数已用完（每 30 天最多 3 次），请稍后再试或在交流群联系作者。": "This sponsorship has used up its device links (3 per 30 days). Try later or contact the author in the group.",
   "这笔赞助已经到期了。": "This sponsorship has expired.",
   "尝试太频繁，请一小时后再试。": "Too many attempts. Please try again in an hour.",
   "网络连接失败，请稍后再试。": "Network error. Please try again later.",
   "暂时无法关联（{0}），请稍后再试。": "Can't link right now ({0}). Please try again later.",
-  "获取公告与推荐时会发送版本号、系统语言与安装 ID；主动提交反馈时，会上传你填写的内容、联系方式，以及你选择附带的日志与截图。从 App 内跳转爱发电赞赏时，下单链接会带上安装 ID，用来关联赞助、关闭推广；安装 ID 不会显示在赞赏墙上。": "Fetching announcements and recommendations sends the version, system language and install ID. When you submit feedback, what you write, your contact info, and any logs and screenshots you choose to attach are uploaded. When you sponsor via Afdian from inside the app, the order link includes the install ID to link your sponsorship and turn off promotions; it is never shown on the sponsor wall."
+  "获取公告与推荐时会发送版本号、系统语言与安装 ID；主动提交反馈时，会上传你填写的内容、联系方式，以及你选择附带的日志与截图。从 App 内跳转爱发电赞赏时，下单链接会带上安装 ID，用来关联赞助、关闭推广；安装 ID 不会显示在赞赏墙上。": "Fetching announcements and recommendations sends the version, system language and install ID. When you submit feedback, what you write, your contact info, and any logs and screenshots you choose to attach are uploaded. When you sponsor via Afdian from inside the app, the order link includes the install ID to link your sponsorship and turn off promotions; it is never shown on the sponsor wall.",
+  "（每位赞助者最多 {0} 台设备，已替换最早绑定的设备）": " (Each sponsor can link up to {0} devices; the oldest linked device was replaced.)",
+  "这笔赞助用订单号关联的次数已用完（每 30 天最多 3 次），{0} 后可再试，或在交流群联系作者。": "This sponsorship has used up its order-number links (max 3 per 30 days). Try again after {0}, or contact the author in the group.",
+  "这笔赞助用订单号关联的次数已用完（每 30 天最多 3 次），请稍后再试或在交流群联系作者。": "This sponsorship has used up its order-number links (max 3 per 30 days). Please try again later or contact the author in the group."
 }

@@ -189,9 +189,9 @@ object BeaconHub {
 
     /**
      * 赞助状态验签公钥（ECDSA P-256，SPKI DER base64，Beacon 后台公布）。
-     * 留空 = 过渡期，接受未签名的 sponsor.until；填上后只认签名有效的状态。
+     * 只认签名有效、app/iid 与本机一致的状态（app/iid 在待签内容里，不一致则验签失败）。留空 = 接受未签名（仅调试）。
      */
-    private const val SPONSOR_PUBKEY = ""
+    private const val SPONSOR_PUBKEY = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEo9nVkReXAI+NQT0vG91+i9yLrk7Qt3ZGrPeB8hlyZgoxOQFsAUX5idzJg9NgehsK6ozxmXXLUtHgWogLXvdmSg=="
     private const val K_SPONSOR = "sponsor_state"
     /** bind 成功后本地保存的签名状态（重启后在配置刷新前也能生效） */
     var boundSponsor by mutableStateOf<org.json.JSONObject?>(null); private set
@@ -247,7 +247,7 @@ object BeaconHub {
     }
 
     /** 订单号绑定结果：ok / not_found / limit / expired / rate_limited / bad_request / not_configured / network */
-    data class BindResult(val code: String, val until: Long = 0, val maxDevices: Int = 0, val expire: Long = 0)
+    data class BindResult(val code: String, val until: Long = 0, val maxDevices: Int = 0, val expire: Long = 0, val evicted: Int = 0, val nextAt: Long = 0)
 
     /** 用爱发电订单号把本设备绑定为赞助者（网页付款、换机、重装后用）。在 IO 线程调用。 */
     fun bindSponsor(orderNo: String): BindResult {
@@ -269,11 +269,11 @@ object BeaconHub {
                         if (until > 0) {
                             appCtx?.let { Prefs.main(it).edit().putString(K_SPONSOR, j.toString()).apply() }
                             boundSponsor = j
-                            BindResult("ok", until)
+                            BindResult("ok", until, maxDevices = j.optInt("max_devices", 3), evicted = j.optInt("evicted", 0))
                         } else BindResult("bad_sig")
                     }
                     404 -> BindResult("not_found")
-                    409 -> BindResult("limit", maxDevices = j.optInt("max_devices", 3))
+                    409 -> BindResult("limit", nextAt = j.optLong("next_at", 0))
                     410 -> BindResult("expired", expire = j.optLong("expire", 0))
                     429 -> BindResult("rate_limited")
                     503 -> BindResult("not_configured")

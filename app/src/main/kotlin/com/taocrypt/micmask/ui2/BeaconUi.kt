@@ -620,9 +620,11 @@ fun SponsorDialog(show: Boolean, onDismiss: () -> Unit) {
                             val r = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { BeaconHub.bindSponsor(orderNo) }
                             busy = false
                             msg = when (r.code) {
-                                "ok" -> tr("已关联，推广已隐藏至 {0}。", fmt.format(java.util.Date(r.until)))
+                                "ok" -> tr("已关联，推广已隐藏至 {0}。", fmt.format(java.util.Date(r.until))) +
+                                    (if (r.evicted > 0) tr("（每位赞助者最多 {0} 台设备，已替换最早绑定的设备）", r.maxDevices) else "")
                                 "not_found" -> tr("没找到这个订单，请检查订单号；刚付款的话等一两分钟再试。")
-                                "limit" -> tr("这笔赞助关联设备的次数已用完（每 30 天最多 3 次），请稍后再试或在交流群联系作者。")
+                                "limit" -> if (r.nextAt > 0) tr("这笔赞助用订单号关联的次数已用完（每 30 天最多 3 次），{0} 后可再试，或在交流群联系作者。", fmt.format(java.util.Date(r.nextAt)))
+                                    else tr("这笔赞助用订单号关联的次数已用完（每 30 天最多 3 次），请稍后再试或在交流群联系作者。")
                                 "expired" -> tr("这笔赞助已经到期了。")
                                 "rate_limited" -> tr("尝试太频繁，请一小时后再试。")
                                 "network" -> tr("网络连接失败，请稍后再试。")
