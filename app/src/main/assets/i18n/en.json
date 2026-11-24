@@ -1047,5 +1047,7 @@
   "这是 QQ/微信的 SILK 语音，手机系统解不开。请先用 SILK 转换工具转成 mp3/wav 再导入，或直接用录音/实时变声。": "This is a QQ/WeChat SILK voice file, which Android can't decode. Convert it to mp3/wav with a SILK tool first, or use recording/real-time mode.",
   "连上电脑、打开 USB 调试，在电脑终端逐条执行，把输出连同日志一起发给开发者。不需要 Shizuku。": "Connect to a computer with USB debugging on, run these in a terminal and send the output with your logs to the developer. Shizuku not needed.",
   "降噪关": "NS off",
-  "降噪开": "NS on"
+  "降噪开": "NS on",
+  "安卓端 RVC 推理方案参考（性能优化思路）": "Android RVC inference reference (performance ideas)",
+  "手机端实时变声参考（状态行、分享导入、文件变声分段等思路）": "Mobile real-time voice changer reference (status line, share import, file segmentation ideas)"
 }

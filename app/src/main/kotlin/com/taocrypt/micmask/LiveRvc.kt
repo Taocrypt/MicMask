@@ -178,6 +178,7 @@ class LiveRvc(private val open: (String) -> Any?) {
     // 状态行用的滚动窗口（最近 30 块），和日志汇总（每 20 块清空）分开
     private val wFeat = ArrayDeque<Long>(); private val wSyn = ArrayDeque<Long>(); private val wLag = ArrayDeque<Long>()
     private var nBlocks = 0L; private var nOver = 0L
+    @Volatile private var lastOverWarn = 0L
     /** 给 UI 状态行：blk 块长 / feat syn lag 中位 / fp95 sp95 lp95 / over 超预算块 / n 推理块 / drop 丢块 / gated 静音块（键:值;） */
     @Synchronized fun perf(): String {
         if (wLag.isEmpty()) return "blk:${BLOCK * 10};n:0;gated:$gated;drop:$dropped"
@@ -187,7 +188,7 @@ class LiveRvc(private val open: (String) -> Any?) {
     @Synchronized private fun record(feat: Long, syn: Long, lag: Long) {
         wFeat.addLast(feat); wSyn.addLast(syn); wLag.addLast(lag)
         while (wLag.size > 30) { wFeat.removeFirst(); wSyn.removeFirst(); wLag.removeFirst() }
-        nBlocks++; if (lag > BLOCK * 10) nOver++
+        nBlocks++; if (maxOf(feat, syn) > BLOCK * 10) nOver++
         stFeat.add(feat); stSyn.add(syn); stLag.add(lag)
         if (stLag.size >= 20) {
             L.i("live 汇总(20块) 特征 p50=${pct(stFeat, .5)} p95=${pct(stFeat, .95)} max=${stFeat.max()}ms | 合成 p50=${pct(stSyn, .5)} p95=${pct(stSyn, .95)} max=${stSyn.max()}ms | " +
@@ -585,7 +586,14 @@ class LiveRvc(private val open: (String) -> Any?) {
                         val lag = (t3 - tAvail) / 1_000_000
                         L.m("live 块#$id in=${"%.0f".format(db)}dB 等待=${waitFeat}ms 重采样=${(tH - t0) / 1_000_000} hubert=${(tR - tH) / 1_000_000} rmvpe=${(tE - tR) / 1_000_000} 特征=${featMs} " +
                             "排队=${(t1 - tQ) / 1_000_000} 合成=$lastSynMs 推送=${(t3 - t2) / 1_000_000} 端到端=${lag}ms 浊音帧=$voiced/$T 峰值=${"%.2f".format(pk)} 在途=${inflight.get()}")
-                        if (lag > BLOCK * 10) L.w("live 块#$id 超预算：端到端 ${lag}ms > ${BLOCK * 10}ms")
+                        // 特征与合成分线程流水，吞吐只看较慢的一段是否超过块长；端到端只是延迟，超过 2 倍块长才提示。5 s 内最多一条
+                        val slow = maxOf(featMs, lastSynMs)
+                        val nowW = System.currentTimeMillis()
+                        if ((slow > BLOCK * 10 || lag > BLOCK * 20) && nowW - lastOverWarn > 5000) {
+                            lastOverWarn = nowW
+                            if (slow > BLOCK * 10) L.w("live 块#$id 吞吐超预算：${if (featMs >= lastSynMs) "特征" else "合成"} ${slow}ms > 块长 ${BLOCK * 10}ms，会积压/断音")
+                            else L.w("live 块#$id 延迟偏高：端到端 ${lag}ms（块长 ${BLOCK * 10}ms）")
+                        }
                         lastLagMs = lag
                         record(featMs, lastSynMs, lag)
                     } catch (t: Throwable) {
