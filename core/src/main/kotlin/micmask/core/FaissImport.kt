@@ -13,7 +13,7 @@ import java.nio.ByteOrder
  */
 object FaissImport {
 
-    class Info(val d: Int, val nlist: Int, val ntotal: Long, val kept: Int)
+    class Info(val d: Int, val nlist: Int, val ntotal: Long, val kept: Int, val lists: Int = nlist)
 
     private class Rd(i: InputStream) {
         val s = BufferedInputStream(i, 1 shl 20)
@@ -34,7 +34,7 @@ object FaissImport {
         return Hdr(d, nt, metric)
     }
 
-    fun convert(input: InputStream, out: File, cap: Int = 10000): Info {
+    fun convert(input: InputStream, out: File, cap: Int = 10000, maxLists: Int = 128): Info {
         val r = Rd(input)
         val h = r.fourcc()
         if (h != "IwFl" && h != "IvFl") throw IllegalArgumentException("不支持的 index 类型 $h（只支持 RVC 的 IVF-Flat）")
@@ -67,26 +67,60 @@ object FaissImport {
         val ntotal = sizes.sum()
         val ratio = if (ntotal > cap) cap.toDouble() / ntotal else 1.0
         val keep = IntArray(nlist) { if (sizes[it] == 0L) 0 else maxOf(1, Math.round(sizes[it] * ratio).toInt()).coerceAtMost(sizes[it].toInt()) }
-        val kept = keep.sum()
-        val starts = IntArray(nlist + 1).also { for (i in 0 until nlist) it[i + 1] = it[i] + keep[i] }
-        DataOutputStream(out.outputStream().buffered(1 shl 20)).use { o ->
-            val bb = ByteBuffer.allocate(8 + 12 + (nlist + 1) * 4).order(ByteOrder.LITTLE_ENDIAN)
-            bb.put("ATRIIDX1".toByteArray(Charsets.US_ASCII)); bb.putInt(nlist); bb.putInt(d); bb.putInt(kept)
-            starts.forEach { bb.putInt(it) }
-            o.write(bb.array()); o.write(cent)
-            val ids = ByteBuffer.allocate(kept * 4).order(ByteOrder.LITTLE_ENDIAN); for (i in 0 until kept) ids.putInt(i); o.write(ids.array())
-            for (li in 0 until nlist) {
-                val n = sizes[li].toInt(); if (n == 0) continue
-                val k = keep[li]
-                // 等间距抽 k 个
-                var next = 0
-                for (i in 0 until n) {
-                    val want = next < k && i == (next.toLong() * n / k).toInt()
-                    if (want) { o.write(r.bytes(codeSize)); next++ } else r.skip(codeSize.toLong())
-                }
-                r.skip(n * 8L)   // ids
+        // 读出保留的向量（约 1 万 × d，v2 约 30 MB）
+        val lists = Array(nlist) { li ->
+            val n = sizes[li].toInt(); val k = keep[li]
+            val v = FloatArray(k * d); var next = 0
+            for (i in 0 until n) {
+                val want = next < k && i == (next.toLong() * n / k).toInt()
+                if (want) { ByteBuffer.wrap(r.bytes(codeSize)).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer().get(v, next * d, d); next++ } else r.skip(codeSize.toLong())
             }
+            r.skip(n * 8L)   // ids
+            v
         }
-        return Info(d, nlist, ntotal, kept)
+        val c0 = FloatArray(nlist * d).also { ByteBuffer.wrap(cent).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer().get(it) }
+        // 聚类中心太多（RVC 常见 1000~3000）时每帧找中心就要扫几千个向量，手机上太慢：
+        // 把中心再聚成 maxLists 组、合并倒排表，新中心取组内向量的均值（nprobe=1 检索）
+        val (groups, ng) = if (nlist > maxLists) regroup(c0, keep, nlist, d, maxLists) else IntArray(nlist) { it } to nlist
+        val members = Array(ng) { g -> (0 until nlist).filter { groups[it] == g && keep[it] > 0 } }.filter { it.isNotEmpty() }
+        val nl = members.size
+        val kept = keep.sum()
+        val starts = IntArray(nl + 1).also { for (g in 0 until nl) it[g + 1] = it[g] + members[g].sumOf { li -> keep[li] } }
+        val newCent = FloatArray(nl * d)
+        for (g in 0 until nl) {
+            if (ng == nlist) { System.arraycopy(c0, members[g][0] * d, newCent, g * d, d); continue }
+            val cnt = starts[g + 1] - starts[g]
+            for (li in members[g]) { val v = lists[li]; for (i in v.indices) newCent[g * d + i % d] += v[i] }
+            for (j in 0 until d) newCent[g * d + j] /= cnt
+        }
+        DataOutputStream(out.outputStream().buffered(1 shl 20)).use { o ->
+            val bb = ByteBuffer.allocate(8 + 12 + (nl + 1) * 4).order(ByteOrder.LITTLE_ENDIAN)
+            bb.put("ATRIIDX1".toByteArray(Charsets.US_ASCII)); bb.putInt(nl); bb.putInt(d); bb.putInt(kept)
+            starts.forEach { bb.putInt(it) }
+            o.write(bb.array())
+            fun wf(a: FloatArray) { val x = ByteBuffer.allocate(a.size * 4).order(ByteOrder.LITTLE_ENDIAN); x.asFloatBuffer().put(a); o.write(x.array()) }
+            wf(newCent)
+            val ids = ByteBuffer.allocate(kept * 4).order(ByteOrder.LITTLE_ENDIAN); for (i in 0 until kept) ids.putInt(i); o.write(ids.array())
+            for (g in 0 until nl) for (li in members[g]) wf(lists[li])
+        }
+        return Info(d, nlist, ntotal, kept, nl)
+    }
+
+    /** 加权 k-means（权重=表内保留向量数），返回每个原中心所属的组 */
+    private fun regroup(c: FloatArray, w: IntArray, n: Int, d: Int, k: Int, iters: Int = 10): Pair<IntArray, Int> {
+        val cen = FloatArray(k * d)
+        for (g in 0 until k) System.arraycopy(c, (g.toLong() * n / k).toInt() * d, cen, g * d, d)
+        val asg = IntArray(n)
+        repeat(iters) {
+            for (i in 0 until n) {
+                var best = 0; var bd = Float.MAX_VALUE
+                for (g in 0 until k) { var s = 0f; for (j in 0 until d) { val t = c[i * d + j] - cen[g * d + j]; s += t * t }; if (s < bd) { bd = s; best = g } }
+                asg[i] = best
+            }
+            val sum = DoubleArray(k * d); val cnt = DoubleArray(k)
+            for (i in 0 until n) { val ww = maxOf(w[i], 1).toDouble(); val g = asg[i]; cnt[g] += ww; for (j in 0 until d) sum[g * d + j] += c[i * d + j] * ww }
+            for (g in 0 until k) if (cnt[g] > 0) for (j in 0 until d) cen[g * d + j] = (sum[g * d + j] / cnt[g]).toFloat()
+        }
+        return asg to k
     }
 }
