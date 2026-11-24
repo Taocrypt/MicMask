@@ -412,7 +412,7 @@ private fun rememberBeaconImage(url: String?, header: Boolean): ImageBitmap? {
 
 /**
  * 推荐位公共规则（三种样式共用）：变声中（[liveOn]）隐藏；SDK 关闭、该位置已被关闭或没有内容时不显示；
- * 曝光与关闭的频控在 [BeaconHub.slot] / [BeaconHub.slotViewed] / [BeaconHub.dismissSlot]。
+ * 曝光与关闭的频控在 [BeaconHub.slot] / [BeaconHub.slotViewed] / [BeaconHub.dismissSlotItem]。
  * 不要放进悬浮窗、常驻通知、Shizuku 授权/权限引导、开屏/插屏。
  */
 @Composable
@@ -431,7 +431,7 @@ private fun PromoTag(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun SlotClose(position: String) = SlotClose { BeaconHub.dismissSlot(position) }
+private fun SlotClose(s: Slot, position: String) = SlotClose { BeaconHub.dismissSlotItem(s, position) }
 
 @Composable
 private fun SlotClose(onClose: () -> Unit) {
@@ -465,7 +465,7 @@ fun BeaconSlotCard(position: String, liveOn: Boolean, modifier: Modifier = Modif
             }
             Row(Modifier.align(Alignment.TopEnd).padding(top = 4.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 PromoTag()
-                SlotClose(position)
+                SlotClose(s, position)
             }
         }
     }
@@ -475,7 +475,7 @@ fun BeaconSlotCard(position: String, liveOn: Boolean, modifier: Modifier = Modif
 @Composable
 fun BeaconSlotRepoItem(position: String, liveOn: Boolean, modifier: Modifier) {
     val s = rememberSlot(position, liveOn) ?: return
-    SlotRepoItemBody(s, modifier) { BeaconHub.dismissSlot(position) }
+    SlotRepoItemBody(s, modifier) { BeaconHub.dismissSlotItem(s, position) }
 }
 
 /** 多条位置里的一条（alpha91 repo_list）：曝光按 日期|id|位置 去重，关闭只隐藏这一条当天 */
@@ -519,7 +519,7 @@ fun BeaconSlotLink(position: String, liveOn: Boolean, modifier: Modifier = Modif
         Spacer(Modifier.width(6.dp))
         Text(s.title, fontSize = 12.sp, color = MiuixTheme.colorScheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).clickable { BeaconHub.openSlot(ctx, s) }.padding(vertical = 4.dp))
-        SlotClose(position)
+        SlotClose(s, position)
     }
 }
 

@@ -57,6 +57,7 @@ object BeaconHub {
         )
         Beacon.init(app, o)
         appCtx = app.applicationContext
+        clearLegacyDismiss(appCtx!!)
         inited = true
         analytics = Beacon.isAnalyticsEnabled()
         // 基础统计只在同意过当前版本说明后开启；旧版同意（v1）要重新弹窗确认
@@ -145,7 +146,8 @@ object BeaconHub {
     // - 每个位置每次启动挑一次（[picked]），本次启动内一直显示同一条，滑动/重组不换。
     // - 曝光：同一条（slot id）同一位置每个本地日期只上报一次 $slot_view，记在 prefs [K_SEEN]（"yyyyMMdd|id|pos"，跨日自动清理）；
     //   alpha91 起 slot_seen 只用于上报去重，不再影响显示：当天已曝光的条目之后的启动照常挑选/显示（长期显示，不再"每天只显示一次"）。
-    // - 关闭：按位置记到期时间 [K_DISMISS]+position；home_bottom 7 天，其他位置到当天本地 24:00。
+    // - 关闭（alpha96 起所有位置统一）：按条目记 [K_DISMISS_IDS] "yyyyMMdd|id|pos"，只隐藏那一条到当天本地 24:00；
+    //   同位置还有别的条目时当场换下一条。旧版按位置写的 slot_dismiss_<pos>（含 home_bottom 7 天）启动时清掉、不再生效。
     // 多条位置（alpha91，目前只有 repo_list，见 [MULTI_POSITIONS] / [slots]）：
     // - 该位置所有条目都展示：priority 降序、同优先级按 weight 加权随机排序，每次启动排一次；
     // - 曝光上报同单条位置：按 "日期|id|位置" 当天只报一次 $slot_view；
@@ -163,12 +165,17 @@ object BeaconHub {
 
     private fun today(): String = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US).format(java.util.Date())
 
-    private fun dismissed(ctx: Context, position: String) =
-        Prefs.main(ctx).getLong(K_DISMISS + position, 0L) > System.currentTimeMillis()
+    /** alpha96：清掉旧版按位置的关闭记录（home_bottom 7 天等），改为按条目当天隐藏 */
+    private fun clearLegacyDismiss(ctx: Context) {
+        val sp = Prefs.main(ctx)
+        val keys = sp.all.keys.filter { it.startsWith(K_DISMISS) && it != K_DISMISS_IDS }
+        if (keys.isNotEmpty()) sp.edit().apply { keys.forEach { remove(it) } }.apply()
+    }
 
     /** 同 SDK pickSlot（最高优先级组内按权重随机）。alpha91 起当天已曝光的条目照常参与挑选（slot_seen 只用于上报去重） */
     private fun pickFresh(ctx: Context, c: BeaconConfig, position: String): Slot? {
-        val list = c.slots.filter { it.position == position }
+        val gone = dismissedIdsToday(ctx)
+        val list = c.slots.filter { it.position == position && "${it.id}|$position" !in gone }
         if (list.isEmpty()) return null
         val top = list.maxOf { it.priority }
         val cands = list.filter { it.priority == top }
@@ -182,8 +189,11 @@ object BeaconHub {
         if (!enabled || !showSlots) return null
         val c = config ?: return null
         val ctx = appCtx ?: return null
-        if (dismissed(ctx, position)) return null
-        return synchronized(picked) { picked.getOrPut(position) { pickFresh(ctx, c, position) } }
+        return synchronized(picked) {
+            val cur = picked[position]
+            if (cur != null && "${cur.id}|$position" !in dismissedIdsToday(ctx)) cur
+            else pickFresh(ctx, c, position).also { if (it != null) picked[position] = it else picked.remove(position) }
+        }
     }
 
     /** 真正显示时调用；同一条同一位置当天只上报一次（修 LazyColumn 滑回重复上报） */
@@ -229,7 +239,6 @@ object BeaconHub {
         if (!enabled || !showSlots) return emptyList()
         val c = config ?: return emptyList()
         val ctx = appCtx ?: return emptyList()
-        if (dismissed(ctx, position)) return emptyList()
         val all = synchronized(pickedMulti) {
             pickedMulti.getOrPut(position) {
                 c.slots.filter { it.position == position }.groupBy { it.priority }
@@ -240,27 +249,13 @@ object BeaconHub {
         return all.filter { "${it.id}|$position" !in gone }
     }
 
-    /** 关闭多条位置里的某一条：只隐藏这一条到当天本地 24:00 */
+    /** 关闭某一条推荐：只隐藏这一条到当天本地 24:00（所有位置通用） */
     fun dismissSlotItem(s: Slot, position: String = s.position) {
         val ctx = appCtx ?: return
         val d = today()
         val sp = Prefs.main(ctx)
         val cur = sp.getStringSet(K_DISMISS_IDS, emptySet())!!
         sp.edit().putStringSet(K_DISMISS_IDS, cur.filter { it.startsWith("$d|") }.toSet() + "$d|${s.id}|$position").apply()
-        slotRev++
-    }
-
-    /** 关闭某个位置：home_bottom 7 天不再出，其他位置当天不再出 */
-    fun dismissSlot(position: String) {
-        val ctx = appCtx ?: return
-        val until = if (position == "home_bottom") System.currentTimeMillis() + 7L * 86_400_000L
-        else java.util.Calendar.getInstance().apply {
-            add(java.util.Calendar.DAY_OF_YEAR, 1)
-            set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0)
-            set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
-        }.timeInMillis
-        Prefs.main(ctx).edit().putLong(K_DISMISS + position, until).apply()
-        synchronized(picked) { picked.remove(position) }
         slotRev++
     }
 
