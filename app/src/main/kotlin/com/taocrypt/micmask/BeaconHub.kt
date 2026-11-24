@@ -264,6 +264,8 @@ object BeaconHub {
     // ------------------------------------------------ 公告
 
     fun noticeShown(n: Notice) = Beacon.markNoticeShown(n)
+    /** 「不再提示」：同一版本不再弹；只对 daily / every_launch 的普通公告提供 */
+    fun noticeMuted(n: Notice) = Beacon.markNoticeMuted(n)
     /** 强制阅读公告点了确认：同一版本（rev）不再弹 */
     fun noticeAcked(n: Notice) = Beacon.markNoticeAcked(n)
     /**

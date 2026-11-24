@@ -840,9 +840,38 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             while (n < 60 && inj.recPathNow.isEmpty() && seq == liveStatSeq) { kotlinx.coroutines.delay(250); n++ }
             BeaconHub.event("ai_start", buildMap {
                 put("tier", tier); put("mode", "shizuku")
+                putAll(socProps())
                 inj.recPathNow.takeIf { it.isNotEmpty() }?.let { put("recPath", it) }
             })
         }
+    }
+
+    /** SoC 信息（统计用，定默认档位）：Android 12+ 有 SOC_MANUFACTURER/SOC_MODEL，否则只有 Build.HARDWARE；另带 CPU 核数 */
+    private fun socProps(): Map<String, Any> = buildMap {
+        if (android.os.Build.VERSION.SDK_INT >= 31) {
+            android.os.Build.SOC_MODEL.takeIf { it.isNotBlank() && it != android.os.Build.UNKNOWN }?.let { put("soc", it) }
+            android.os.Build.SOC_MANUFACTURER.takeIf { it.isNotBlank() && it != android.os.Build.UNKNOWN }?.let { put("socVendor", it) }
+        }
+        put("hw", android.os.Build.HARDWARE)
+        put("cores", Runtime.getRuntime().availableProcessors())
+    }
+
+    /**
+     * 推理耗时（统计用）：从 shell 引擎的测速摘要（bench=）和最近一次运行状态（eng=）里抽数字。
+     * bench 形如「[兼容模式·]标准档：每步 300ms · 特征 68ms · 合成 115ms · 负载 61%」或「省电档(自动)：每步 500ms」；
+     * eng 形如「特征 70ms / 合成 120ms（预算 300ms）· 丢块 2」。取不到的字段不带。
+     */
+    private fun benchProps(bench: String, eng: String): Map<String, Any> = buildMap {
+        fun num(src: String, re: String) = Regex(re).find(src)?.groupValues?.get(1)?.toIntOrNull()
+        num(bench, "每步 (\\d+)ms")?.let { put("stepMs", it) }
+        num(bench, "特征 (\\d+)ms")?.let { put("featMs", it) }
+        num(bench, "合成 (\\d+)ms")?.let { put("synMs", it) }
+        num(bench, "负载 (\\d+)%")?.let { put("loadPct", it) }
+        if ("自动" in bench) put("autoDown", 1)
+        if ("兼容模式" in bench) put("compat", 1)
+        num(eng, "特征 (\\d+)ms")?.let { put("featLastMs", it) }
+        num(eng, "合成 (\\d+)ms")?.let { put("synLastMs", it) }
+        num(eng, "丢块 (\\d+)")?.let { put("dropped", it) }
     }
 
     /** ai_stop：时长（秒）、断流次数（shell 状态 under=，取不到不带）；同一次只发一回 */
@@ -850,10 +879,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val t0 = liveStatAt
         if (t0 == 0L) return
         liveStatAt = 0L; liveStatSeq++
-        val under = com.taocrypt.micmask.inject.MicInjector.underNow
+        val inj = com.taocrypt.micmask.inject.MicInjector
+        val under = inj.underNow
+        val bench = inj.benchNow; val eng = inj.engState
         BeaconHub.event("ai_stop", buildMap {
             put("sec", ((System.currentTimeMillis() - t0) / 1000L).coerceAtLeast(0L))
             if (under >= 0) put("underruns", under)
+            putAll(socProps())
+            putAll(benchProps(bench, eng))
         })
     }
 

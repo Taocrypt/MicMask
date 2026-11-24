@@ -247,6 +247,7 @@ object Beacon {
             when {
                 it.force == "block" -> true
                 it.force == "ack" -> prefs.getLong("na_${it.id}", -1) != it.rev && !shownThisLaunch.contains(it.id)
+                prefs.getLong("nm_${it.id}", -1) == it.rev -> false  // 用户点了「不再提示」（同一版本）
                 else -> when (it.frequency) {
                 "once" -> prefs.getLong("n_${it.id}", -1) != it.rev
                 "daily" -> prefs.getLong("nd_${it.id}", -1) != today
@@ -267,6 +268,13 @@ object Beacon {
     fun markNoticeAcked(n: Notice) {
         prefs.edit().putLong("na_${n.id}", n.rev).apply()
         track("\$notice_ack", mapOf("notice" to n.id))
+    }
+
+    /** 用户勾了「不再提示」：同一版本（rev）不再展示；后台改内容（rev 变）会重新提示。阻断/强制阅读不受影响 */
+    @JvmStatic
+    fun markNoticeMuted(n: Notice) {
+        prefs.edit().putLong("nm_${n.id}", n.rev).apply()
+        track("\$notice_mute", mapOf("notice" to n.id))
     }
 
     private val shownThisLaunch = HashSet<Long>()

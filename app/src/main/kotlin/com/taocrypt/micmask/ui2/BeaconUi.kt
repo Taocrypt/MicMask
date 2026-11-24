@@ -95,7 +95,7 @@ import java.net.URL
 /** 信息收集说明：标题 to 正文 */
 internal fun privacySections(): List<Pair<String, String>> = listOf(
     tr("基础统计（使用即开启）") to tr("• 启动次数（用于统计活跃用户数）\n• 公告与推荐位的曝光、点击\n• App 版本号、系统语言、随机生成的安装 ID\n不含手机型号、系统版本与功能使用情况。"),
-    tr("匿名统计（可选）还会收集") to tr("• App 版本号、手机型号与系统版本\n• 功能使用事件，如开始/停止 AI 变声（ai_start / ai_stop）、切换音色、应用预设、文件变声、文字转语音，以及时长、档位等数值\n• 崩溃时的异常类名与本应用的几行栈帧\n• 随机生成的安装 ID（与你的身份无关，卸载重装会变）"),
+    tr("匿名统计（可选）还会收集") to tr("• App 版本号、手机型号与系统版本、处理器型号（SoC）与核数\n• 功能使用事件，如开始/停止 AI 变声（ai_start / ai_stop）、切换音色、应用预设、文件变声、文字转语音，以及时长、档位、推理耗时与负载等数值（用来定各机型的默认档位）\n• 崩溃时的异常类名与本应用的几行栈帧\n• 随机生成的安装 ID（与你的身份无关，卸载重装会变）"),
     tr("不会收集") to tr("• 录音、音频内容和变声后的声音\n• 音色模型、文字转语音输入的文字\n• 账号、手机号、联系人、短信、精确位置等个人信息"),
     tr("其他联网") to tr("获取公告与推荐时会发送版本号、系统语言与安装 ID；主动提交反馈时，会上传你填写的内容、联系方式，以及你选择附带的日志与截图。"),
     tr("你可以随时") to tr("在 关于 → 其他 中关闭匿名统计。同意弹窗里「同意匿名统计」默认已勾选，取消勾选则只保留基础统计。"),
@@ -243,8 +243,14 @@ fun BeaconNoticeDialogs(blocked: Boolean) {
     val n = BeaconHub.dialogQueue.firstOrNull()
     if (blocked || n == null) return
     LaunchedEffect(n.id) { BeaconHub.noticeShown(n) }
-    val close = { if (BeaconHub.dialogQueue.isNotEmpty()) BeaconHub.dialogQueue.removeAt(0); Unit }
     val ack = n.force == "ack"
+    // 「不再提示」：只给会重复弹的普通公告（daily / every_launch）；勾上后关闭时记下，同一版本不再弹
+    val canMute = !ack && n.frequency != "once"
+    var mute by remember(n.id) { mutableStateOf(false) }
+    val close = {
+        if (canMute && mute) BeaconHub.noticeMuted(n)
+        if (BeaconHub.dialogQueue.isNotEmpty()) BeaconHub.dialogQueue.removeAt(0); Unit
+    }
     var left by remember(n.id) { mutableStateOf(if (ack) n.ackSeconds.coerceIn(0, 60) else 0) }
     if (ack) LaunchedEffect(n.id) { while (left > 0) { kotlinx.coroutines.delay(1000); left-- } }
     WindowDialog(show = true, title = n.title.ifBlank { tr("公告") }, onDismissRequest = { if (!ack) close() }) {
@@ -263,6 +269,12 @@ fun BeaconNoticeDialogs(blocked: Boolean) {
                     close()
                 }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.textButtonColorsPrimary())
             } else {
+                if (canMute) Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable { mute = !mute }.padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(state = ToggleableState(mute), onClick = { mute = !mute })
+                    Spacer(Modifier.width(8.dp))
+                    Text(tr("不再提示"), fontSize = 14.sp, color = Dim)
+                }
                 NoticeButtons(n, primaryLast = true) { close() }
                 if (n.buttons.isEmpty()) TextButton(tr("知道了"), onClick = { close() }, modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.textButtonColorsPrimary())
