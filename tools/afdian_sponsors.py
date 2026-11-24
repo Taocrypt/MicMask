@@ -5,7 +5,7 @@
          AFDIAN_PLAN_ID（只统计这个方案的订单）、SHOW_REMARK（1=展示留言，默认 1）
 只用标准库。令牌只放 GitHub Actions Secrets，绝不进仓库。
 """
-import hashlib, json, os, sys, time, urllib.request
+import hashlib, json, os, re, sys, time, urllib.request
 
 API = "https://afdian.com/api/open/"
 UID = os.environ["AFDIAN_USER_ID"]
@@ -74,7 +74,10 @@ def main():
         u = users.get(uid, {})
         r = {"name": (u.get("name") or "爱发电用户").strip()[:24], "avatar": avatar(u.get("avatar")),
              "amount": round(a["amount"], 2), "since": a["first"], "last": a["last"], "expire": a["expire"]}
-        if SHOW_REMARK and a["remark"]: r["remark"] = a["remark"][:60]
+        if SHOW_REMARK and a["remark"]:
+            # 留言里的设备 ID（赞助者用来隐藏推荐位）不公开到赞赏墙
+            rm = re.sub(r"(设备\s*ID[:：]?\s*)?[A-Za-z0-9_-]{22,64}", "", a["remark"]).strip(" ,，;；:：\n")
+            if rm: r["remark"] = rm[:60]
         rows.append(r)
     rows.sort(key=lambda r: (-r["amount"], r["since"]))
     doc = {"format": 1, "updated": int(time.time()), "count": len(rows),

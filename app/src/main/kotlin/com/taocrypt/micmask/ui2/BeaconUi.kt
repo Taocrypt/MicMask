@@ -97,7 +97,7 @@ internal fun privacySections(): List<Pair<String, String>> = listOf(
     tr("基础统计（使用即开启）") to tr("• 启动次数（用于统计活跃用户数）\n• 公告与推荐位的曝光、点击\n• App 版本号、系统语言、随机生成的安装 ID\n不含手机型号、系统版本与功能使用情况。"),
     tr("匿名统计（可选）还会收集") to tr("• App 版本号、手机型号与系统版本、处理器型号（SoC）与核数\n• 功能使用事件，如开始/停止 AI 变声（ai_start / ai_stop）、切换音色、应用预设、文件变声、文字转语音，以及时长、档位、推理耗时与负载等数值（用来定各机型的默认档位）\n• 崩溃时的异常类名与本应用的几行栈帧\n• 随机生成的安装 ID（与你的身份无关，卸载重装会变）"),
     tr("不会收集") to tr("• 录音、音频内容和变声后的声音\n• 音色模型、文字转语音输入的文字\n• 账号、手机号、联系人、短信、精确位置等个人信息"),
-    tr("其他联网") to tr("获取公告与推荐时会发送版本号、系统语言与安装 ID；主动提交反馈时，会上传你填写的内容、联系方式，以及你选择附带的日志与截图。"),
+    tr("其他联网") to tr("获取公告与推荐时会发送版本号、系统语言与安装 ID；主动提交反馈时，会上传你填写的内容、联系方式，以及你选择附带的日志与截图。从 App 内跳转爱发电赞赏时，下单链接会带上安装 ID，用来关联赞助、关闭推广；安装 ID 不会显示在赞赏墙上。"),
     tr("你可以随时") to tr("在 关于 → 其他 中关闭匿名统计。同意弹窗里「同意匿名统计」默认已勾选，取消勾选则只保留基础统计。"),
 )
 
@@ -565,6 +565,74 @@ fun BeaconSlotLink(position: String, liveOn: Boolean, modifier: Modifier = Modif
         Text(s.title, fontSize = 12.sp, color = MiuixTheme.colorScheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).clickable { BeaconHub.openSlot(ctx, s) }.padding(vertical = 4.dp))
         SlotClose(s, position)
+    }
+}
+
+// ------------------------------------------------------------------ 赞赏
+
+/**
+ * 点「赞赏支持」弹出：选档位跳爱发电（链接自动带本设备 ID，用户什么都不用填），
+ * 或「已赞助？输入订单号」把网页付款 / 换机 / 重装后的设备绑上。
+ * 只在 Beacon 启用时弹；本地构建直接打开爱发电。
+ */
+@Composable
+fun SponsorDialog(show: Boolean, onDismiss: () -> Unit) {
+    if (!show) return
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val plans = remember { cachedPlans(ctx) }
+    var bindMode by remember { mutableStateOf(false) }
+    var orderNo by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var msg by remember { mutableStateOf<String?>(null) }
+    val until = BeaconHub.sponsorUntil
+    val fmt = remember { java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US) }
+    WindowDialog(show = true, title = tr("赞赏支持"), onDismissRequest = onDismiss) {
+        Column {
+            if (until > System.currentTimeMillis()) Text(tr("感谢支持！本设备的推广已隐藏至 {0}。", fmt.format(java.util.Date(until))),
+                fontSize = 14.sp, color = MiuixTheme.colorScheme.primary, modifier = Modifier.padding(bottom = 8.dp))
+            if (!bindMode) {
+                Text(tr("从这里付款会自动关联本设备：名字上赞赏墙，赞助期内我所有 App 的推广都会关闭（付款后重启 App 生效）。留言随意写，不用填任何编号。"),
+                    fontSize = 14.sp, lineHeight = 21.sp, color = Dim)
+                Spacer(Modifier.height(12.dp))
+                val list = plans.ifEmpty { listOf(SponsorPlan(AboutLinks.DONATE_PLAN, tr("每月赞助"), 5.0, "")) }
+                list.forEach { p ->
+                    TextButton(if (p.price > 0) "${p.title} · ¥${java.text.DecimalFormat("0.##").format(p.price)}" else p.title,
+                        onClick = { onDismiss(); openUrl(ctx, BeaconHub.donateUrl(p.id)) },
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), colors = ButtonDefaults.textButtonColorsPrimary())
+                }
+                TextButton(tr("自选金额"), onClick = { onDismiss(); openUrl(ctx, BeaconHub.donateUrl(null)) },
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp))
+                TextButton(tr("已赞助？输入订单号"), onClick = { bindMode = true; msg = null }, modifier = Modifier.fillMaxWidth())
+            } else {
+                Text(tr("在网页上付款、换了手机或重装后，在爱发电「我的订单」里复制订单号填到这里。每位赞助者最多同时关联 3 台设备，新关联的会替换最早那台。"),
+                    fontSize = 14.sp, lineHeight = 21.sp, color = Dim)
+                Spacer(Modifier.height(12.dp))
+                TextField(value = orderNo, onValueChange = { v -> orderNo = v.filter { it.isLetterOrDigit() }.take(40) }, label = tr("爱发电订单号"),
+                    singleLine = true, modifier = Modifier.fillMaxWidth())
+                msg?.let { Text(it, fontSize = 13.sp, color = Dim, modifier = Modifier.padding(top = 8.dp)) }
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(tr("返回"), onClick = { bindMode = false; msg = null }, modifier = Modifier.weight(1f))
+                    TextButton(if (busy) tr("关联中…") else tr("关联本设备"), enabled = !busy && orderNo.length >= 10, onClick = {
+                        busy = true; msg = null
+                        scope.launch {
+                            val r = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { BeaconHub.bindSponsor(orderNo) }
+                            busy = false
+                            msg = when (r.code) {
+                                "ok" -> tr("已关联，推广已隐藏至 {0}。", fmt.format(java.util.Date(r.until)))
+                                "not_found" -> tr("没找到这个订单，请检查订单号；刚付款的话等一两分钟再试。")
+                                "limit" -> tr("这笔赞助关联设备的次数已用完（每 30 天最多 3 次），请稍后再试或在交流群联系作者。")
+                                "expired" -> tr("这笔赞助已经到期了。")
+                                "rate_limited" -> tr("尝试太频繁，请一小时后再试。")
+                                "network" -> tr("网络连接失败，请稍后再试。")
+                                else -> tr("暂时无法关联（{0}），请稍后再试。", r.code)
+                            }
+                        }
+                    }, modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary())
+                }
+            }
+        }
     }
 }
 

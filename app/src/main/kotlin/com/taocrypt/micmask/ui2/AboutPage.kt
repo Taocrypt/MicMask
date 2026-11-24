@@ -83,7 +83,8 @@ object AboutLinks {
     /** 直接拉起 QQ/TIM 的群资料卡（点「加入群聊」即可）；没装 QQ 时回退到网页链接。 */
     const val QQ_GROUP_APP = "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=$QQ_GROUP_NO&card_type=group&source=qrcode"
     /** 赞赏链接：爱发电「MicMask 赞助」方案下单页，留空则显示「即将开放」。 */
-    const val DONATE = "https://afdian.com/order/create?plan_id=5a2e6d94e42011f18ad35254001e7c00&product_type=0"
+    const val DONATE_PLAN = "5a2e6d94e42011f18ad35254001e7c00"
+    const val DONATE = "https://afdian.com/order/create?plan_id=$DONATE_PLAN&product_type=0"
     const val DONATE_HOME = "https://afdian.com/a/taocrypt"
     /** 赞赏墙名单（GitHub Action 定时从爱发电生成），按顺序尝试。 */
     val SPONSORS = listOf(
@@ -204,11 +205,21 @@ fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit =
 
         // ---- 赞赏 ----
         SmallTitle(tr("支持开发"))
+        var donateDlg by remember { mutableStateOf(false) }
         SponsorWall {
             val ready = AboutLinks.DONATE.isNotBlank()
-            ArrowPreference(title = tr("赞赏支持"), summary = if (ready) tr("爱发电 · ¥5/月，请作者喝杯奶茶") else tr("即将开放，感谢关注"),
-                enabled = ready, onClick = { if (ready) openUrl(ctx, AboutLinks.DONATE) })
+            ArrowPreference(title = tr("赞赏支持"), summary = when {
+                !ready -> tr("即将开放，感谢关注")
+                com.taocrypt.micmask.BeaconHub.isSponsor -> tr("感谢支持！推广已隐藏")
+                com.taocrypt.micmask.BeaconHub.enabled -> tr("爱发电 · ¥5/月，赞助期内关闭推广")
+                else -> tr("爱发电 · ¥5/月，请作者喝杯奶茶")
+            }, enabled = ready, onClick = {
+                if (!ready) Unit
+                else if (com.taocrypt.micmask.BeaconHub.enabled) donateDlg = true
+                else openUrl(ctx, AboutLinks.DONATE)
+            })
         }
+        SponsorDialog(donateDlg) { donateDlg = false }
 
         // ---- 其他：匿名统计、隐私说明、免责声明、参考项目 ----
         SmallTitle(tr("其他"))

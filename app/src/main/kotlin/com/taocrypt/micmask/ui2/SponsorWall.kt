@@ -63,7 +63,16 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.text.DecimalFormat
 
-/** 赞赏墙：读 GitHub Action 从爱发电生成的 sponsors.json，只显示「MicMask 赞助」方案的赞助者。 */
+/** 赞赏墙：读 Beacon 赞助接口（/v1/<app>/sponsors），失败时用 GitHub 上的 sponsors.json；格式相同。 */
+internal data class SponsorPlan(val id: String, val title: String, val price: Double, val desc: String)
+
+/** 缓存名单里的档位（Beacon 接口才有 plans；没有时返回空，由调用方用默认档位） */
+internal fun cachedPlans(ctx: Context): List<SponsorPlan> = runCatching {
+    val arr = JSONObject(Prefs.main(ctx).getString(KEY, null) ?: return emptyList()).optJSONArray("plans") ?: return emptyList()
+    (0 until arr.length()).map { i -> arr.getJSONObject(i).let { SponsorPlan(it.optString("id"), it.optString("title"), it.optDouble("price", 0.0), it.optString("desc")) } }
+        .filter { it.id.isNotBlank() }
+}.getOrDefault(emptyList())
+
 private data class Sponsor(val name: String, val avatar: String, val amount: Double, val remark: String, val expire: Long, val since: Long = 0, val last: Long = 0) {
     /** 旧名单没有 expire 字段时当作在期 */
     val active: Boolean get() = expire <= 0 || expire * 1000 > System.currentTimeMillis()
@@ -91,7 +100,8 @@ private fun get(url: String, limit: Int = 2 shl 20): ByteArray? = runCatching {
 }.getOrNull()
 
 private suspend fun loadSponsors(ctx: Context): SponsorDoc? = withContext(Dispatchers.IO) {
-    for (u in AboutLinks.SPONSORS) {
+    // Beacon 赞助接口优先（实时），GitHub Action 生成的 sponsors.json 兜底
+    for (u in listOfNotNull(com.taocrypt.micmask.BeaconHub.sponsorsUrl) + AboutLinks.SPONSORS) {
         val b = get(u) ?: continue
         val t = String(b, Charsets.UTF_8)
         val d = parse(t) ?: continue
