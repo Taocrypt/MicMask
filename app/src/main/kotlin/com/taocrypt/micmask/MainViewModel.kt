@@ -160,6 +160,9 @@ data class UiState(
     val liveBenching: Boolean = false,
     val logMsg: String = "",
     val liveMsg: String = "",
+    /** 状态行性能摘要与展开明细（实时 AI 变声中） */
+    val livePerf: String = "",
+    val livePerfDetail: String = "",
     val qqSelfTest: String = "",
     /** 注入目标包名 */
     val qqInjectTarget: String = com.taocrypt.micmask.inject.MicInjector.DEFAULT_TARGET,
@@ -921,7 +924,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val cb: (String) -> Unit = { msg ->
             val ended = msg.startsWith("已停止") || msg.contains("失败") || msg.startsWith("缺") || msg.startsWith("没找到") || msg.contains("Shizuku") ||
                 msg.startsWith("Stopped") || msg.contains("fail", true) || msg.startsWith("Missing") || msg.startsWith("Not found") || msg.startsWith("Couldn't find")
-            _state.value = _state.value.copy(liveOn = inj.liveOn || !ended, liveMsg = msg)
+            _state.value = _state.value.copy(liveOn = inj.liveOn || !ended, liveMsg = msg,
+                livePerf = if (ended) "" else inj.perfLine, livePerfDetail = if (ended) "" else inj.perfDetail)
             if (ended && !inj.liveOn) statLiveEnd()
             if (ended && !inj.liveOn && !_state.value.liveAi) LiveService.stop(ctx)
         }
@@ -2466,8 +2470,43 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         pickAudio(Uri.fromFile(f))
     }
 
+    /** 分享/打开方式进来的文件：模型类导入，音频送去文件变声；返回要打开的子页面（null=留在当前页） */
+    fun handleShared(uris: List<Uri>): String? {
+        fun nameOf(u: Uri) = (runCatching { AudioIo.displayName(ctx, u) }.getOrNull() ?: u.lastPathSegment ?: "").lowercase()
+        val names = uris.associateWith { nameOf(it) }
+        val models = uris.filter { names[it]!!.let { n -> n.endsWith(".onnx") || n.endsWith(".zip") || n.endsWith(".index") || n.endsWith(".bin") } }
+        val pth = uris.filter { names[it]!!.endsWith(".pth") }
+        val audio = uris - models.toSet() - pth.toSet()
+        L.i("分享导入：模型 ${models.size} 个，pth ${pth.size} 个，其他 ${audio.size} 个（${names.values.joinToString().take(200)}）")
+        if (pth.isNotEmpty() && models.isEmpty() && audio.isEmpty()) {
+            _state.value = _state.value.copy(error = tr("暂不支持直接导入 .pth，需要先在电脑上转换成实时/文件变声模型（见仓库 CONTRIBUTING.md）"))
+            return null
+        }
+        if (models.isNotEmpty()) importModelFiles(models)
+        if (audio.isNotEmpty()) {
+            if (_state.value.busy) { _state.value = _state.value.copy(toast = tr("正在转换，完成后再分享音频过来")); return null }
+            pickAudio(audio.first())
+            if (audio.size > 1) _state.value = _state.value.copy(toast = tr("一次只能变声一段，已打开第一个"))
+            return "file"
+        }
+        return null
+    }
+
+    /** QQ / 微信语音是 SILK 编码（文件头 #!SILK_V3，微信前面多一个 0x02），系统解码器不认 */
+    private fun isSilk(uri: Uri): Boolean = runCatching {
+        ctx.contentResolver.openInputStream(uri)?.use { s ->
+            val b = ByteArray(12); val n = s.read(b)
+            n > 0 && String(b, 0, n, Charsets.ISO_8859_1).contains("#!SILK")
+        } ?: false
+    }.getOrDefault(false)
+
     fun pickAudio(uri: Uri) {
         val nm = runCatching { AudioIo.displayName(ctx, uri) }.getOrNull() ?: uri.lastPathSegment ?: ""
+        if (isSilk(uri)) {
+            L.w("选中的是 SILK 语音（QQ/微信），系统无法解码：$nm")
+            _state.value = _state.value.copy(error = tr("这是 QQ/微信的 SILK 语音，手机系统解不开。请先用 SILK 转换工具转成 mp3/wav 再导入，或直接用录音/实时变声。"))
+            return
+        }
         _state.value = _state.value.copy(busy = true, stage = tr("解码音频"), progress = 0.02f, error = null, resultFile = null, fileVcStarted = false, srcLoading = nm)
         viewModelScope.launch(Dispatchers.Default) {
             try {
@@ -2532,9 +2571,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     seed = System.nanoTime(),
                 )
                 val t0 = System.currentTimeMillis()
-                val out = engine!!.convert(audio, cfg) { stage, pct ->
-                    _state.value = _state.value.copy(stage = stage, progress = pct)
-                }
+                fileCancel = false
+                FileVcService.start(ctx, s.srcName ?: "", { fileCancel = true; FileVcService.update(ctx, tr("正在取消…"), -1f) })
+                val out = try { convertSegmented(audio, cfg) } finally { FileVcService.stop(ctx) }
                 val ms = System.currentTimeMillis() - t0
                 val stamp = SimpleDateFormat("MMdd_HHmmss", Locale.US).format(Date())
                 val base = (s.srcName ?: "audio").substringBeforeLast('.') + "_micmask_$stamp"
@@ -2553,6 +2592,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         srcSec, ms / 1000.0, ms / 1000.0 / srcSec
                     ),
                 )
+            } catch (t: FileVcCancelled) {
+                L.i("文件变声已取消")
+                _state.value = _state.value.copy(busy = false, stage = "", fileVcStarted = false, toast = tr("已取消转换"))
             } catch (t: Throwable) {
                 L.e("转换失败", t)
                 _state.value = _state.value.copy(
@@ -2561,6 +2603,62 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
         }
+    }
+
+    private class FileVcCancelled : RuntimeException("cancelled")
+    @Volatile private var fileCancel = false
+    fun cancelFileVc() { if (_state.value.busy && _state.value.fileVcStarted) { fileCancel = true; _state.value = _state.value.copy(stage = tr("正在取消…")) } }
+
+    /**
+     * 长音频分段（借鉴 RVC WebUI / mobile-rvc）：约每 30 s 在前后 5 s 内找最安静的 10 ms 处下刀，
+     * 每段两边各带 0.5 s 上下文推理，输出再按比例裁掉上下文后拼接。内存只随单段增长，进度可分段显示、可中途取消。
+     */
+    private fun convertSegmented(audio: FloatArray, cfg: RvcConfig): FloatArray {
+        val sr = 16000
+        val cuts = quietCuts(audio, sr)
+        val bounds = listOf(0) + cuts + listOf(audio.size)
+        val n = bounds.size - 1
+        if (n > 1) L.i("文件变声分 $n 段，切点(s)=${cuts.joinToString { "%.1f".format(it / sr.toFloat()) }}")
+        val pad = sr / 2
+        val parts = ArrayList<FloatArray>(n)
+        for (k in 0 until n) {
+            if (fileCancel) throw FileVcCancelled()
+            val a = bounds[k]; val b = bounds[k + 1]
+            val a0 = maxOf(0, a - pad); val b1 = minOf(audio.size, b + pad)
+            val seg = audio.copyOfRange(a0, b1)
+            val label = if (n > 1) tr("第 {0}/{1} 段", k + 1, n) + " · " else ""
+            val out = engine!!.convert(seg, cfg) { stage, pct ->
+                if (fileCancel) throw FileVcCancelled()
+                val p = (k + pct) / n
+                _state.value = _state.value.copy(stage = label + stage, progress = p)
+                FileVcService.update(ctx, label + stage, p)
+            }
+            val ratio = out.size.toDouble() / seg.size
+            val s0 = ((a - a0) * ratio).toInt().coerceIn(0, out.size)
+            val e0 = (out.size - ((b1 - b) * ratio).toInt()).coerceIn(s0, out.size)
+            parts += out.copyOfRange(s0, e0)
+        }
+        if (parts.size == 1) return parts[0]
+        val total = FloatArray(parts.sumOf { it.size }); var o = 0
+        for (pt in parts) { System.arraycopy(pt, 0, total, o, pt.size); o += pt.size }
+        return total
+    }
+
+    /** 在每个约 30 s 处的 ±5 s 内找 20 ms 窗口绝对值和最小的位置（10 ms 步进） */
+    private fun quietCuts(a: FloatArray, sr: Int, segSec: Int = 30, querySec: Int = 5): List<Int> {
+        val seg = segSec * sr; val q = querySec * sr
+        if (a.size <= seg + q) return emptyList()
+        val pre = DoubleArray(a.size + 1); for (i in a.indices) pre[i + 1] = pre[i] + kotlin.math.abs(a[i])
+        val half = sr / 100; val step = sr / 100
+        val cuts = ArrayList<Int>(); var last = 0; var pos = seg
+        while (pos < a.size - q) {
+            val lo = maxOf(pos - q, last + 5 * sr, half); val hi = minOf(pos + q, a.size - sr, a.size - half)
+            if (lo >= hi) break
+            var best = lo; var bv = Double.MAX_VALUE; var i = lo
+            while (i <= hi) { val v = pre[i + half] - pre[i - half]; if (v < bv) { bv = v; best = i }; i += step }
+            cuts += best; last = best; pos = best + seg
+        }
+        return cuts
     }
 
     // ---------------------------------------------------------------- 结果历史 / 导出

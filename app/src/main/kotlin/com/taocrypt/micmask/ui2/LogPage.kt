@@ -56,6 +56,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
+import top.yukonga.miuix.kmp.window.WindowDialog
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 private data class Lv(val c: Char, val name: String, val color: Color)
@@ -77,6 +80,7 @@ private fun copy(ctx: Context, text: String, what: String) {
 @Composable
 fun LogPage(vm: MainViewModel) {
     val ctx = LocalContext.current
+    var selfCheck by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     var all by remember { mutableStateOf(L.entries()) }
     var levels by remember { mutableStateOf(setOf('E', 'W', 'I', 'D')) }   // 指标默认不看，太多
@@ -194,6 +198,42 @@ fun LogPage(vm: MainViewModel) {
                 }
             }
             Action(tr("清屏")) { L.clearView(); expanded = emptySet() }
+            Action(tr("自检")) { selfCheck = true }
+        }
+    }
+    if (selfCheck) AdbSelfCheckDialog { selfCheck = false }
+}
+
+/** 不装 Shizuku 也能用的 adb 自检命令（借鉴 mobile-rvc）：电脑上执行后把输出发给开发者 */
+val ADB_SELF_CHECK: String get() = listOf(
+    "adb shell getprop ro.product.model",
+    "adb shell getprop ro.build.version.release",
+    "adb shell getprop ro.soc.model",
+    "adb shell dumpsys package com.taocrypt.micmask | grep -E \"versionName|versionCode\"",
+    "adb shell dumpsys package moe.shizuku.privileged.api | grep versionName",
+    "adb shell \"ps -A | grep -iE 'shizuku|micmask'\"",
+    "adb shell appops get com.taocrypt.micmask RECORD_AUDIO",
+    "adb shell dumpsys audio | grep -iE \"mix|policy|record\" | head -n 60",
+    "adb shell \"dumpsys media.audio_policy | grep -iE 'mix|input' | head -n 60\"",
+    "adb logcat -d -s MicMask:V AudioRecord:W AudioPolicyService:W | tail -n 300",
+).joinToString("\n")
+
+@Composable
+private fun AdbSelfCheckDialog(onDismiss: () -> Unit) {
+    val ctx = LocalContext.current
+    WindowDialog(show = true, title = tr("adb 自检命令"),
+        summary = tr("连上电脑、打开 USB 调试，在电脑终端逐条执行，把输出连同日志一起发给开发者。不需要 Shizuku。"),
+        onDismissRequest = onDismiss) {
+        Column {
+            Text(ADB_SELF_CHECK, fontSize = 11.sp, fontFamily = FontFamily.Monospace,
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Color(0x14808080))
+                    .horizontalScroll(rememberScrollState()).padding(10.dp))
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(tr("关闭"), onClick = onDismiss, modifier = Modifier.weight(1f))
+                TextButton(tr("复制全部"), onClick = { copy(ctx, ADB_SELF_CHECK, tr("自检命令")); onDismiss() },
+                    modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary())
+            }
         }
     }
 }

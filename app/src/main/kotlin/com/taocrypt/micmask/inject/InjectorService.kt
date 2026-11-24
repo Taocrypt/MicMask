@@ -1157,6 +1157,7 @@ class InjectorService : Binder {
             "under=$underruns",
             "eng=${engine?.takeIf { engineState == "运行" }?.stats() ?: engineState}",
             "bench=${engine?.benchSummary ?: ""}",
+            "perf=${engine?.takeIf { engineState == "运行" }?.perf() ?: ""}",
             "gen=$engGen",
             "recPath=$recPath",
             "mic=$micHint",

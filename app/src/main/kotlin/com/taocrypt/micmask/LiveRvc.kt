@@ -175,7 +175,19 @@ class LiveRvc(private val open: (String) -> Any?) {
 
     private fun pct(a: List<Long>, p: Double): Long = if (a.isEmpty()) 0 else a.sorted()[((a.size - 1) * p).toInt()]
 
+    // 状态行用的滚动窗口（最近 30 块），和日志汇总（每 20 块清空）分开
+    private val wFeat = ArrayDeque<Long>(); private val wSyn = ArrayDeque<Long>(); private val wLag = ArrayDeque<Long>()
+    private var nBlocks = 0L; private var nOver = 0L
+    /** 给 UI 状态行：blk 块长 / feat syn lag 中位 / fp95 sp95 lp95 / over 超预算块 / n 推理块 / drop 丢块 / gated 静音块（键:值;） */
+    @Synchronized fun perf(): String {
+        if (wLag.isEmpty()) return "blk:${BLOCK * 10};n:0;gated:$gated;drop:$dropped"
+        return "blk:${BLOCK * 10};feat:${pct(wFeat.toList(), .5)};syn:${pct(wSyn.toList(), .5)};lag:${pct(wLag.toList(), .5)};" +
+            "fp95:${pct(wFeat.toList(), .95)};sp95:${pct(wSyn.toList(), .95)};lp95:${pct(wLag.toList(), .95)};over:$nOver;n:$nBlocks;drop:$dropped;gated:$gated"
+    }
     @Synchronized private fun record(feat: Long, syn: Long, lag: Long) {
+        wFeat.addLast(feat); wSyn.addLast(syn); wLag.addLast(lag)
+        while (wLag.size > 30) { wFeat.removeFirst(); wSyn.removeFirst(); wLag.removeFirst() }
+        nBlocks++; if (lag > BLOCK * 10) nOver++
         stFeat.add(feat); stSyn.add(syn); stLag.add(lag)
         if (stLag.size >= 20) {
             L.i("live 汇总(20块) 特征 p50=${pct(stFeat, .5)} p95=${pct(stFeat, .95)} max=${stFeat.max()}ms | 合成 p50=${pct(stSyn, .5)} p95=${pct(stSyn, .95)} max=${stSyn.max()}ms | " +
@@ -408,7 +420,7 @@ class LiveRvc(private val open: (String) -> Any?) {
         if (running) return
         running = true
         startT = System.nanoTime(); synchronized(trouble) { trouble.clear() }
-        java.util.Arrays.fill(history, 0f); fresh = 0; prevTail = null; dropped = 0; gated = 0; blkSeq = 0
+        java.util.Arrays.fill(history, 0f); fresh = 0; prevTail = null; dropped = 0; gated = 0; blkSeq = 0; synchronized(this) { wFeat.clear(); wSyn.clear(); wLag.clear(); nBlocks = 0; nOver = 0 }
         L.i("live 开始，semis=$semis")
         pump = Thread({ boost(); pumpLoop() }, "live-pump").apply { start() }
     }

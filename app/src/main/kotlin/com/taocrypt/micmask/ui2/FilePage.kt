@@ -200,6 +200,7 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
                     Spacer(Modifier.height(10.dp))
                     LinearProgressIndicator(progress = st.progress)
                     Text("${st.stage}  ${(st.progress * 100).roundToInt()}%", fontSize = 12.sp, color = Dim)
+                    if (st.fileVcStarted) TextButton(tr("取消转换"), onClick = { vm.cancelFileVc() }, modifier = Modifier.fillMaxWidth())
                 }
             }
         }

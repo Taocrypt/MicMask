@@ -34,7 +34,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         L.init(applicationContext)
         I18n.init(applicationContext)
-        handleIntent(intent)
+        if (savedInstanceState == null) handleIntent(intent)
         // 启动检查：开关关闭时也查，只为强制更新（Updater 内部只在强制时弹框）
         com.taocrypt.micmask.update.Updater.check(applicationContext, silent = true)
         setContent {
@@ -52,6 +52,14 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIntent(i: android.content.Intent?) {
         if (i?.getBooleanExtra("open_update", false) == true) com.taocrypt.micmask.update.Updater.dialog.value = true
+        // 从 QQ/微信/文件管理器「分享」或「打开方式」进来（借鉴 mobile-rvc）：交给界面按扩展名分流
+        val uris = when (i?.action) {
+            android.content.Intent.ACTION_SEND -> listOfNotNull(androidx.core.content.IntentCompat.getParcelableExtra(i, android.content.Intent.EXTRA_STREAM, android.net.Uri::class.java))
+            android.content.Intent.ACTION_SEND_MULTIPLE -> androidx.core.content.IntentCompat.getParcelableArrayListExtra(i, android.content.Intent.EXTRA_STREAM, android.net.Uri::class.java).orEmpty()
+            android.content.Intent.ACTION_VIEW -> listOfNotNull(i.data)
+            else -> emptyList()
+        }
+        if (uris.isNotEmpty()) { L.i("收到分享/打开 ${uris.size} 个文件 type=${i?.type}"); SharedIn.uris.value = uris; i?.action = null }
     }
 
     // 从系统授权页 / 无障碍设置返回时刷新状态
@@ -63,3 +71,6 @@ class MainActivity : ComponentActivity() {
         vmRef?.refreshLiveFloat()
     }
 }
+
+/** 外部分享/打开方式送进来的文件，界面取走后清空 */
+object SharedIn { val uris = kotlinx.coroutines.flow.MutableStateFlow<List<android.net.Uri>>(emptyList()) }

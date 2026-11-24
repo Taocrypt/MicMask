@@ -210,6 +210,12 @@ fun V2App(vm: MainViewModel) {
         LaunchedEffect(st.error) { st.error?.let { Toast.makeText(ctx, it, Toast.LENGTH_LONG).show(); vm.clearError() } }
 
         var sub by rememberSaveable { mutableStateOf<String?>(null) }
+        val shared by com.taocrypt.micmask.SharedIn.uris.collectAsStateWithLifecycle()
+        LaunchedEffect(shared) {
+            if (shared.isEmpty()) return@LaunchedEffect
+            val list = shared; com.taocrypt.micmask.SharedIn.uris.value = emptyList()
+            vm.handleShared(list)?.let { sub = it }
+        }
         // 主页当前 tab 提到外层：进二级页再返回时 MainTabs 会重建，靠它回到原来的 tab
         var mainPage by rememberSaveable { mutableStateOf(0) }
         LaunchedEffect(sub) { com.taocrypt.micmask.L.i("打开页面：${sub ?: "主页"}") }
@@ -400,7 +406,19 @@ private fun HeroCard(vm: MainViewModel, st: UiState, mode: Int) {
                 TextButton(tr("授权 Shizuku（切换到实时变声）"), onClick = { vm.setNormalMode(false) }, modifier = Modifier.fillMaxWidth())
                 return@Column
             }
-            if (st.liveMsg.isNotEmpty() && (mine || !st.liveOn)) Text(st.liveMsg, fontSize = 12.sp, color = fg2, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (mine && st.livePerf.isNotEmpty()) {
+                // 性能状态行：点一下展开各阶段耗时（借鉴 mobile-rvc）
+                var open by rememberSaveable { mutableStateOf(false) }
+                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { open = !open }.padding(vertical = 2.dp)) {
+                    Text(st.livePerf + if (open) "  ▴" else "  ▾", fontSize = 13.sp, color = fg, fontWeight = FontWeight.Medium)
+                    val warn = st.liveMsg.lines().filter { it.startsWith("⚠") }
+                    warn.forEach { Text(it, fontSize = 12.sp, color = fg2) }
+                    if (open) {
+                        Text(st.livePerfDetail, fontSize = 12.sp, color = fg2)
+                        Text(st.liveMsg.lines().first(), fontSize = 11.sp, color = fg2, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            } else if (st.liveMsg.isNotEmpty() && (mine || !st.liveOn)) Text(st.liveMsg, fontSize = 12.sp, color = fg2, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Button(
                 onClick = { vm.startMode(mode) },
                 enabled = !otherMode && !st.liveBenching,
@@ -1352,10 +1370,36 @@ private fun FloatLookSettings() {
     }
 }
 
+/** 可折叠分组标题（借鉴 mobile-rvc）：折叠后标题旁显示当前值摘要；折叠状态记在 ui prefs fold_<key> */
+@Composable
+private fun FoldTitle(key: String, title: String, summary: String, folded: Boolean, onToggle: (Boolean) -> Unit) {
+    val ctx = LocalContext.current
+    Row(Modifier.fillMaxWidth().clickable {
+            val f = !folded; ctx.getSharedPreferences("ui", 0).edit().putBoolean("fold_$key", f).apply(); onToggle(f)
+        }.padding(horizontal = 28.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Summary)
+        if (folded && summary.isNotEmpty()) Text(summary, Modifier.weight(1f).padding(start = 10.dp), fontSize = 12.sp, color = Summary,
+            maxLines = 1, overflow = TextOverflow.Ellipsis)
+        else Spacer(Modifier.weight(1f))
+        Text(if (folded) "▸" else "▾", fontSize = 14.sp, color = Summary)
+    }
+}
+
+@Composable
+private fun rememberFold(key: String): androidx.compose.runtime.MutableState<Boolean> {
+    val ctx = LocalContext.current
+    return remember { mutableStateOf(ctx.getSharedPreferences("ui", 0).getBoolean("fold_$key", false)) }
+}
+
 private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (String) -> Unit) {
-    item { SmallTitle(tr("变声设置")) }
     item {
-        Card(Modifier.fillMaxWidth().padding(PagePad)) {
+        var f by rememberFold("voice")
+        val sum = listOf(if (vm.scopeAuto()) tr("自动识别") else tr("手动 {0} 个", vm.whitelist().size),
+            if (st.liveAec) tr("降噪开") else tr("降噪关"), if (st.liveMonitor) tr("耳返开") else tr("耳返关"),
+            if (st.liveFloat) tr("悬浮窗开") else tr("悬浮窗关")).joinToString(" · ")
+        Column {
+        FoldTitle("voice", tr("变声设置"), sum, f) { f = it }
+        if (!f) Card(Modifier.fillMaxWidth().padding(PagePad)) {
             val n = vm.whitelist().size
             var auto by remember { mutableStateOf(vm.scopeAuto()) }
             WindowDropdownPreference(items = listOf(tr("自动识别"), tr("手动选择")), selectedIndex = if (auto) 0 else 1, title = tr("生效范围"),
@@ -1374,11 +1418,22 @@ private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (St
                 summary = tr("单击展开 · 双击打开 App · 长按关闭"))
             if (st.liveFloat) FloatLookSettings()
         }
+        }
     }
-    item { SmallTitle(tr("运行模式")) }
-    item { PermModeCard(vm, st) }
-    item { SmallTitle(tr("模型仓库")) }
-    item { RepoSetting(vm, st) }
+    item {
+        var f by rememberFold("mode")
+        Column {
+            FoldTitle("mode", tr("运行模式"), if (st.speakerMode) tr("普通模式（录播）") else tr("Shizuku 实时"), f) { f = it }
+            if (!f) PermModeCard(vm, st)
+        }
+    }
+    item {
+        var f by rememberFold("repo")
+        Column {
+            FoldTitle("repo", tr("模型仓库"), tr("{0}/{1} 个启用", st.repos.count { it.on }, st.repos.size), f) { f = it }
+            if (!f) RepoSetting(vm, st)
+        }
+    }
     item { SmallTitle(tr("其他")) }
     item {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {

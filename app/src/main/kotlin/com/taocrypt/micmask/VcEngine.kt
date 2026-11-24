@@ -121,7 +121,7 @@ class VcEngine(private val modelDirs: List<File>) {
             }
         }
 
-        pipeline = RvcPipeline(env, netG!!, hubert!!, rmvpe!!, index) { _, _ -> }
+        pipeline = RvcPipeline(env, netG!!, hubert!!, rmvpe!!, index) { st, pc -> prog(st, pc) }
         L.i("engine ready in ${System.currentTimeMillis() - t0} ms (index=${index != null})")
         onLog(tr("模型就绪"))
     }
@@ -144,10 +144,14 @@ class VcEngine(private val modelDirs: List<File>) {
         pipeline = null
     }
 
+    /** 阶段进度转发；回调里抛异常可在阶段之间中止（取消） */
+    @Volatile private var prog: (String, Float) -> Unit = { _, _ -> }
+
     fun convert(audio16k: FloatArray, cfg: RvcConfig, onProgress: (String, Float) -> Unit): FloatArray {
         val p = pipeline ?: throw IllegalStateException(tr("模型还没加载"))
         val t0 = System.currentTimeMillis()
-        val out = p.convert(audio16k, cfg.copy(captureDebug = false))
+        prog = onProgress
+        val out = try { p.convert(audio16k, cfg.copy(captureDebug = false)) } finally { prog = { _, _ -> } }
         L.i(
             "convert done: in=${audio16k.size} out=${out.size} " +
                 "elapsed=${System.currentTimeMillis() - t0}ms"

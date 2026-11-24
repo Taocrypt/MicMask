@@ -354,7 +354,7 @@ object MicInjector {
                     val kv = s.split("|").mapNotNull { p -> p.split("=", limit = 2).takeIf { it.size == 2 } }
                         .associate { it[0] to it[1] }
                     if (kv["phase"] != "LIVE") {
-                        liveOn = false
+                        liveOn = false; perfLine = ""; perfDetail = ""
                         val e = kv["err"].orEmpty()
                         main.post { status(if (e.isNotEmpty()) tr("已停止：{0}", e) else tr("已停止")) }
                         setPhase(if (e.isNotEmpty()) Phase.ERROR else Phase.IDLE, if (e.isNotEmpty()) e else tr("实时变声已停止"))
@@ -366,6 +366,7 @@ object MicInjector {
                     kv["recPath"]?.takeIf { it.isNotEmpty() }?.let { recPathNow = it }
                     kv["under"]?.toLongOrNull()?.let { underNow = it }
                     kv["bench"]?.takeIf { it.isNotEmpty() && it != lastBench }?.let { b -> lastBench = b; onBench?.invoke(b) }
+                    perfOf(kv)
                     main.post { status((modeLabel ?: if (external) tr("AI 变声") else tr("普通变声")) + tr(" · 麦电平 {0} · 目标在录={1} · 缓冲 {2} ms · 断流 {3}", kv["live"], kv["recs"], (kv["outBuf"]?.toIntOrNull() ?: 0) / 48, kv["under"]) + (kv["eng"]?.takeIf { it.isNotEmpty() }?.let { " · $it" } ?: statusExtra?.invoke()?.let { " · $it" } ?: "") +
                         // shell 侧 micHint 原文（供 i18n_check）：tr("没有收到麦克风数据，正在重建录音") tr("采集到的是纯静音（麦克风可能被系统静音或被占用）") tr("麦克风被系统静音（其他应用可能占用了录音）")
                         (kv["mic"]?.takeIf { it.isNotEmpty() }?.let { "\n⚠ " + tr(it) } ?: "")) }
@@ -373,6 +374,33 @@ object MicInjector {
                 }
             }.start()
         }
+    }
+
+    /** 状态行性能摘要（估计延迟/推理/实时率）与展开后的各阶段明细；非 AI 模式为空 */
+    @Volatile var perfLine = ""
+    @Volatile var perfDetail = ""
+    private fun perfOf(kv: Map<String, String>) {
+        val p = kv["perf"].orEmpty().split(";").mapNotNull { it.split(":", limit = 2).takeIf { a -> a.size == 2 } }.associate { it[0] to (it[1].toLongOrNull() ?: 0L) }
+        val ob = (kv["outBuf"]?.toIntOrNull() ?: 0) / 48
+        val blk = p["blk"] ?: 0L
+        if (blk <= 0L) { perfLine = ""; perfDetail = ""; return }
+        if ((p["n"] ?: 0L) == 0L) {
+            perfLine = tr("等待说话… · 块长 {0} ms", blk)
+            perfDetail = tr("输出缓冲 {0} ms · 断流 {1} · 麦电平 {2} · 目标在录 {3}", ob, kv["under"], kv["live"], kv["recs"])
+            return
+        }
+        val feat = p["feat"] ?: 0L; val syn = p["syn"] ?: 0L; val lag = p["lag"] ?: 0L
+        val est = blk + lag + ob
+        val rtf = maxOf(feat, syn).toFloat() / blk
+        perfLine = tr("延迟约 {0} ms · 推理 {1} ms · 实时率 {2}", est, maxOf(feat, syn), "%.2f".format(rtf)) + if (rtf > 0.9f) " ⚠" else ""
+        perfDetail = listOf(
+            tr("特征 {0} / {1} ms（中位/p95）", feat, p["fp95"]),
+            tr("合成 {0} / {1} ms（中位/p95）", syn, p["sp95"]),
+            tr("端到端 {0} / {1} ms · 块长 {2} ms", lag, p["lp95"], blk),
+            tr("超预算 {0}/{1} 块 · 丢块 {2} · 静音块 {3}", p["over"], p["n"], p["drop"], p["gated"]),
+            tr("输出缓冲 {0} ms · 断流 {1} · 麦电平 {2} · 目标在录 {3}", ob, kv["under"], kv["live"], kv["recs"]),
+            tr("估计延迟 = 块长 + 端到端 + 输出缓冲；实时率 = 较慢一段 ÷ 块长，接近 1 会断音"),
+        ).joinToString("\n")
     }
 
     /** 附加状态（实时 RVC 引擎的耗时等） */
@@ -497,7 +525,7 @@ object MicInjector {
     }
 
     fun stopLive() {
-        liveOn = false
+        liveOn = false; perfLine = ""; perfDetail = ""
         runCatching { call(InjectorService.TX_DISARM) { } }
         setPhase(Phase.IDLE, tr("实时变声已停止，真麦克风已还原"))
     }

@@ -47,10 +47,35 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- 分享 / 打开方式：音频送去文件变声，.onnx/.zip 导入模型 -->
+            <intent-filter android:label="@string/share_label">
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="audio/*" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
+            </intent-filter>
+            <intent-filter android:label="@string/share_label">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="audio/*" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="application/zip" />
+            </intent-filter>
         </activity>
 
         <!-- QQ 语音代发：监听 QQ 进入录音态，自动外放合成好的语音 -->
         <!-- 应用内更新下载：前台服务保证通知常驻、进度实时刷新 -->
+        <!-- 文件变声：前台服务显示分段进度、可取消 -->
+        <service
+            android:name=".FileVcService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
         <service
             android:name=".update.UpdateService"
             android:exported="false"
