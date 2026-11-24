@@ -607,6 +607,8 @@ private fun PresetBar(vm: MainViewModel, st: UiState, mode: Int, builtins: List<
 
 private fun LazyListScope.voicePage(vm: MainViewModel, st: UiState, open: (String) -> Unit) {
     if (com.taocrypt.micmask.BeaconHub.banners.isNotEmpty()) item(key = "beacon_banners") { BeaconBanners() }
+    // 推荐位 banner：复用横幅样式，排在公告横幅之后，标题前自动打「推广」
+    item(key = "slot_banner") { BeaconSlotBanner(st.liveOn) }
     item(key = "mode_switch") { ModeSwitch(vm, st) }
     if (st.voiceTab == 0) aiPage(vm, st, open) else pitchPage(vm, st)
     item(key = "slot_home_bottom") { BeaconSlotCard("home_bottom", st.liveOn, Modifier.fillMaxWidth().padding(PagePad).padding(top = 12.dp)) }

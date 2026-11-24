@@ -345,6 +345,39 @@ fun BeaconBanners() {
     }
 }
 
+/**
+ * 推荐位 banner（alpha97）：外形同横幅公告，标题前固定「推广」标签，slot.image 作头图、subtitle 作正文；
+ * 点卡片打开链接，关闭只隐藏这一条到当天 24:00；变声中隐藏。
+ */
+@Composable
+fun BeaconSlotBanner(liveOn: Boolean) {
+    val s = rememberSlot("banner", liveOn) ?: return
+    val ctx = LocalContext.current
+    val img = rememberBeaconImage(s.image, header = true)
+    Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 12.dp), onClick = { BeaconHub.openSlot(ctx, s) }) {
+        Column(Modifier.padding(start = 16.dp, top = 8.dp, bottom = 12.dp, end = 4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                val c = Color(0xFF8250DF)
+                Text(tr("推广"), fontSize = 11.sp, fontWeight = FontWeight.Medium, color = c,
+                    modifier = Modifier.background(c.copy(alpha = 0.12f), RoundedCornerShape(6.dp)).padding(horizontal = 7.dp, vertical = 2.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(s.title, fontWeight = FontWeight.Medium, fontSize = 15.sp, modifier = Modifier.weight(1f),
+                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+                IconButton(onClick = { BeaconHub.dismissSlotItem(s, "banner") }) {
+                    Icon(MiuixIcons.Close, tr("关闭推荐"), tint = Dim, modifier = Modifier.size(18.dp))
+                }
+            }
+            img?.let {
+                val ratio = (it.width.toFloat() / it.height.coerceAtLeast(1)).coerceIn(2.2f, 3f)
+                Box(Modifier.padding(end = 12.dp, bottom = 8.dp).fillMaxWidth().aspectRatio(ratio).clip(RoundedCornerShape(12.dp))) {
+                    Image(it, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                }
+            }
+            if (s.subtitle.isNotBlank()) Text(s.subtitle, fontSize = 13.sp, lineHeight = 19.sp, color = Dim, modifier = Modifier.padding(end = 12.dp))
+        }
+    }
+}
+
 // ------------------------------------------------------------------ 推荐位
 
 /**
