@@ -114,7 +114,7 @@ internal fun openQqGroup(ctx: Context) {
 }
 
 @Composable
-fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit = {}, openDisclaimer: () -> Unit = {}, openRefs: () -> Unit = {}, openPrivacy: () -> Unit = {}) {
+fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit = {}, openDisclaimer: () -> Unit = {}, openRefs: () -> Unit = {}, openPrivacy: () -> Unit = {}, openFeedback: () -> Unit = {}) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val upd by Updater.state.collectAsState()
@@ -196,7 +196,8 @@ fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit =
         SmallTitle(tr("交流反馈"))
         Card(Modifier.fillMaxWidth().padding(pad)) {
             ArrowPreference(title = tr("加群交流"), summary = tr("加入MicMask用户交流Q群"), onClick = { openQqGroup(ctx) })
-            ArrowPreference(title = tr("提交问题"), summary = tr("GitHub Issues，附上日志更快定位"), onClick = { openUrl(ctx, AboutLinks.ISSUES) })
+            ArrowPreference(title = tr("反馈问题"), summary = if (com.taocrypt.micmask.BeaconHub.enabled) tr("描述问题，可附带日志和截图")
+                else tr("QQ 群 {0} · GitHub Issues", AboutLinks.QQ_GROUP_NO), onClick = openFeedback)
         }
         val liveOn = vm.state.collectAsState().value.liveOn
         BeaconSlotCard("about", liveOn, Modifier.fillMaxWidth().padding(pad).padding(top = 12.dp))
@@ -209,15 +210,15 @@ fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit =
                 enabled = ready, onClick = { if (ready) openUrl(ctx, AboutLinks.DONATE) })
         }
 
-        // ---- 其他：免责声明 + 参考项目（二级页） ----
+        // ---- 其他：匿名统计、隐私说明、免责声明、参考项目 ----
         SmallTitle(tr("其他"))
         Card(Modifier.fillMaxWidth().padding(pad)) {
-            ArrowPreference(title = tr("免责声明"), summary = tr("版权归属、使用准则与隐私"), onClick = openDisclaimer)
-            ArrowPreference(title = tr("参考项目"), summary = AboutLinks.REFS.joinToString(" · ") { it.first }, onClick = openRefs)
             val hub = com.taocrypt.micmask.BeaconHub
             if (hub.enabled) SwitchPreference(checked = hub.analytics, onCheckedChange = { hub.setAnalytics(it) }, title = tr("匿名统计"),
                 summary = if (hub.analytics) tr("已开：上报版本、机型、功能使用与崩溃信息，不含录音") else tr("已关：只上报基础统计（启动、公告与推荐的曝光点击）"))
             ArrowPreference(title = tr("隐私说明"), summary = if (hub.enabled) tr("收集什么、不收集什么") else tr("当前版本未启用统计"), onClick = openPrivacy)
+            ArrowPreference(title = tr("免责声明"), summary = tr("版权归属、使用准则与隐私"), onClick = openDisclaimer)
+            ArrowPreference(title = tr("参考项目"), summary = AboutLinks.REFS.joinToString(" · ") { it.first }, onClick = openRefs)
         }
         Text("© 2026 Taocrypt · Made with AI & ❤️",
             fontSize = 11.sp, color = summary, textAlign = TextAlign.Center,

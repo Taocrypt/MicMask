@@ -239,7 +239,7 @@ fun V2App(vm: MainViewModel) {
                     "file" -> SubPage(tr("文件变声"), { sub = null }) { FilePage(vm, st) }
                     "whitelist" -> SubPage(tr("目标应用"), { sub = null }) { WhitelistPage(vm) }
                     "theme" -> SubPage(tr("外观"), { sub = null }) { ThemePage(ui) }
-                    "about" -> SubPage(tr("关于"), { sub = null }) { AboutPage(vm, { sub = "logs" }, { sub = "mirrors" }, { sub = "disclaimer" }, { sub = "refs" }, { sub = "privacy" }) }
+                    "about" -> SubPage(tr("关于"), { sub = null }) { AboutPage(vm, { sub = "logs" }, { sub = "mirrors" }, { sub = "disclaimer" }, { sub = "refs" }, { sub = "privacy" }, { sub = "feedback" }) }
                     "disclaimer" -> SubPage(tr("免责声明"), { sub = "about" }) { DisclaimerPage() }
                     "refs" -> SubPage(tr("参考项目"), { sub = "about" }) { RefsPage() }
                     "mirrors" -> SubPage(tr("下载镜像"), { sub = "about" }) { com.taocrypt.micmask.update.MirrorPage() }
@@ -1375,8 +1375,6 @@ private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (St
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
             ArrowPreference(title = tr("外观"), summary = tr("深浅色、莫奈取色、液态玻璃"), onClick = { open("theme") })
             ArrowPreference(title = tr("日志"), summary = tr("查看、筛选、导出日志"), onClick = { open("logs") })
-            ArrowPreference(title = tr("反馈问题"), summary = if (com.taocrypt.micmask.BeaconHub.enabled) tr("描述问题，可附带日志和截图")
-                else tr("QQ 群 {0} · GitHub Issues", AboutLinks.QQ_GROUP_NO), onClick = { open("feedback") })
             ArrowPreference(title = tr("音频还原"), summary = tr("应用没声音时点这里还原"), onClick = { vm.repairAudio() })
             ArrowPreference(title = tr("关于 MicMask"), summary = tr("v{0} · 更新、反馈、赞赏", com.taocrypt.micmask.BuildConfig.VERSION_NAME), onClick = { open("about") })
         }
