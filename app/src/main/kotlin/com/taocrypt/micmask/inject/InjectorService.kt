@@ -122,6 +122,12 @@ class InjectorService : Binder {
     @Volatile private var phase = "IDLE"        // IDLE / WAITING / PLAYING / TAIL
     @Volatile private var lastError = ""
     @Volatile private var targetSeenRecording = false
+    /** 自动识别范围：不按 uid，按录音源接管所有应用（排除 shell 和 MicMask 自己） */
+    @Volatile private var scopeAll = false
+    /** 自动范围但系统不支持排除规则：shell 自己改用 VOICE_PERFORMANCE 录音，避免录到自己注入的声音 */
+    @Volatile private var autoNoExclude = false
+    @Volatile private var callingUidNow = -1
+    @Volatile private var callerUid = -1
 
     private val shellCtx: Context? by lazy { ctx?.let { ShellContext(it) } }
     private val am: AudioManager? by lazy {
@@ -137,11 +143,13 @@ class InjectorService : Binder {
     override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
         // ⚠️ 必须清掉调用方身份：否则 AudioPolicy 内部 checkCallingOrSelfPermission 查的是
         // App 的 uid（没有 MODIFY_AUDIO_ROUTING），createAudioTrackSource 会直接返回 null。
+        callingUidNow = Binder.getCallingUid()
         val ident = Binder.clearCallingIdentity()
         try { return transactInner(code, data, reply, flags) } finally { Binder.restoreCallingIdentity(ident) }
     }
 
     private fun transactInner(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
+        callerUid = callingUidNow
         try {
             when (code) {
                 TX_DESTROY -> {
@@ -411,7 +419,7 @@ class InjectorService : Binder {
     @Synchronized
     private fun arm(uids: IntArray, auto: Boolean, tmo: Long, live: Boolean = false): String? {
         disarm("re-arm")
-        if (uids.isEmpty() || uids.any { it < 10000 }) return "目标 uid 无效：${uids.joinToString()}"
+        if (uids.any { it < 10000 }) return "目标 uid 无效：${uids.joinToString()}"
         if (Build.VERSION.SDK_INT < 29) return "需要 Android 10 及以上"
         if (!hasRoutingPermission()) return "当前 ROM 的 shell 没有 MODIFY_AUDIO_ROUTING 权限"
         val c = shellCtx ?: return "服务没有拿到 Context（Shizuku 版本过低？）"
@@ -437,8 +445,32 @@ class InjectorService : Binder {
                     .invoke(rb, mixCls.getField("MIX_TYPE_RECORDERS").getInt(null))
             }
             val ruleUid = ruleCls.getField("RULE_MATCH_UID").getInt(null)
-            for (u in uids) ruleB.getMethod("addMixRule", I, Any::class.java).invoke(rb, ruleUid, Integer.valueOf(u))
-            val rule = ruleB.getMethod("build").invoke(rb)
+            scopeAll = uids.isEmpty()
+            autoNoExclude = false
+            val rule: Any
+            if (!scopeAll) {
+                for (u in uids) ruleB.getMethod("addMixRule", I, Any::class.java).invoke(rb, ruleUid, Integer.valueOf(u))
+                rule = ruleB.getMethod("build").invoke(rb)
+            } else {
+                // 自动识别：按录音源接管（MIC / CAMCORDER / VOICE_RECOGNITION / VOICE_COMMUNICATION / UNPROCESSED）
+                val rulePreset = ruleCls.getField("RULE_MATCH_ATTRIBUTE_CAPTURE_PRESET").getInt(null)
+                val aab = Class.forName("android.media.AudioAttributes\$Builder")
+                for (p in intArrayOf(1, 5, 6, 7, 9)) {
+                    val b = aab.getConstructor().newInstance()
+                    aab.getMethod("setCapturePreset", I).invoke(b, p)
+                    val attr = aab.getMethod("build").invoke(b)
+                    ruleB.getMethod("addMixRule", I, Any::class.java).invoke(rb, rulePreset, attr)
+                }
+                // 排除 shell（我们自己的真麦录音）和 MicMask App，否则会把注入的声音又录回来
+                val ex = runCatching {
+                    for (u in listOf(Process.myUid(), callerUid).filter { it >= 0 }.distinct())
+                        ruleB.getMethod("excludeMixRule", I, Any::class.java).invoke(rb, ruleUid, Integer.valueOf(u))
+                }
+                val built = if (ex.isSuccess) runCatching { ruleB.getMethod("build").invoke(rb) }.getOrNull() else null
+                if (built == null) autoNoExclude = true
+                rule = built ?: buildPresetRuleNoExclude(ruleB, ruleCls, mixCls)
+                slog('I', "自动识别范围：排除规则=${if (autoNoExclude) "不支持（shell 改用 VOICE_PERFORMANCE 录音）" else "已排除 uid ${Process.myUid()},$callerUid"}")
+            }
 
             val fmt = AudioFormat.Builder()
                 .setSampleRate(SR)
@@ -488,6 +520,22 @@ class InjectorService : Binder {
         worker = Thread({ if (live) liveLoop() else loop() }, "micmask-inject-pcm").apply { isDaemon = true; start() }
         slog('I', "ARMED uids=${uids.joinToString()} baseRec=$baseRecCount auto=$auto pcm=${pcm.size}")
         return null
+    }
+
+    /** 不带排除规则的录音源规则（系统不支持 excludeMixRule 时） */
+    private fun buildPresetRuleNoExclude(ruleB: Class<*>, ruleCls: Class<*>, mixCls: Class<*>): Any {
+        val I = Integer.TYPE
+        val rb = ruleB.getConstructor().newInstance()
+        val roleOk = runCatching { ruleB.getMethod("setTargetMixRole", I).invoke(rb, ruleCls.getField("MIX_ROLE_INJECTOR").getInt(null)) }.isSuccess
+        if (!roleOk) ruleB.getMethod("setTargetMixType", I).invoke(rb, mixCls.getField("MIX_TYPE_RECORDERS").getInt(null))
+        val rulePreset = ruleCls.getField("RULE_MATCH_ATTRIBUTE_CAPTURE_PRESET").getInt(null)
+        val aab = Class.forName("android.media.AudioAttributes\$Builder")
+        for (p in intArrayOf(1, 5, 6, 7, 9)) {
+            val b = aab.getConstructor().newInstance()
+            aab.getMethod("setCapturePreset", I).invoke(b, p)
+            ruleB.getMethod("addMixRule", I, Any::class.java).invoke(rb, rulePreset, aab.getMethod("build").invoke(b))
+        }
+        return ruleB.getMethod("build").invoke(rb)
     }
 
     private fun startPlayback(why: String) {
@@ -803,8 +851,10 @@ class InjectorService : Binder {
             /** 建录音 + AEC/NS + 开始；失败返回 null（lastError 已写） */
             fun openRec(): android.media.AudioRecord? {
                 // 常规 Builder → 失败则 native_setup 兜底（vivo 等 ROM 改了构造）；recCompat=强制兜底，用于测试
+                // 自动范围且无法排除自己：shell 用不在接管列表里的 VOICE_PERFORMANCE 录真麦
+                if (scopeAll && autoNoExclude && Build.VERSION.SDK_INT >= 29 && liveSource != 10) { slog('I', "录音源改为 VOICE_PERFORMANCE（避免录到注入声）"); liveSource = 10 }
                 var res = ShellAudioRecord.create(liveSource, SR, bufBytes, c, recCompat, log)
-                if (res.rec == null && liveSource != android.media.MediaRecorder.AudioSource.MIC) {
+                if (res.rec == null && !(scopeAll && autoNoExclude) && liveSource != android.media.MediaRecorder.AudioSource.MIC) {
                     slog('W', "录音源 $liveSource 初始化失败，退回 MIC")
                     liveSource = android.media.MediaRecorder.AudioSource.MIC
                     res = ShellAudioRecord.create(liveSource, SR, bufBytes, c, recCompat, log)
@@ -1044,6 +1094,7 @@ class InjectorService : Binder {
             val getUid = android.media.AudioRecordingConfiguration::class.java.getMethod("getClientUid")
             val us = list.map { getUid.invoke(it) as Int }
             when {
+                scopeAll && us.any { it >= 10000 && it != callerUid } -> { trigger = "auto"; true }
                 us.any { it in targetUids } -> { trigger = "uid"; true }
                 us.none { it >= 10000 } && list.size > baseRecCount -> { trigger = "count"; true }
                 else -> false
@@ -1083,7 +1134,7 @@ class InjectorService : Binder {
             "phase=$phase",
             "uid=${Process.myUid()}",
             "perm=${if (hasRoutingPermission()) 1 else 0}",
-            "target=${targetUids.joinToString(",")}",
+            "target=${if (scopeAll) "auto" else targetUids.joinToString(",")}",
             "trig=$trigger",
             "recs=${recCount()}",
             "seenRec=${if (targetSeenRecording) 1 else 0}",

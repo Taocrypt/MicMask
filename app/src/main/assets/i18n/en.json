@@ -1005,5 +1005,12 @@
   "这笔赞助用订单号关联的次数已用完（每 30 天最多 3 次），请稍后再试或在交流群联系作者。": "This sponsorship has used up its order-number links (max 3 per 30 days). Please try again later or contact the author in the group.",
   "没有收到麦克风数据，正在重建录音": "No microphone data, rebuilding the recorder",
   "采集到的是纯静音（麦克风可能被系统静音或被占用）": "Captured pure silence (the mic may be muted by the system or in use)",
-  "麦克风被系统静音（其他应用可能占用了录音）": "Mic muted by the system (another app may be recording)"
+  "麦克风被系统静音（其他应用可能占用了录音）": "Mic muted by the system (another app may be recording)",
+  "注入 → 自动识别": "Inject → Auto-detect",
+  "自动识别录音应用 · {0}": "Auto-detect recording apps · {0}",
+  "自动识别": "Auto-detect",
+  "手动选择": "Manual",
+  "生效范围": "Scope",
+  "任何应用开始录音都会变声，不用选应用": "Any app that starts recording gets the changed voice; no need to pick apps",
+  "只对下面选中的目标应用变声": "Only the target apps selected below"
 }

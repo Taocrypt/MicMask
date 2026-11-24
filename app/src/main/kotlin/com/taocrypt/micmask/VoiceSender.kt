@@ -219,6 +219,7 @@ object VoiceSender {
             else -> Route.SPEAKER
         }
         sp.getString("qqInjectTarget", null)?.takeIf { it.isNotBlank() }?.let { injectTarget = it }
+        com.taocrypt.micmask.inject.MicInjector.loadScope(sp)
     }
 
     val ready: Boolean get() = armed && pendingFile != null
@@ -535,7 +536,7 @@ object VoiceSender {
     /** 注入模式：交给 MicInjector，状态映射回 onState / onFinished */
     private fun startInject(ctx: Context, f: File): Boolean {
         val inj = com.taocrypt.micmask.inject.MicInjector
-        lastOutputName = tr("注入 → {0}", injectTarget)
+        lastOutputName = if (com.taocrypt.micmask.inject.MicInjector.scopeAuto) tr("注入 → 自动识别") else tr("注入 → {0}", injectTarget)
         lastBlockedByHeadset = false
         inj.onPhase = { p, msg ->
             injectMessage = msg

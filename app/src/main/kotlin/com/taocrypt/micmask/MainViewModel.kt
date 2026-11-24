@@ -313,6 +313,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         com.taocrypt.micmask.inject.MicInjector.forceNormal = prefs.getBoolean("force_normal", false)
         com.taocrypt.micmask.inject.MicInjector.recCompat = prefs.getBoolean("rec_compat", false)
+        com.taocrypt.micmask.inject.MicInjector.loadScope(prefs)
         _state.value = _state.value.copy(forceNormal = com.taocrypt.micmask.inject.MicInjector.forceNormal)
         // Toast 由 ViewModel 直接用系统 Toast 弹出：App 在后台（悬浮窗操作）时也能看到
         viewModelScope.launch {
@@ -912,10 +913,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         val src = if (_state.value.liveAec) android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION else android.media.MediaRecorder.AudioSource.MIC
-        if (whitelist().isEmpty()) L.i("UI 白名单为空：只做本机试听（目标=自身）")
+        if (!scopeAuto() && whitelist().isEmpty()) L.i("UI 白名单为空：只做本机试听（目标=自身）")
         Thread { runCatching { com.taocrypt.micmask.inject.MicInjector.auditPlayAudio() } }.start()
         com.taocrypt.micmask.inject.MicInjector.modeLabel = listOf(tr("AI 变声"), tr("普通变声"), tr("虚拟声卡")).getOrNull(_state.value.liveMode)
-        L.i("UI 开始实时变声：模式=${com.taocrypt.micmask.inject.MicInjector.modeLabel} 录音=${if (_state.value.liveAec) "通话(回声消除)" else "原始麦克风"} 半音=${_state.value.liveSemis} 目标=${_state.value.qqInjectTarget}")
+        L.i("UI 开始实时变声：模式=${com.taocrypt.micmask.inject.MicInjector.modeLabel} 录音=${if (_state.value.liveAec) "通话(回声消除)" else "原始麦克风"} 半音=${_state.value.liveSemis} 目标=${if (scopeAuto()) "自动识别" else _state.value.qqInjectTarget}")
         _state.value = _state.value.copy(liveOn = true, liveMsg = tr("启动中…"))
         val cb: (String) -> Unit = { msg ->
             val ended = msg.startsWith("已停止") || msg.contains("失败") || msg.startsWith("缺") || msg.startsWith("没找到") || msg.contains("Shizuku") ||
@@ -1789,6 +1790,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun recCompat(): Boolean = com.taocrypt.micmask.inject.MicInjector.recCompat
+
+    /** 生效范围：自动识别 / 手动选择目标应用 */
+    fun scopeAuto(): Boolean = com.taocrypt.micmask.inject.MicInjector.scopeAuto
+    fun setScopeAuto(on: Boolean) {
+        prefs.edit().putBoolean("scope_auto", on).apply()
+        com.taocrypt.micmask.inject.MicInjector.scopeAuto = on
+        L.i("UI 生效范围 → ${if (on) "自动识别" else "手动"}")
+    }
 
     /** 设置页权限模式：true=普通模式（扬声器外放/录播），false=Shizuku 实时注入 */
     fun setNormalMode(normal: Boolean) {

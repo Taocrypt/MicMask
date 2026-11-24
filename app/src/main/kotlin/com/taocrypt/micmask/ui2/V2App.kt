@@ -387,7 +387,7 @@ private fun HeroCard(vm: MainViewModel, st: UiState, mode: Int) {
                     Text(when { mine -> tr("正在变声"); otherMode -> tr("另一模式运行中"); else -> tr("未运行") },
                         fontWeight = FontWeight.Bold, fontSize = 20.sp, color = fg)
                     val target = vm.whitelist()
-                    Text(if (st.speakerMode) tr("外放模式 · 扬声器播放，对方也会听到原声") else if (target.isEmpty()) tr("未选目标应用 · 仅本机试听") else tr("目标 {0} 个应用 · {1}", target.size, if (st.liveAec) tr("通话录音") else tr("原始麦克风")),
+                    Text(if (st.speakerMode) tr("外放模式 · 扬声器播放，对方也会听到原声") else if (vm.scopeAuto()) tr("自动识别录音应用 · {0}", if (st.liveAec) tr("通话录音") else tr("原始麦克风")) else if (target.isEmpty()) tr("未选目标应用 · 仅本机试听") else tr("目标 {0} 个应用 · {1}", target.size, if (st.liveAec) tr("通话录音") else tr("原始麦克风")),
                         fontSize = 13.sp, color = fg2)
                 }
             }
@@ -1354,7 +1354,11 @@ private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (St
     item {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
             val n = vm.whitelist().size
-            ArrowPreference(title = tr("目标应用"), summary = if (st.liveOn) tr("变声中不可修改，先关闭变声") else if (n == 0) tr("未选择，只做本机试听") else tr("已选 {0} 个应用", n),
+            var auto by remember { mutableStateOf(vm.scopeAuto()) }
+            WindowDropdownPreference(items = listOf(tr("自动识别"), tr("手动选择")), selectedIndex = if (auto) 0 else 1, title = tr("生效范围"),
+                summary = if (st.liveOn) tr("变声中不可修改，先关闭变声") else if (auto) tr("任何应用开始录音都会变声，不用选应用") else tr("只对下面选中的目标应用变声"),
+                enabled = !st.liveOn, onSelectedIndexChange = { auto = it == 0; vm.setScopeAuto(auto) })
+            if (!auto) ArrowPreference(title = tr("目标应用"), summary = if (st.liveOn) tr("变声中不可修改，先关闭变声") else if (n == 0) tr("未选择，只做本机试听") else tr("已选 {0} 个应用", n),
                 enabled = !st.liveOn, onClick = { if (st.liveOn) vm.toast(tr("请先关闭变声，再修改目标应用")) else open("whitelist") })
             SwitchPreference(checked = st.liveAec, onCheckedChange = { if (it != st.liveAec) vm.toggleLiveAecAnywhere() }, title = tr("降噪模式"),
                 summary = (if (st.liveAec) tr("已开：回声消除 + 降噪") else tr("已关：原始麦克风，音质优先")) + if (st.liveOn) tr("（切换会重启变声）") else "")

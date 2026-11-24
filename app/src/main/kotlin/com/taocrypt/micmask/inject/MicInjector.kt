@@ -95,6 +95,12 @@ object MicInjector {
     @Volatile var forceNormal = false
     /** 设置「兼容录音」：shell 端跳过常规 AudioRecord，强制 native_setup 兜底（测试/排障用） */
     @Volatile var recCompat = false
+    /** 生效范围：true=自动识别（任何应用用麦克风/通话等录音源录音都会被接管，不用选应用），false=只对「目标应用」生效 */
+    @Volatile var scopeAuto = false
+    fun loadScope(sp: android.content.SharedPreferences) {
+        // 老用户沿用手动（他们选过目标应用）；新装默认自动
+        scopeAuto = sp.getBoolean("scope_auto", sp.getString("qqInjectTarget", null) == null)
+    }
 
     /** 变声是否走 Shizuku 注入（已授权且用户没选普通模式） */
     fun shizukuGranted(): Boolean = !forceNormal && shizukuPermitted()
@@ -296,8 +302,8 @@ object MicInjector {
     fun inject(ctx: Context, wav: File, targetPkg: String, timeoutMs: Long = 60_000L) {
         val app = ctx.applicationContext
         val pkgs = targetPkg.split(',', ' ', ';').map { it.trim() }.filter { it.isNotEmpty() }
-        val uids = pkgs.map { uidOf(app, it) }.filter { it >= 0 }.distinct().toIntArray()
-        if (uids.isEmpty()) { setPhase(Phase.ERROR, tr("没找到目标 App：{0}", targetPkg)); return }
+        val uids = if (scopeAuto) IntArray(0) else pkgs.map { uidOf(app, it) }.filter { it >= 0 }.distinct().toIntArray()
+        if (uids.isEmpty() && !scopeAuto) { setPhase(Phase.ERROR, tr("没找到目标 App：{0}", targetPkg)); return }
         ensureBound(app) {
             Thread {
                 try {
@@ -326,8 +332,8 @@ object MicInjector {
     fun startLive(ctx: Context, targetPkg: String, semis: Float, source: Int, external: Boolean = false, primeMs: Int = 100, rvcInShell: Boolean = false, status: (String) -> Unit) {
         val app = ctx.applicationContext
         val uids = targetPkg.split(',', ' ', ';').map { it.trim() }.filter { it.isNotEmpty() }
-            .map { uidOf(app, it) }.filter { it >= 0 }.distinct().toIntArray()
-        if (uids.isEmpty()) { status(tr("没找到目标 App：{0}", targetPkg)); return }
+            .map { uidOf(app, it) }.filter { it >= 0 }.distinct().toIntArray().let { if (scopeAuto) IntArray(0) else it }
+        if (uids.isEmpty() && !scopeAuto) { status(tr("没找到目标 App：{0}", targetPkg)); return }
         if (!shizukuGranted()) { status(if (shizukuRunning()) tr("还没授权 Shizuku") else tr("Shizuku 没有运行")); return }
         ensureBound(app) {
             Thread {
