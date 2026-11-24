@@ -166,6 +166,8 @@ class LiveRvc(private val open: (String) -> Any?) {
     @Volatile var lastFeatMs = 0L; private set
     @Volatile var lastSynMs = 0L; private set
     @Volatile var dropped = 0L; private set
+    /** 最近一块真实推理的端到端延迟，静音块按它延后送出 */
+    @Volatile private var lastLagMs = 0L
     private var blkSeq = 0L
     private var gated = 0L
     private val stFeat = ArrayList<Long>(); private val stSyn = ArrayList<Long>(); private val stLag = ArrayList<Long>()
@@ -524,7 +526,17 @@ class LiveRvc(private val open: (String) -> Any?) {
                 if (db < gateDb) {
                     gated++
                     if (gated % 10 == 1L) L.m("live 块#$id 静音（${"%.0f".format(db)}dB < $gateDb）跳过推理")
-                    synExec.execute { emit(FloatArray(LEN * UPP)); inflight.decrementAndGet() }
+                    // 静音块也要按真实推理的延迟送出：否则静音→说话时输出时间轴突然往后跳一个推理延迟（~360ms），
+                    // shell 侧先断流再积压，积压被裁掉就是「说到一半被吞」（alpha103 真机日志）
+                    synExec.execute {
+                        try {
+                            val target = lastLagMs
+                            val waitMs = target - (System.nanoTime() - tAvail) / 1_000_000
+                            if (waitMs > 0) Thread.sleep(minOf(waitMs, BLOCK * 20L))
+                            emit(FloatArray(LEN * UPP))
+                        } catch (_: InterruptedException) {
+                        } finally { inflight.decrementAndGet() }
+                    }
                     return@execute
                 }
                 val x16 = decim3(win48)
@@ -562,6 +574,7 @@ class LiveRvc(private val open: (String) -> Any?) {
                         L.m("live 块#$id in=${"%.0f".format(db)}dB 等待=${waitFeat}ms 重采样=${(tH - t0) / 1_000_000} hubert=${(tR - tH) / 1_000_000} rmvpe=${(tE - tR) / 1_000_000} 特征=${featMs} " +
                             "排队=${(t1 - tQ) / 1_000_000} 合成=$lastSynMs 推送=${(t3 - t2) / 1_000_000} 端到端=${lag}ms 浊音帧=$voiced/$T 峰值=${"%.2f".format(pk)} 在途=${inflight.get()}")
                         if (lag > BLOCK * 10) L.w("live 块#$id 超预算：端到端 ${lag}ms > ${BLOCK * 10}ms")
+                        lastLagMs = lag
                         record(featMs, lastSynMs, lag)
                     } catch (t: Throwable) {
                         L.e("live netg", t)

@@ -963,7 +963,8 @@ class InjectorService : Binder {
                     val ob = outRing.size(); obMin = minOf(obMin, ob); obMax = maxOf(obMax, ob)
                     if (primed && k < hop) { underruns++; primed = false; slog('W', "断流#$underruns：输出缓冲只剩 ${k * 1000 / SR}ms"); engine?.takeIf { engineState == "运行" }?.noteTrouble("断流") }
                     // 积压超过「预缓冲 + 一块」就丢旧的回到预缓冲：启动时的积压不会一直挂着变成延迟（1.13 实测稳定在 0.7~1 s）
-                    if (outRing.size() > prime + SR / 2) { outRing.trimTo(prime); slog('I', "输出积压过多，丢到预缓冲 ${livePrimeMs}ms") }
+                    // alpha104：只在积压超 1 s 且最近 0.5 s 输出没有人声时才裁，裁掉的是静音而不是半句话
+                    if (outRing.size() > prime + SR && System.nanoTime() - lastVoicedNs > 500_000_000L) { outRing.trimTo(prime); slog('I', "输出积压过多（静音段），丢到预缓冲 ${livePrimeMs}ms") }
                     var pk = 0
                     for (i in 0 until hop) { fxBuf[i] = if (i < k) ext[i] / 32768f else 0f; if (i < k) pk = maxOf(pk, kotlin.math.abs(ext[i].toInt())) }
                     if (pk > VOICED_PEAK) lastVoicedNs = System.nanoTime()
