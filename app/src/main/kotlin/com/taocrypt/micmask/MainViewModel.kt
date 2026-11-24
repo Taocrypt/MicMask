@@ -1062,6 +1062,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun syncTune() {
         val st = _state.value; val inj = com.taocrypt.micmask.inject.MicInjector
         inj.tuneTier = st.aiTier; inj.tuneGate = st.aiGate; inj.tuneFeat = st.aiFeatTh; inj.tuneSyn = st.aiSynTh
+        inj.tunePin = prefs.getBoolean("ai_pin", true)
     }
     /** AI 实时高级参数；运行中会推给注入进程（档位/线程变了会重载模型，约停顿 1~3 秒） */
     fun setAiTune(tier: Int = _state.value.aiTier, gate: Float = _state.value.aiGate, feat: Int = _state.value.aiFeatTh, syn: Int = _state.value.aiSynTh) {
@@ -1075,6 +1076,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** 滑杆松手 / 选项点下后推给运行中的引擎 */
     fun commitAiTune() {
         if (_state.value.liveOn && _state.value.liveMode == 0) Thread { com.taocrypt.micmask.inject.MicInjector.pushTune() }.start()
+    }
+    fun aiPin(): Boolean = prefs.getBoolean("ai_pin", true)
+    fun setAiPin(on: Boolean) {
+        prefs.edit().putBoolean("ai_pin", on).apply()
+        com.taocrypt.micmask.inject.MicInjector.tunePin = on
+        L.i("AI 推理绑大核 → $on")
     }
     fun resetAiTune() { setAiTune(0, -50f, 3, 4); commitAiTune() }
     /** 按模式开始/停止；运行中切到别的模式会先停再按新模式重启 */

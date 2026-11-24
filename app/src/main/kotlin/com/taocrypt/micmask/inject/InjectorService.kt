@@ -679,10 +679,13 @@ class InjectorService : Binder {
     @Volatile private var tuneGate = com.taocrypt.micmask.LiveRvc.GATE_DB
     @Volatile private var tuneFeat = com.taocrypt.micmask.LiveRvc.FEAT_THREADS
     @Volatile private var tuneSyn = com.taocrypt.micmask.LiveRvc.SYN_THREADS
+    @Volatile private var tunePin = true
     /** 读高级参数并套到现有引擎；返回是否需要重载 */
     private fun readTune(d: android.os.Parcel): Boolean {
         tuneTier = d.readInt(); tuneGate = d.readFloat(); tuneFeat = d.readInt(); tuneSyn = d.readInt()
-        slog('I', "高级参数：档位=${listOf("自动", "标准", "省电").getOrElse(tuneTier) { "?" }} 静音门限=${tuneGate}dB 线程=$tuneFeat/$tuneSyn")
+        if (d.dataAvail() >= 4) tunePin = d.readInt() != 0
+        engine?.pinBig = tunePin
+        slog('I', "高级参数：档位=${listOf("自动", "标准", "省电").getOrElse(tuneTier) { "?" }} 静音门限=${tuneGate}dB 线程=$tuneFeat/$tuneSyn 绑大核=$tunePin")
         return engine?.tune(tuneTier, tuneGate, tuneFeat, tuneSyn) ?: false
     }
 
@@ -691,6 +694,7 @@ class InjectorService : Binder {
         return engine ?: com.taocrypt.micmask.LiveRvc { n -> models[n]?.takeIf { it.exists() }?.also { synchronized(loadedNames) { loadedNames += n } } }.also {
             it.pickCache = java.io.File(MODEL_DIR, "pick.txt")
             it.tune(tuneTier, tuneGate, tuneFeat, tuneSyn)
+            it.pinBig = tunePin
             it.onConfig = { blockMs -> tierPrimeMs = blockMs + 80; livePrimeMs = tierPrimeMs; slog('I', "预缓冲跟随档位 → ${livePrimeMs}ms") }
             engine = it
         }
@@ -940,11 +944,12 @@ class InjectorService : Binder {
                     if (r > 0) { got += r; lastReadNs = System.nanoTime() }
                 }
                 if (!running) break
-                // 真麦克风不会给出连续的纯数字 0：连续 1 s 全零 = 被系统静音或被别的录音占用
-                var allZero = true
-                for (i in 0 until hop) if (inBuf[i].toInt() != 0) { allZero = false; break }
-                if (allZero) { if (++zeroFrames == 100) { micHint = "采集到的是纯静音（麦克风可能被系统静音或被占用）"; slog('W', micHint) } }
-                else { if (zeroFrames >= 100 || micHint.startsWith("没有收到")) micHint = ""; zeroFrames = 0 }
+                // 原始麦克风不会给出连续的纯数字 0：连续 3 s 全零 = 被系统静音或被别的录音占用。
+                // 降噪模式（VOICE_COMMUNICATION）不说话时降噪本身就会输出全 0，不能据此提示（alpha101 真机误报）
+                var allZero = liveSource != android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION
+                if (allZero) for (i in 0 until hop) if (inBuf[i].toInt() != 0) { allZero = false; break }
+                if (allZero) { if (++zeroFrames == 300) { micHint = "采集到的是纯静音（麦克风可能被系统静音或被占用）"; slog('W', micHint) } }
+                else { if (zeroFrames >= 300 || micHint.startsWith("没有收到")) micHint = ""; zeroFrames = 0 }
                 rdMax = maxOf(rdMax, System.nanoTime() - tr0)
                 if (liveExternal) {
                     micRing.write(inBuf, 0, hop)
@@ -1081,7 +1086,12 @@ class InjectorService : Binder {
     }
 
     /** 目标 uid 现在有没有在录音（shell 进程能看到 clientUid） */
-    private fun recCount(): Int = runCatching { am?.activeRecordingConfigurations?.size ?: 0 }.getOrDefault(0)
+    /** 其他应用的录音数（不算 shell 自己和 MicMask；系统隐藏 uid 时只能全算上） */
+    private fun recCount(): Int = runCatching {
+        val list = am?.activeRecordingConfigurations ?: return 0
+        val getUid = android.media.AudioRecordingConfiguration::class.java.getMethod("getClientUid")
+        list.count { val u = getUid.invoke(it) as Int; u != Process.myUid() && (u != callerUid || u < 0) }
+    }.getOrDefault(0)
 
     /**
      * 目标有没有在录音。优先按 uid 认；如果系统把 uid 藏起来了（全是 -1），

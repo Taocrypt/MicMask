@@ -146,6 +146,8 @@ class LiveRvc(private val open: (String) -> Any?) {
     @Volatile var gateDb = GATE_DB
     @Volatile var featThreads = FEAT_THREADS
     @Volatile var synThreads = SYN_THREADS
+    /** 推理线程绑大核（高级设置，默认开） */
+    @Volatile var pinBig = true
     /** 应用调参；返回 true 表示要重新加载模型才生效（档位/线程变了） */
     fun tune(t: Int, gate: Float, fth: Int, sth: Int): Boolean {
         gateDb = gate.coerceIn(-80f, -20f)
@@ -210,6 +212,7 @@ class LiveRvc(private val open: (String) -> Any?) {
     fun load(onLog: (String) -> Unit, force: Boolean = false) {
         if (netG != null && !force) return
         if (force) { runCatching { netG?.close() }; netG = null; runCatching { pickCache?.delete() } }
+        if (pinBig) CpuPin.pinSelf("加载前")
         fun need(n: String): Any = open(n) ?: throw IllegalStateException("缺模型 $n，请先导入")
         fun opts(th: Int) = OrtSession.SessionOptions().apply {
             setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
@@ -315,6 +318,7 @@ class LiveRvc(private val open: (String) -> Any?) {
         benchSummary = (if (compatOf(netG!!) != null) "兼容模式·" else "") + "${tier}档：每步 ${BLOCK * 10}ms · 特征 ${featMs}ms · 合成 ${pick.ms}ms · 负载 ${"%.0f".format(ratio(pick) * 100)}%"
         L.i("live 选用 ${pick.name} → $benchSummary")
         if (ratio(pick) > 1.0) L.w("live 本机最快的档位也超预算，会断音")
+        if (pinBig) CpuPin.pinSelf("加载后")   // ORT 线程池在建会话时才创建，再绑一次
         onConfig?.invoke(BLOCK * 10)
         onLog("模型就绪")
     }

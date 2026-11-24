@@ -463,7 +463,8 @@ object MicInjector {
     @Volatile var tuneGate = -50f
     @Volatile var tuneFeat = 3
     @Volatile var tuneSyn = 4
-    private fun writeTune(d: android.os.Parcel) { d.writeInt(tuneTier); d.writeFloat(tuneGate); d.writeInt(tuneFeat); d.writeInt(tuneSyn) }
+    @Volatile var tunePin = true
+    private fun writeTune(d: android.os.Parcel) { d.writeInt(tuneTier); d.writeFloat(tuneGate); d.writeInt(tuneFeat); d.writeInt(tuneSyn); d.writeInt(if (tunePin) 1 else 0) }
     fun pushTune() {
         if (!liveOn) return
         runCatching { call(InjectorService.TX_LIVE_TUNE, { d -> writeTune(d) }) { } }

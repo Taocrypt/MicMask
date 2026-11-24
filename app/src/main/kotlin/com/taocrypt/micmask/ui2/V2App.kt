@@ -691,6 +691,9 @@ private fun AiAdvanced(vm: MainViewModel, st: UiState) {
         onValueChangeFinished = { vm.commitAiTune() })
     Text(tr("本机 {0} 核。两者同时在跑，加起来别超过大核数；默认 3 / 4。改档位或线程会重新测速加载，变声中会停顿几秒", cores),
         fontSize = 12.sp, color = Summary)
+    var pin by remember { mutableStateOf(vm.aiPin()) }
+    SwitchPreference(checked = pin, onCheckedChange = { pin = it; vm.setAiPin(it) }, title = tr("推理绑大核"),
+        summary = tr("把推理线程固定在大核上，减少被调度到小核导致的卡顿；下次开始变声生效"))
     Text(tr("恢复默认"), Modifier.padding(top = 12.dp).clip(RoundedCornerShape(8.dp)).clickable { vm.resetAiTune() }.padding(vertical = 4.dp),
         fontSize = 14.sp, color = MiuixTheme.colorScheme.primary)
 }

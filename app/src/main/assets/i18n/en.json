@@ -1012,5 +1012,7 @@
   "手动选择": "Manual",
   "生效范围": "Scope",
   "任何应用开始录音都会变声，不用选应用": "Any app that starts recording gets the changed voice; no need to pick apps",
-  "只对下面选中的目标应用变声": "Only the target apps selected below"
+  "只对下面选中的目标应用变声": "Only the target apps selected below",
+  "推理绑大核": "Pin inference to big cores",
+  "把推理线程固定在大核上，减少被调度到小核导致的卡顿；下次开始变声生效": "Keep inference threads on big cores to avoid stutter from little cores; applies next time you start"
 }
