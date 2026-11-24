@@ -497,7 +497,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     val dir = ModelStore.internalDir(ctx).also { it.mkdirs() }
                     var n = 0
                     compat = 0; compatErr = null; pthOk = 0; idxOk = 0
-                    val pthVids = ArrayList<String>(); val indexUris = ArrayList<Pair<Uri, String>>()
+                    val pthVids = ArrayList<String>(); val indexUris = ArrayList<Pair<Uri, String>>(); var pthTried = 0
                     fun save(name: String, input: java.io.InputStream) {
                         _state.value = _state.value.copy(importName = name)
                         val tmp = File(dir, "$name.part")
@@ -540,6 +540,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                             _state.value = _state.value.copy(importDone = n)
                         } else if (base.lowercase().endsWith(".pth")) {
                             // 手机直接导入 RVC .pth：模板 + 权重配方 + 校准量化（PthConvert），生成标准档/省电档两个流式模型
+                            pthTried++
                             val why = runCatching { PthConvert.run(ctx, u, base) { s -> _state.value = _state.value.copy(importName = "$base · $s") } }
                                 .fold({ n += 2; pthOk++; pthVids += it; _state.value = _state.value.copy(importDone = n); null }, { L.e("pth 导入 $base 失败", it); it.message ?: it.toString() })
                             if (why != null) compatErr = "$base：$why"
@@ -550,12 +551,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         }
                     }
                     for ((u, base) in indexUris) {
+                        if (pthTried > 0 && pthVids.isEmpty()) continue   // 同批的 .pth 失败了，索引不要挂到别的音色上；错误已由 .pth 报出
                         val v = IndexConvert.pickVoice(ctx, base, pthVids)
-                        if (v == null) { compatErr = tr("{0}：不知道属于哪个音色，请和 .pth 一起导入，或把文件名改成含音色名", base); continue }
+                        if (v == null) { compatErr = listOfNotNull(compatErr, tr("{0}：不知道属于哪个音色，请和 .pth 一起导入，或把文件名改成含音色名", base)).joinToString("；"); continue }
                         _state.value = _state.value.copy(importName = tr("{0} · 转换检索索引", base))
                         runCatching { IndexConvert.run(ctx, u, v) }
                             .onSuccess { n++; idxOk++; _state.value = _state.value.copy(importDone = n) }
-                            .onFailure { L.e("index 导入 $base 失败", it); compatErr = "$base：${it.message}" }
+                            .onFailure { L.e("index 导入 $base 失败", it); compatErr = listOfNotNull(compatErr, "$base：${it.message}").joinToString("；") }
                     }
                     n
                 }

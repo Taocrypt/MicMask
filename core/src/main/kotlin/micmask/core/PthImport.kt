@@ -9,7 +9,6 @@ import java.io.File
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.util.zip.ZipFile
 
 /**
  * 手机上直接导入 RVC .pth（借鉴 mobile-rvc 的思路，代码自写）。
@@ -34,7 +33,7 @@ object PthImport {
     private class Reduced(val g: Global, val args: Any?)
     private object Mark
 
-    class Pth(private val zip: ZipFile, private val prefix: String, val root: Any?) : AutoCloseable {
+    class Pth(private val zip: MiniZip, private val prefix: String, val root: Any?) : AutoCloseable {
         @Suppress("UNCHECKED_CAST")
         val dict get() = root as? Map<String, Any?> ?: throw IllegalArgumentException("不是 RVC 模型（根对象不是字典）")
         @Suppress("UNCHECKED_CAST")
@@ -44,8 +43,8 @@ object PthImport {
 
         fun floats(t: Tensor): FloatArray {
             val raw = cache.getOrPut(t.storage.key) {
-                val e = zip.getEntry("${prefix}data/${t.storage.key}") ?: throw IllegalArgumentException("缺少张量数据 ${t.storage.key}")
-                zip.getInputStream(e).use { it.readBytes() }
+                val e = zip.find("${prefix}data/${t.storage.key}") ?: throw IllegalArgumentException("缺少张量数据 ${t.storage.key}")
+                zip.read(e)
             }
             val bb = ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN)
             val es = when (t.storage.type) { "HalfStorage", "BFloat16Storage" -> 2; "FloatStorage" -> 4; "DoubleStorage" -> 8
@@ -71,10 +70,13 @@ object PthImport {
     }
 
     fun openPth(f: File): Pth {
-        val zip = runCatching { ZipFile(f) }.getOrElse { throw IllegalArgumentException("不是新版 PyTorch 格式（旧版 .pth 需要先在电脑上用新版 torch 重新保存）") }
-        val pkl = zip.entries().asSequence().firstOrNull { it.name.endsWith("data.pkl") } ?: run { zip.close(); throw IllegalArgumentException("压缩包里没有 data.pkl") }
+        val head = f.inputStream().use { i -> ByteArray(2).also { i.read(it) } }
+        if (head[0] != 'P'.code.toByte() || head[1] != 'K'.code.toByte())
+            throw IllegalArgumentException("不是新版 PyTorch 格式（旧版 .pth 需要先在电脑上用新版 torch 重新保存）")
+        val zip = MiniZip(f)
+        val pkl = zip.entries.firstOrNull { it.name.endsWith("data.pkl") } ?: run { zip.close(); throw IllegalArgumentException("压缩包里没有 data.pkl") }
         val prefix = pkl.name.removeSuffix("data.pkl")
-        val root = zip.getInputStream(pkl).use { unpickle(it.readBytes()) }
+        val root = runCatching { unpickle(zip.read(pkl)) }.getOrElse { zip.close(); throw it }
         return Pth(zip, prefix, root)
     }
 

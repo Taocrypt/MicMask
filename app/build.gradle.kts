@@ -14,8 +14,8 @@ android {
         applicationId = "com.taocrypt.micmask"
         minSdk = 26
         targetSdk = 34
-        versionCode = 137
-        versionName = "2.0-alpha.110"
+        versionCode = 138
+        versionName = "2.0-alpha.111"
         // Beacon 后台（公告 / 推荐位 / 匿名统计 / 反馈）：CI 从 Secrets 注入，源码与本地构建为空 → SDK 关闭
         fun env(k: String) = (System.getenv(k) ?: "").replace("\\", "").replace("\"", "")
         buildConfigField("String", "BEACON_URL", "\"${env("BEACON_URL")}\"")
