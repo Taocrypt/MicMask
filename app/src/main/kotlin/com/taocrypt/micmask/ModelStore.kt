@@ -44,22 +44,25 @@ object ModelStore {
         val v = currentVoice(ctx) ?: return listOf(HUBERT, RMVPE)
         val netg = LIVE_NETG_ALL.map { voiceFile(v, it) }.filter { locate(ctx, it) != null }
             .let { l -> if (l.size > 1) l.filterNot { it.endsWith("_d8.onnx") } else l }
-        return listOf(HUBERT, RMVPE) + netg
+        return listOf(HUBERT, RMVPE) + netg + listOfNotNull(voiceFile(v, LIVE_INDEX).takeIf { locate(ctx, it) != null })
     }
 
     // ---------------------------------------------------------------- 多音色
     /** 实时音色文件：<音色>_stream[_b50]_<qdq|fp32|d8>.onnx；DEFAULT_VOICE 是内部标准名（历史沿用，仅作文件名约定） */
     val VOICE_RE = Regex("^(.+?)_stream(_b50)?_(qdq|fp32|d8|compat)\\.onnx$")
+    /** 音色的检索索引（由 RVC .index 转成 ATRIIDX1）：<音色>_stream_index.bin */
+    val INDEX_RE = Regex("^(.+?)_stream_index\\.bin$")
+    const val LIVE_INDEX = "atri48_stream_index.bin"
     const val DEFAULT_VOICE = "atri48"
     /** 把标准名（atri48_stream_xxx）换成某个音色的文件名 */
     fun voiceFile(voice: String, canonical: String) = voice + canonical.removePrefix(DEFAULT_VOICE)
     /** 发给 shell 时统一用标准名，shell 侧不用管音色 */
     fun canonicalName(file: String): String =
-        VOICE_RE.matchEntire(file)?.let { DEFAULT_VOICE + file.removePrefix(it.groupValues[1]) } ?: file
+        (VOICE_RE.matchEntire(file) ?: INDEX_RE.matchEntire(file))?.let { DEFAULT_VOICE + file.removePrefix(it.groupValues[1]) } ?: file
     fun voiceLabel(v: String) = if (v == DEFAULT_VOICE) tr("默认音色") else v
     /** 该音色只有兼容模式模型（w-okada 导出，没转流式版） */
     fun isCompatOnly(ctx: Context, v: String): Boolean {
-        val fs = voiceFiles(ctx, v).map { it.name }
+        val fs = voiceFiles(ctx, v).map { it.name }.filter { it.endsWith(".onnx") }
         return fs.isNotEmpty() && fs.all { it.endsWith("_stream_compat.onnx") }
     }
 
@@ -92,8 +95,9 @@ object ModelStore {
     }
     /** 某音色的全部文件（两个目录） */
     fun voiceFiles(ctx: Context, v: String): List<File> = candidateDirs(ctx).flatMap { d ->
-        d.listFiles()?.filter { it.isFile && VOICE_RE.matchEntire(it.name)?.groupValues?.get(1) == v } ?: emptyList()
+        d.listFiles()?.filter { it.isFile && (VOICE_RE.matchEntire(it.name) ?: INDEX_RE.matchEntire(it.name))?.groupValues?.get(1) == v } ?: emptyList()
     }
+    fun hasIndex(ctx: Context, v: String) = locate(ctx, voiceFile(v, LIVE_INDEX)) != null
     fun voiceSize(ctx: Context, v: String): Long = voiceFiles(ctx, v).sumOf { it.length() }
     /** 删除音色：删文件 + 测速缓存 + 别名 */
     fun deleteVoice(ctx: Context, v: String): Int {

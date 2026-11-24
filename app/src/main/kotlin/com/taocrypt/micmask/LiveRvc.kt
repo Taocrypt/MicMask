@@ -146,6 +146,10 @@ class LiveRvc(private val open: (String) -> Any?) {
     @Volatile var gateDb = GATE_DB
     @Volatile var featThreads = FEAT_THREADS
     @Volatile var synThreads = SYN_THREADS
+    /** 检索混合比例（RVC index_rate）；0 = 不用。音色带 <音色>_stream_index.bin 才生效 */
+    @Volatile var indexRate = 0.3f
+    @Volatile private var index: micmask.core.FaissIvfIndex? = null
+    @Volatile private var idxMs = 0L
     /** 推理线程绑大核（高级设置，默认开） */
     @Volatile var pinBig = true
     /** 应用调参；返回 true 表示要重新加载模型才生效（档位/线程变了） */
@@ -317,6 +321,10 @@ class LiveRvc(private val open: (String) -> Any?) {
         netG = load("流式合成器", pick.name)
         curName = pick.name
         emb = embOf(netG!!)
+        index = (open(ModelStore.LIVE_INDEX) as? java.io.File)?.let { f ->
+            runCatching { micmask.core.FaissIvfIndex.load(f) }.onFailure { L.e("live 检索索引加载失败", it) }.getOrNull()
+        }?.takeIf { ix -> (ix.d == emb).also { if (!it) L.w("live 检索索引维度 ${ix.d} 与模型 $emb 不符，忽略") } }
+        index?.let { L.i("live 检索索引：${it.ntotal} 条 × ${it.d} 维，${it.nlist} 簇，比例 $indexRate") }
         L.i("live 特征维度 $emb（${if (emb == 256) "RVC v1" else "RVC v2"}）${if (compatOf(netG!!) != null) " 兼容模式" else ""}")
         if (emb == 256 && hubert?.outputNames?.contains("feat9") == false) {   // 基础模型可能刚更新过：重载一次再判断
             runCatching { hubert?.close() }; hubert = null
@@ -557,7 +565,11 @@ class LiveRvc(private val open: (String) -> Any?) {
                 val a16 = if (x16.size >= n16) x16.copyOfRange(x16.size - n16, x16.size)
                           else FloatArray(n16).also { System.arraycopy(x16, 0, it, n16 - x16.size, x16.size) }
                 val tH = System.nanoTime()
-                val feats = Rmvpe.nearestUp2(runHubert(a16))           // ~100 x emb
+                val hf = runHubert(a16)
+                val ix = index; val ir = indexRate
+                val feats = Rmvpe.nearestUp2(if (ix != null && ir > 0.01f) {
+                    val ti = System.nanoTime(); ix.mix(hf, ir).also { idxMs = (System.nanoTime() - ti) / 1_000_000 }
+                } else { idxMs = 0; hf })                                   // ~100 x emb
                 val tR = System.nanoTime()
                 val f0All = runRmvpe(a16)                                 // ~103
                 val tE = System.nanoTime()
@@ -584,7 +596,7 @@ class LiveRvc(private val open: (String) -> Any?) {
                         val t3 = System.nanoTime()
                         var pk = 0f; for (v in y) pk = maxOf(pk, kotlin.math.abs(v))
                         val lag = (t3 - tAvail) / 1_000_000
-                        L.m("live 块#$id in=${"%.0f".format(db)}dB 等待=${waitFeat}ms 重采样=${(tH - t0) / 1_000_000} hubert=${(tR - tH) / 1_000_000} rmvpe=${(tE - tR) / 1_000_000} 特征=${featMs} " +
+                        L.m("live 块#$id in=${"%.0f".format(db)}dB 等待=${waitFeat}ms 重采样=${(tH - t0) / 1_000_000} hubert=${(tR - tH) / 1_000_000}${if (idxMs > 0) "(检索 $idxMs)" else ""} rmvpe=${(tE - tR) / 1_000_000} 特征=${featMs} " +
                             "排队=${(t1 - tQ) / 1_000_000} 合成=$lastSynMs 推送=${(t3 - t2) / 1_000_000} 端到端=${lag}ms 浊音帧=$voiced/$T 峰值=${"%.2f".format(pk)} 在途=${inflight.get()}")
                         // 特征与合成分线程流水，吞吐只看较慢的一段是否超过块长；端到端只是延迟，超过 2 倍块长才提示。5 s 内最多一条
                         val slow = maxOf(featMs, lastSynMs)

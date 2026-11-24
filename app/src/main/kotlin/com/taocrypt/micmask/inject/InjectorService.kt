@@ -680,12 +680,14 @@ class InjectorService : Binder {
     @Volatile private var tuneFeat = com.taocrypt.micmask.LiveRvc.FEAT_THREADS
     @Volatile private var tuneSyn = com.taocrypt.micmask.LiveRvc.SYN_THREADS
     @Volatile private var tunePin = true
+    @Volatile private var tuneIdx = 0.3f
     /** 读高级参数并套到现有引擎；返回是否需要重载 */
     private fun readTune(d: android.os.Parcel): Boolean {
         tuneTier = d.readInt(); tuneGate = d.readFloat(); tuneFeat = d.readInt(); tuneSyn = d.readInt()
         if (d.dataAvail() >= 4) tunePin = d.readInt() != 0
-        engine?.pinBig = tunePin
-        slog('I', "高级参数：档位=${listOf("自动", "标准", "省电").getOrElse(tuneTier) { "?" }} 静音门限=${tuneGate}dB 线程=$tuneFeat/$tuneSyn 绑大核=$tunePin")
+        if (d.dataAvail() >= 4) tuneIdx = d.readFloat()
+        engine?.pinBig = tunePin; engine?.indexRate = tuneIdx
+        slog('I', "高级参数：档位=${listOf("自动", "标准", "省电").getOrElse(tuneTier) { "?" }} 静音门限=${tuneGate}dB 线程=$tuneFeat/$tuneSyn 绑大核=$tunePin 检索=$tuneIdx")
         return engine?.tune(tuneTier, tuneGate, tuneFeat, tuneSyn) ?: false
     }
 
@@ -694,7 +696,7 @@ class InjectorService : Binder {
         return engine ?: com.taocrypt.micmask.LiveRvc { n -> models[n]?.takeIf { it.exists() }?.also { synchronized(loadedNames) { loadedNames += n } } }.also {
             it.pickCache = java.io.File(MODEL_DIR, "pick.txt")
             it.tune(tuneTier, tuneGate, tuneFeat, tuneSyn)
-            it.pinBig = tunePin
+            it.pinBig = tunePin; it.indexRate = tuneIdx
             it.onConfig = { blockMs -> tierPrimeMs = blockMs + 80; livePrimeMs = tierPrimeMs; slog('I', "预缓冲跟随档位 → ${livePrimeMs}ms") }
             engine = it
         }

@@ -484,6 +484,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var compat = 0
     private var compatErr: String? = null
     private var pthOk = 0
+    private var idxOk = 0
     fun importModelFiles(uris: List<Uri>) {
         if (uris.isEmpty() || _state.value.importing) return
         val known0 = (ModelStore.required + ModelStore.optional).toSet()
@@ -495,7 +496,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 runCatching {
                     val dir = ModelStore.internalDir(ctx).also { it.mkdirs() }
                     var n = 0
-                    compat = 0; compatErr = null; pthOk = 0
+                    compat = 0; compatErr = null; pthOk = 0; idxOk = 0
+                    val pthVids = ArrayList<String>(); val indexUris = ArrayList<Pair<Uri, String>>()
                     fun save(name: String, input: java.io.InputStream) {
                         _state.value = _state.value.copy(importName = name)
                         val tmp = File(dir, "$name.part")
@@ -539,21 +541,33 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         } else if (base.lowercase().endsWith(".pth")) {
                             // 手机直接导入 RVC .pth：模板 + 权重配方 + 校准量化（PthConvert），生成标准档/省电档两个流式模型
                             val why = runCatching { PthConvert.run(ctx, u, base) { s -> _state.value = _state.value.copy(importName = "$base · $s") } }
-                                .fold({ n += it; pthOk++; _state.value = _state.value.copy(importDone = n); null }, { L.e("pth 导入 $base 失败", it); it.message ?: it.toString() })
+                                .fold({ n += 2; pthOk++; pthVids += it; _state.value = _state.value.copy(importDone = n); null }, { L.e("pth 导入 $base 失败", it); it.message ?: it.toString() })
                             if (why != null) compatErr = "$base：$why"
+                        } else if (base.lowercase().endsWith(".index")) {
+                            indexUris += u to base   // 等 .pth 都转完再配对音色
                         } else {
                             L.w("跳过不认识的文件：$base")
                         }
+                    }
+                    for ((u, base) in indexUris) {
+                        val v = IndexConvert.pickVoice(ctx, base, pthVids)
+                        if (v == null) { compatErr = tr("{0}：不知道属于哪个音色，请和 .pth 一起导入，或把文件名改成含音色名", base); continue }
+                        _state.value = _state.value.copy(importName = tr("{0} · 转换检索索引", base))
+                        runCatching { IndexConvert.run(ctx, u, v) }
+                            .onSuccess { n++; idxOk++; _state.value = _state.value.copy(importDone = n) }
+                            .onFailure { L.e("index 导入 $base 失败", it); compatErr = "$base：${it.message}" }
                     }
                     n
                 }
             }
             _state.value = _state.value.copy(importing = false, importName = "")
+
             refreshModels()
             _state.value = _state.value.copy(
                 toast = result.fold(
                     { when {
-                        pthOk > 0 -> tr("已从 .pth 生成 {0} 个音色（标准档+省电档）；手机量化与电脑转换音质接近，但没有 index 检索", pthOk) + (compatErr?.let { "；" + tr("无法导入：{0}", it) } ?: "")
+                        idxOk > 0 && pthOk == 0 -> tr("已导入 {0} 个检索索引，在 AI 页「高级」可调检索比例", idxOk) + (compatErr?.let { "；" + tr("无法导入：{0}", it) } ?: "")
+                        pthOk > 0 -> (if (idxOk > 0) tr("已从 .pth 生成 {0} 个音色（含检索索引）", pthOk) else tr("已从 .pth 生成 {0} 个音色（标准档+省电档）；没带 .index，检索功能不可用", pthOk)) + (compatErr?.let { "；" + tr("无法导入：{0}", it) } ?: "")
                         compat > 0 -> tr("已按兼容模式导入 {0} 个音色：录音变声可用，实时较慢只建议高性能机；用 convert_rvc.py 转成流式版会快很多", compat)
                         it > 0 -> tr("已导入 {0} 个模型文件", it)
                         compatErr != null -> tr("无法导入：{0}", compatErr)
@@ -744,7 +758,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** 当前转换参数的签名：AI=音色+音高+档位，普通=音调+效果 */
     private fun clipSig(mode: Int): String {
         val st = _state.value
-        return if (mode == 0) "0|${ModelStore.currentVoice(ctx)}|${prefs.getFloat("ai_semis", 0f).toInt()}|${st.aiTier}|${st.aiGate}|${st.aiFeatTh}|${st.aiSynTh}"
+        return if (mode == 0) "0|${ModelStore.currentVoice(ctx)}|${prefs.getFloat("ai_semis", 0f).toInt()}|${st.aiTier}|${st.aiGate}|${st.aiFeatTh}|${st.aiSynTh}|${aiIndex()}"
         else "1|${st.pitchSemis}|${st.fx.joinToString(",")}"
     }
 
@@ -784,6 +798,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                             LiveRvc { canon -> ModelStore.locate(ctx, if (canon.startsWith(ModelStore.DEFAULT_VOICE + "_stream")) ModelStore.voiceFile(voice, canon) else canon) }
                                 .also { it.pickCache = File(ctx.filesDir, "pick_clip_$voice.txt"); it.tune(tu.aiTier, tu.aiGate, tu.aiFeatTh, tu.aiSynTh); clipEngine = it; clipEngineVoice = voice }
                         }
+                        e.indexRate = aiIndex()
                         e.semis = prefs.getFloat("ai_semis", 0f).toInt()
                         _state.value = _state.value.copy(clipStage = tr("加载模型"))
                         e.load({ m -> _state.value = _state.value.copy(clipStage = m) })
@@ -1074,7 +1089,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val st = _state.value; val inj = com.taocrypt.micmask.inject.MicInjector
         inj.tuneTier = st.aiTier; inj.tuneGate = st.aiGate; inj.tuneFeat = st.aiFeatTh; inj.tuneSyn = st.aiSynTh
         inj.tunePin = prefs.getBoolean("ai_pin", true)
+        inj.tuneIdx = aiIndex()
     }
+    fun aiIndex(): Float = prefs.getFloat("ai_index", 0.3f)
+    /** 检索比例：不重载模型，松手后推给运行中的引擎 */
+    fun setAiIndex(v: Float) {
+        prefs.edit().putFloat("ai_index", v).apply()
+        com.taocrypt.micmask.inject.MicInjector.tuneIdx = v
+        clipEngine?.indexRate = v
+    }
+    fun voiceHasIndex(): Boolean = ModelStore.currentVoice(ctx)?.let { ModelStore.hasIndex(ctx, it) } == true
     /** AI 实时高级参数；运行中会推给注入进程（档位/线程变了会重载模型，约停顿 1~3 秒） */
     fun setAiTune(tier: Int = _state.value.aiTier, gate: Float = _state.value.aiGate, feat: Int = _state.value.aiFeatTh, syn: Int = _state.value.aiSynTh) {
         val st = _state.value
@@ -1094,7 +1118,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         com.taocrypt.micmask.inject.MicInjector.tunePin = on
         L.i("AI 推理绑大核 → $on")
     }
-    fun resetAiTune() { setAiTune(0, -50f, 3, 4); commitAiTune() }
+    fun resetAiTune() { setAiTune(0, -50f, 3, 4); setAiIndex(0.3f); commitAiTune() }
     /** 按模式开始/停止；运行中切到别的模式会先停再按新模式重启 */
     fun startMode(mode: Int) {
         if (mode == 2 && !com.taocrypt.micmask.inject.MicInjector.liveOn && speakerMode()) { _state.value = _state.value.copy(toast = tr("外放模式下声卡不可用（需要 Shizuku）")); return }

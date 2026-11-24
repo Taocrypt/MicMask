@@ -14,8 +14,8 @@ import java.util.zip.ZipInputStream
  */
 object PthConvert {
 
-    /** @return 生成的模型文件数 */
-    fun run(ctx: Context, uri: Uri, displayName: String, progress: (String) -> Unit): Int {
+    /** @return 音色 id（生成标准档+省电档两个文件） */
+    fun run(ctx: Context, uri: Uri, displayName: String, progress: (String) -> Unit): String {
         val work = File(ctx.cacheDir, "pthimport").also { it.deleteRecursively(); it.mkdirs() }
         try {
             progress(tr("读取 .pth"))
@@ -55,7 +55,7 @@ object PthConvert {
                     L.i("pth 导入 → ${dst.name} ${dst.length() shr 20}MB，用时 ${System.currentTimeMillis() - t0}ms")
                     n++
                 }
-                return n
+                return vid
             }
         } finally { work.deleteRecursively() }
     }
@@ -65,5 +65,25 @@ object PthConvert {
         s.startsWith("拼装") -> tr("拼装模型")
         s == "量化" -> tr("量化")
         else -> tr("完成")
+    }
+}
+
+/** RVC .index → <音色>_stream_index.bin */
+object IndexConvert {
+    fun run(ctx: Context, uri: Uri, vid: String): micmask.core.FaissImport.Info {
+        val dir = ModelStore.internalDir(ctx).also { it.mkdirs() }
+        val dst = File(dir, ModelStore.voiceFile(vid, ModelStore.LIVE_INDEX)); val part = File(dir, dst.name + ".part")
+        val inf = ctx.contentResolver.openInputStream(uri)!!.use { micmask.core.FaissImport.convert(it, part) }
+        dst.delete()
+        if (!part.renameTo(dst)) throw java.io.IOException(tr("改名失败：{0}", dst.name))
+        L.i("index 导入 → ${dst.name}：原 ${inf.ntotal} 条，保留 ${inf.kept} 条 × ${inf.d} 维，${inf.nlist} 簇，${dst.length() shr 20}MB")
+        return inf
+    }
+
+    /** 给 .index 找音色：同批导入的 .pth 只有一个就用它；否则找文件名里包含的音色名（取最长） */
+    fun pickVoice(ctx: Context, fileName: String, batch: List<String>): String? {
+        if (batch.size == 1) return batch[0]
+        val n = fileName.lowercase()
+        return (batch + ModelStore.voices(ctx)).distinct().filter { it.length >= 2 && n.contains(it.lowercase()) }.maxByOrNull { it.length }
     }
 }

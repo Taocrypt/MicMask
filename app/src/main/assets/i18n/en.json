@@ -1049,7 +1049,6 @@
   "降噪开": "NS on",
   "安卓端 RVC 推理方案参考（性能优化思路）": "Android RVC inference reference (performance ideas)",
   "手机端实时变声参考（状态行、分享导入、文件变声分段等思路）": "Mobile real-time voice changer reference (status line, share import, file segmentation ideas)",
-  "已从 .pth 生成 {0} 个音色（标准档+省电档）；手机量化与电脑转换音质接近，但没有 index 检索": "Created {0} voice(s) from .pth (standard + battery-saver tiers). On-phone quantization sounds close to PC conversion, but index retrieval is not included",
   "读取 .pth": "Reading .pth",
   "不支持无音高（f0=0）模型": "Models without pitch (f0=0) are not supported",
   "不支持的版本 {0}": "Unsupported version {0}",
@@ -1059,5 +1058,13 @@
   "省电档": "Battery saver",
   "校准 {0}": "Calibrating {0}",
   "拼装模型": "Assembling model",
-  "量化": "Quantizing"
+  "量化": "Quantizing",
+  "{0}：不知道属于哪个音色，请和 .pth 一起导入，或把文件名改成含音色名": "{0}: can't tell which voice it belongs to; import it together with the .pth, or rename it to include the voice name",
+  "{0} · 转换检索索引": "{0} · converting index",
+  "已导入 {0} 个检索索引，在 AI 页「高级」可调检索比例": "Imported {0} index file(s); adjust the index ratio under AI → Advanced",
+  "已从 .pth 生成 {0} 个音色（含检索索引）": "Created {0} voice(s) from .pth (with index)",
+  "已从 .pth 生成 {0} 个音色（标准档+省电档）；没带 .index，检索功能不可用": "Created {0} voice(s) from .pth (standard + battery-saver); no .index included, so index retrieval is unavailable",
+  "检索比例（index）": "Index ratio",
+  "越高越像原音色、口音和原声漏出越少，但咬字可能变糊；默认 0.3": "Higher sounds more like the target voice with less accent/original-voice leakage, but articulation may blur. Default 0.3",
+  "当前音色没有检索索引：导入模型时把 .index 和 .pth 一起选上即可": "This voice has no index: select the .index together with the .pth when importing"
 }

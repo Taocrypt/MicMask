@@ -700,6 +700,15 @@ private fun AiAdvanced(vm: MainViewModel, st: UiState) {
         onValueChangeFinished = { vm.commitAiTune() })
     Text(tr("低于它的声音不送进模型（省电、去底噪）。开头字被吞就调低，环境吵、有杂音就调高。默认 -50"), fontSize = 12.sp, color = Summary)
 
+    var idx by remember { mutableStateOf(vm.aiIndex()) }
+    val hasIdx = remember(st.liveVoice, st.liveVoices) { vm.voiceHasIndex() }
+    Row(Modifier.padding(top = 14.dp)) { Text(tr("检索比例（index）"), Modifier.weight(1f), fontSize = 14.sp)
+        Text(if (idx <= 0.01f) tr("关") else "%.2f".format(idx), color = Summary) }
+    Slider(value = idx, onValueChange = { idx = (it * 20).roundToInt() / 20f; vm.setAiIndex(idx) }, valueRange = 0f..1f, steps = 19,
+        onValueChangeFinished = { vm.commitAiTune() })
+    Text(if (hasIdx) tr("越高越像原音色、口音和原声漏出越少，但咬字可能变糊；默认 0.3") else tr("当前音色没有检索索引：导入模型时把 .index 和 .pth 一起选上即可"),
+        fontSize = 12.sp, color = Summary)
+
     val cores = Runtime.getRuntime().availableProcessors()
     Row(Modifier.padding(top = 14.dp)) { Text(tr("特征线程"), Modifier.weight(1f), fontSize = 14.sp); Text("${st.aiFeatTh}", color = Summary) }
     Slider(value = st.aiFeatTh.toFloat(), onValueChange = { vm.setAiTune(feat = it.roundToInt()) }, valueRange = 1f..8f, steps = 6,
