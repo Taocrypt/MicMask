@@ -978,5 +978,6 @@
   "当前版本未启用统计": "Statistics are not enabled in this build",
   "将删除服务器上本机的全部统计记录，并关闭匿名统计。此操作不可撤销。": "All statistics for this device will be deleted from the server and anonymous statistics turned off. This cannot be undone.",
   "已删除，匿名统计已关闭": "Deleted; anonymous statistics turned off",
-  "删除失败，请检查网络后重试": "Delete failed; check your network and try again"
+  "删除失败，请检查网络后重试": "Delete failed; check your network and try again",
+  "关闭推荐": "Close ad"
 }

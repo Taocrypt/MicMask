@@ -251,7 +251,7 @@ fun V2App(vm: MainViewModel) {
                 }
             }
         }
-        com.taocrypt.micmask.update.UpdateDialog()
+        com.taocrypt.micmask.update.UpdateDialog(st.liveOn)
         if (st.importing && st.importTotal > 0) {
             WindowDialog(show = true, title = tr("正在导入模型"), summary = "${st.importDone}/${st.importTotal}  ${st.importName}") {
                 LinearProgressIndicator(progress = st.importDone.toFloat() / st.importTotal.coerceAtLeast(1))
@@ -753,7 +753,13 @@ private fun LazyListScope.aiPage(vm: MainViewModel, st: UiState, open: (String) 
     if (st.repoModels.isNotEmpty() && shown.isEmpty()) item {
         Text(if (st.repoQuery.isNotBlank()) tr("没有找到「{0}」", st.repoQuery.trim()) else tr("这个分类下还没有模型"), Modifier.padding(horizontal = 28.dp, vertical = 8.dp), fontSize = 13.sp, color = Summary)
     }
-    items(shown, key = { "r_${it.id}" }) { m -> RepoItem(vm, st, m) }
+    // 推荐位 repo_list：第 3 个音色之后插一条（不足 3 个不插），样式同音色项，带「推广」
+    val slotAt = 3
+    items(shown.take(slotAt), key = { "r_${it.id}" }) { m -> RepoItem(vm, st, m) }
+    if (shown.size >= slotAt) item(key = "slot_repo_list") {
+        BeaconSlotRepoItem("repo_list", st.liveOn, Modifier.fillMaxWidth().padding(PagePad).padding(bottom = 8.dp))
+    }
+    items(shown.drop(slotAt), key = { "r_${it.id}" }) { m -> RepoItem(vm, st, m) }
     item { SmallTitle(tr("更多")) }
     item {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
@@ -1489,6 +1495,7 @@ private fun ThemePage(ui: UiPrefs) {
 private fun RepoItem(vm: MainViewModel, st: UiState, m: ModelRepo.RModel) {
     val busy = st.dlId == m.id
     val installed = remember(st.liveVoices, m.id) { vm.repoInstalled(m) }
+    Column {
     Card(Modifier.fillMaxWidth().padding(PagePad).padding(bottom = 8.dp)) {
         Column(Modifier.padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1514,6 +1521,9 @@ private fun RepoItem(vm: MainViewModel, st: UiState, m: ModelRepo.RModel) {
                     color = Summary)
             }
         }
+    }
+    // 推荐位 model_download：下载中显示在该音色卡片下方，下载结束（busy=false）自动收起
+    if (busy) BeaconSlotCard("model_download", st.liveOn, Modifier.fillMaxWidth().padding(PagePad).padding(bottom = 8.dp))
     }
 }
 

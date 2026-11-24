@@ -119,6 +119,8 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
             }
             if (st.engineLog.isNotBlank()) Text(st.engineLog, Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontSize = 11.sp, color = Dim)
         }
+        // 推荐位 model_download：句级/基础模型下载中显示在模型卡片下方，下载结束自动收起
+        if (st.dlId == "file") BeaconSlotCard("model_download", st.liveOn, Modifier.fillMaxWidth().padding(Pad2).padding(top = 12.dp))
 
         // ---- 输入 ----
         SmallTitle(tr("输入"))

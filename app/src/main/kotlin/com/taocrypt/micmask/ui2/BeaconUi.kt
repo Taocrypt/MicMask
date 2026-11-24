@@ -285,17 +285,47 @@ private suspend fun loadSlotImage(url: String): ImageBitmap? {
 }
 
 /**
- * 自营推荐位卡片。position：home_bottom / file_result / about。
- * 变声中（[liveOn]）隐藏；设置里关闭「显示推荐」、SDK 关闭或该位置没有内容时不显示。
+ * 推荐位公共规则（三种样式共用）：变声中（[liveOn]）隐藏；设置里关闭「显示推荐」、SDK 关闭、该位置已被关闭或没有内容时不显示；
+ * 曝光与关闭的频控在 [BeaconHub.slot] / [BeaconHub.slotViewed] / [BeaconHub.dismissSlot]。
+ * 不要放进悬浮窗、常驻通知、Shizuku 授权/权限引导、开屏/插屏。
+ */
+@Composable
+private fun rememberSlot(position: String, liveOn: Boolean): Slot? {
+    if (liveOn) return null
+    val s = BeaconHub.slot(position) ?: return null
+    LaunchedEffect(s.id, position) { BeaconHub.slotViewed(s, position) }
+    return s
+}
+
+@Composable
+private fun PromoTag(modifier: Modifier = Modifier) {
+    Text(tr("推广"), fontSize = 10.sp, color = Dim,
+        modifier = modifier.background(MiuixTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(6.dp))
+            .padding(horizontal = 6.dp, vertical = 1.dp))
+}
+
+@Composable
+private fun SlotClose(position: String) {
+    Box(Modifier.size(28.dp).clip(RoundedCornerShape(14.dp)).clickable { BeaconHub.dismissSlot(position) }, contentAlignment = Alignment.Center) {
+        Icon(MiuixIcons.Close, tr("关闭推荐"), Modifier.size(16.dp), tint = Dim)
+    }
+}
+
+@Composable
+private fun slotImage(s: Slot): ImageBitmap? {
+    var img by remember(s.image) { mutableStateOf<ImageBitmap?>(s.image?.let { u -> synchronized(slotImgCache) { slotImgCache[u] } }) }
+    LaunchedEffect(s.image) { s.image?.let { u -> if (img == null) img = loadSlotImage(u) } }
+    return img
+}
+
+/**
+ * 自营推荐位卡片。position：home_bottom / file_result / about / model_download。
  */
 @Composable
 fun BeaconSlotCard(position: String, liveOn: Boolean, modifier: Modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
-    if (liveOn) return
-    val s: Slot = BeaconHub.slot(position) ?: return
+    val s = rememberSlot(position, liveOn) ?: return
     val ctx = LocalContext.current
-    LaunchedEffect(s.id) { BeaconHub.slotViewed(s) }
-    var img by remember(s.image) { mutableStateOf<ImageBitmap?>(s.image?.let { u -> synchronized(slotImgCache) { slotImgCache[u] } }) }
-    LaunchedEffect(s.image) { s.image?.let { u -> if (img == null) img = loadSlotImage(u) } }
+    val img = slotImage(s)
     Card(modifier, onClick = { BeaconHub.openSlot(ctx, s) }) {
         Box(Modifier.fillMaxWidth()) {
             Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -303,16 +333,55 @@ fun BeaconSlotCard(position: String, liveOn: Boolean, modifier: Modifier = Modif
                     Image(it, null, Modifier.size(52.dp).clip(RoundedCornerShape(12.dp)), contentScale = ContentScale.Crop)
                     Spacer(Modifier.width(12.dp))
                 }
-                Column(Modifier.weight(1f).padding(end = 36.dp)) {
+                Column(Modifier.weight(1f).padding(end = 64.dp)) {
                     Text(s.title, fontWeight = FontWeight.Medium, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     if (s.subtitle.isNotBlank()) Text(s.subtitle, fontSize = 12.sp, color = Dim, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
             }
-            Text(tr("推广"), fontSize = 10.sp, color = Dim,
-                modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
-                    .background(MiuixTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(6.dp))
-                    .padding(horizontal = 6.dp, vertical = 1.dp))
+            Row(Modifier.align(Alignment.TopEnd).padding(top = 4.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                PromoTag()
+                SlotClose(position)
+            }
         }
+    }
+}
+
+/** 音色仓库列表里的推荐位（repo_list）：外形同仓库音色项，标题旁带「推广」，右侧关闭 */
+@Composable
+fun BeaconSlotRepoItem(position: String, liveOn: Boolean, modifier: Modifier) {
+    val s = rememberSlot(position, liveOn) ?: return
+    val ctx = LocalContext.current
+    val img = slotImage(s)
+    Card(modifier, onClick = { BeaconHub.openSlot(ctx, s) }) {
+        Row(Modifier.padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            img?.let {
+                Image(it, null, Modifier.size(40.dp).clip(RoundedCornerShape(10.dp)), contentScale = ContentScale.Crop)
+                Spacer(Modifier.width(12.dp))
+            }
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(s.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    Spacer(Modifier.width(6.dp))
+                    PromoTag()
+                }
+                if (s.subtitle.isNotBlank()) Text(s.subtitle, fontSize = 13.sp, color = Dim, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+            SlotClose(position)
+        }
+    }
+}
+
+/** 一行文字链接（update：更新弹窗底部） */
+@Composable
+fun BeaconSlotLink(position: String, liveOn: Boolean, modifier: Modifier = Modifier.fillMaxWidth()) {
+    val s = rememberSlot(position, liveOn) ?: return
+    val ctx = LocalContext.current
+    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+        PromoTag()
+        Spacer(Modifier.width(6.dp))
+        Text(s.title, fontSize = 12.sp, color = MiuixTheme.colorScheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).clickable { BeaconHub.openSlot(ctx, s) }.padding(vertical = 4.dp))
+        SlotClose(position)
     }
 }
 

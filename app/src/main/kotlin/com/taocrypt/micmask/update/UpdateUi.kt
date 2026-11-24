@@ -63,9 +63,9 @@ private fun Notes(md: String) {
     Text(text, fontSize = 13.sp, lineHeight = 19.sp)
 }
 
-/** 全局更新对话框：V2App 里挂一次，Updater.dialog 控制显示 */
+/** 全局更新对话框：V2App 里挂一次，Updater.dialog 控制显示。底部有推荐位 update（一行文字链接；强制更新与变声中不显示） */
 @Composable
-fun UpdateDialog() {
+fun UpdateDialog(liveOn: Boolean = false) {
     val ctx = LocalContext.current
     val show by Updater.dialog.collectAsState()
     val st by Updater.state.collectAsState()
@@ -126,6 +126,7 @@ fun UpdateDialog() {
                     }
                 }
             }
+            if (!forced) com.taocrypt.micmask.ui2.BeaconSlotLink("update", liveOn, Modifier.fillMaxWidth().padding(top = 10.dp))
         }
     }
 }

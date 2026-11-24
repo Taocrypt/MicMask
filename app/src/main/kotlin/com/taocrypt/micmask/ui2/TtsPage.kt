@@ -137,6 +137,8 @@ internal fun TtsPage(vm: MainViewModel, st: UiState) {
                     }
                 }
             }
+            // 推荐位 model_download：TTS 模型下载中显示在进度卡片下方，下载结束自动收起
+            if (dl) BeaconSlotCard("model_download", st.liveOn, Modifier.fillMaxWidth().padding(Pad2).padding(top = 12.dp))
         }
 
         // ---- 文字 ----

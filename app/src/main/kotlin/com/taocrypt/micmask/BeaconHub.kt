@@ -53,6 +53,7 @@ object BeaconHub {
             debug = BuildConfig.DEBUG,
         )
         Beacon.init(app, o)
+        appCtx = app.applicationContext
         inited = true
         analytics = Beacon.isAnalyticsEnabled()
         showSlots = Prefs.main(app).getBoolean(K_SLOTS, true)
@@ -66,6 +67,7 @@ object BeaconHub {
         if (!enabled) return
         Beacon.fetchConfig { c ->
             config = c
+            // 配置刷新后重挑；本次启动已曝光的条目仍可保留（见 pickFresh）
             synchronized(picked) { picked.clear() }
             if (!queued && c != null) {
                 queued = true
@@ -137,13 +139,82 @@ object BeaconHub {
 
     // ------------------------------------------------ 推荐位
 
-    fun slot(position: String): Slot? {
-        if (!enabled || !showSlots) return null
-        config ?: return null
-        return synchronized(picked) { picked.getOrPut(position) { Beacon.pickSlot(position) } }
+    // 频控/关闭规则（alpha90）：
+    // - 每个位置每次启动挑一次（[picked]），本次启动内一直显示同一条，滑动/重组不换。
+    // - 曝光：同一条（slot id）同一位置每个本地日期只上报一次 $slot_view，记在 prefs [K_SEEN]（"yyyyMMdd|id|pos"，跨日自动清理）；
+    //   当天已曝光过的条目，之后的启动不再挑它（同位置有其他候选就换一条，没有就不显示）。本次启动里曝光过的仍保持显示。
+    // - 关闭：按位置记到期时间 [K_DISMISS]+position；home_bottom 7 天，其他位置到当天本地 24:00。
+    private const val K_SEEN = "slot_seen"
+    private const val K_DISMISS = "slot_dismiss_"
+    private var appCtx: Context? = null
+    /** 本次启动已曝光的 "id|pos"：保持显示，不因当天已曝光而消失 */
+    private val sessionSeen = HashSet<String>()
+    /** 关闭后让 Compose 重组 */
+    private var slotRev by mutableStateOf(0)
+
+    private fun today(): String = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US).format(java.util.Date())
+
+    private fun seenToday(ctx: Context): Set<String> {
+        val d = today() + "|"
+        return Prefs.main(ctx).getStringSet(K_SEEN, emptySet())!!.filter { it.startsWith(d) }.map { it.removePrefix(d) }.toSet()
     }
 
-    fun slotViewed(s: Slot) = Beacon.reportSlotView(s)
+    private fun dismissed(ctx: Context, position: String) =
+        Prefs.main(ctx).getLong(K_DISMISS + position, 0L) > System.currentTimeMillis()
+
+    /** 同 SDK pickSlot（最高优先级组内按权重随机），但排除当天该位置已曝光、且不是本次启动曝光的条目 */
+    private fun pickFresh(ctx: Context, c: BeaconConfig, position: String): Slot? {
+        val seen = seenToday(ctx)
+        val list = c.slots.filter { it.position == position }.filter { s ->
+            val k = "${s.id}|$position"; k in sessionSeen || k !in seen
+        }
+        if (list.isEmpty()) return null
+        val top = list.maxOf { it.priority }
+        val cands = list.filter { it.priority == top }
+        var r = (Math.random() * cands.sumOf { maxOf(1, it.weight) }).toInt()
+        for (s in cands) { r -= maxOf(1, s.weight); if (r < 0) return s }
+        return cands.last()
+    }
+
+    fun slot(position: String): Slot? {
+        @Suppress("UNUSED_VARIABLE") val rev = slotRev
+        if (!enabled || !showSlots) return null
+        val c = config ?: return null
+        val ctx = appCtx ?: return null
+        if (dismissed(ctx, position)) return null
+        return synchronized(picked) { picked.getOrPut(position) { pickFresh(ctx, c, position) } }
+    }
+
+    /** 真正显示时调用；同一条同一位置当天只上报一次（修 LazyColumn 滑回重复上报） */
+    fun slotViewed(s: Slot, position: String = s.position) {
+        val ctx = appCtx ?: return
+        val k = "${s.id}|$position"
+        synchronized(sessionSeen) {
+            if (k in sessionSeen) return
+            sessionSeen += k
+        }
+        val d = today()
+        val sp = Prefs.main(ctx)
+        val cur = sp.getStringSet(K_SEEN, emptySet())!!
+        if ("$d|$k" in cur) return
+        sp.edit().putStringSet(K_SEEN, cur.filter { it.startsWith("$d|") }.toSet() + "$d|$k").apply()
+        Beacon.reportSlotView(s)
+    }
+
+    /** 关闭某个位置：home_bottom 7 天不再出，其他位置当天不再出 */
+    fun dismissSlot(position: String) {
+        val ctx = appCtx ?: return
+        val until = if (position == "home_bottom") System.currentTimeMillis() + 7L * 86_400_000L
+        else java.util.Calendar.getInstance().apply {
+            add(java.util.Calendar.DAY_OF_YEAR, 1)
+            set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
+        Prefs.main(ctx).edit().putLong(K_DISMISS + position, until).apply()
+        synchronized(picked) { picked.remove(position) }
+        slotRev++
+    }
+
     fun openSlot(ctx: Context, s: Slot) = Beacon.openSlot(ctx, s)
 
     // ------------------------------------------------ 公告
