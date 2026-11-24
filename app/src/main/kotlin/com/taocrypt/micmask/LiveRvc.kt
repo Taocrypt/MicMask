@@ -292,8 +292,8 @@ class LiveRvc(private val open: (String) -> Any?) {
             }
             // 手动档位：只在对应块长里选，没有就退回全部
             val pool = when (tier) {
-                1 -> cands.filter { it.blockMs <= 30 }
-                2 -> cands.filter { it.blockMs > 30 }
+                1 -> cands.filter { it.blockMs <= 300 }   // blockMs 是毫秒（alpha33 起误写成帧数，标准档永远落空）
+                2 -> cands.filter { it.blockMs > 300 }
                 else -> cands
             }.ifEmpty { if (tier != 0) L.w("live 本音色没有${if (tier == 1) "标准" else "省电"}档模型，改为自动"); cands }
             val ok = pool.filter { ratio(it) <= 0.8 }
