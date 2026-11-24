@@ -305,8 +305,11 @@ private fun PromoTag(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun SlotClose(position: String) {
-    Box(Modifier.size(28.dp).clip(RoundedCornerShape(14.dp)).clickable { BeaconHub.dismissSlot(position) }, contentAlignment = Alignment.Center) {
+private fun SlotClose(position: String) = SlotClose { BeaconHub.dismissSlot(position) }
+
+@Composable
+private fun SlotClose(onClose: () -> Unit) {
+    Box(Modifier.size(28.dp).clip(RoundedCornerShape(14.dp)).clickable { onClose() }, contentAlignment = Alignment.Center) {
         Icon(MiuixIcons.Close, tr("关闭推荐"), Modifier.size(16.dp), tint = Dim)
     }
 }
@@ -350,6 +353,19 @@ fun BeaconSlotCard(position: String, liveOn: Boolean, modifier: Modifier = Modif
 @Composable
 fun BeaconSlotRepoItem(position: String, liveOn: Boolean, modifier: Modifier) {
     val s = rememberSlot(position, liveOn) ?: return
+    SlotRepoItemBody(s, modifier) { BeaconHub.dismissSlot(position) }
+}
+
+/** 多条位置里的一条（alpha91 repo_list）：曝光按 日期|id|位置 去重，关闭只隐藏这一条当天 */
+@Composable
+fun BeaconSlotRepoItem(s: Slot, position: String, liveOn: Boolean, modifier: Modifier) {
+    if (liveOn) return
+    LaunchedEffect(s.id, position) { BeaconHub.slotViewed(s, position) }
+    SlotRepoItemBody(s, modifier) { BeaconHub.dismissSlotItem(s, position) }
+}
+
+@Composable
+private fun SlotRepoItemBody(s: Slot, modifier: Modifier, onClose: () -> Unit) {
     val ctx = LocalContext.current
     val img = slotImage(s)
     Card(modifier, onClick = { BeaconHub.openSlot(ctx, s) }) {
@@ -366,7 +382,7 @@ fun BeaconSlotRepoItem(position: String, liveOn: Boolean, modifier: Modifier) {
                 }
                 if (s.subtitle.isNotBlank()) Text(s.subtitle, fontSize = 13.sp, color = Dim, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
-            SlotClose(position)
+            SlotClose(onClose)
         }
     }
 }

@@ -40,6 +40,8 @@ object BeaconHub {
     private var queued = false
     /** 推荐位：每个位置每次启动挑一次，避免重组时随机换来换去 */
     private val picked = HashMap<String, Slot?>()
+    /** 多条位置（repo_list）：每次启动排一次序，避免重组时顺序变 */
+    private val pickedMulti = HashMap<String, List<Slot>>()
 
     fun init(app: Application) {
         if (inited) return
@@ -67,8 +69,9 @@ object BeaconHub {
         if (!enabled) return
         Beacon.fetchConfig { c ->
             config = c
-            // 配置刷新后重挑；本次启动已曝光的条目仍可保留（见 pickFresh）
+            // 配置刷新后重挑
             synchronized(picked) { picked.clear() }
+            synchronized(pickedMulti) { pickedMulti.clear() }
             if (!queued && c != null) {
                 queued = true
                 val p = Beacon.pendingNotices()
@@ -139,13 +142,20 @@ object BeaconHub {
 
     // ------------------------------------------------ 推荐位
 
-    // 频控/关闭规则（alpha90）：
+    // 频控/关闭规则（alpha90，alpha91 调整）：
     // - 每个位置每次启动挑一次（[picked]），本次启动内一直显示同一条，滑动/重组不换。
     // - 曝光：同一条（slot id）同一位置每个本地日期只上报一次 $slot_view，记在 prefs [K_SEEN]（"yyyyMMdd|id|pos"，跨日自动清理）；
-    //   当天已曝光过的条目，之后的启动不再挑它（同位置有其他候选就换一条，没有就不显示）。本次启动里曝光过的仍保持显示。
+    //   alpha91 起 slot_seen 只用于上报去重，不再影响显示：当天已曝光的条目之后的启动照常挑选/显示（长期显示，不再"每天只显示一次"）。
     // - 关闭：按位置记到期时间 [K_DISMISS]+position；home_bottom 7 天，其他位置到当天本地 24:00。
+    // 多条位置（alpha91，目前只有 repo_list，见 [MULTI_POSITIONS] / [slots]）：
+    // - 该位置所有条目都展示：priority 降序、同优先级按 weight 加权随机排序，每次启动排一次；
+    // - 曝光上报同单条位置：按 "日期|id|位置" 当天只报一次 $slot_view；
+    // - 关闭按条目：prefs [K_DISMISS_IDS] 记 "yyyyMMdd|id|pos"，只隐藏那一条到当天结束，其他条目不受影响；
+    //   旧的位置级 slot_dismiss_repo_list（alpha90 写的，到当天 24:00）仍会整位置隐藏到期为止，新版不再写它。
     private const val K_SEEN = "slot_seen"
     private const val K_DISMISS = "slot_dismiss_"
+    private const val K_DISMISS_IDS = "slot_dismiss_ids"
+    val MULTI_POSITIONS = setOf("repo_list")
     private var appCtx: Context? = null
     /** 本次启动已曝光的 "id|pos"：保持显示，不因当天已曝光而消失 */
     private val sessionSeen = HashSet<String>()
@@ -154,20 +164,12 @@ object BeaconHub {
 
     private fun today(): String = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US).format(java.util.Date())
 
-    private fun seenToday(ctx: Context): Set<String> {
-        val d = today() + "|"
-        return Prefs.main(ctx).getStringSet(K_SEEN, emptySet())!!.filter { it.startsWith(d) }.map { it.removePrefix(d) }.toSet()
-    }
-
     private fun dismissed(ctx: Context, position: String) =
         Prefs.main(ctx).getLong(K_DISMISS + position, 0L) > System.currentTimeMillis()
 
-    /** 同 SDK pickSlot（最高优先级组内按权重随机），但排除当天该位置已曝光、且不是本次启动曝光的条目 */
+    /** 同 SDK pickSlot（最高优先级组内按权重随机）。alpha91 起当天已曝光的条目照常参与挑选（slot_seen 只用于上报去重） */
     private fun pickFresh(ctx: Context, c: BeaconConfig, position: String): Slot? {
-        val seen = seenToday(ctx)
-        val list = c.slots.filter { it.position == position }.filter { s ->
-            val k = "${s.id}|$position"; k in sessionSeen || k !in seen
-        }
+        val list = c.slots.filter { it.position == position }
         if (list.isEmpty()) return null
         val top = list.maxOf { it.priority }
         val cands = list.filter { it.priority == top }
@@ -199,6 +201,54 @@ object BeaconHub {
         if ("$d|$k" in cur) return
         sp.edit().putStringSet(K_SEEN, cur.filter { it.startsWith("$d|") }.toSet() + "$d|$k").apply()
         Beacon.reportSlotView(s)
+    }
+
+    private fun dismissedIdsToday(ctx: Context): Set<String> {
+        val d = today() + "|"
+        return Prefs.main(ctx).getStringSet(K_DISMISS_IDS, emptySet())!!.filter { it.startsWith(d) }.map { it.removePrefix(d) }.toSet()
+    }
+
+    /** 加权随机排序（不放回）：同优先级里 weight 大的更可能排前面 */
+    private fun weightedShuffle(list: List<Slot>): List<Slot> {
+        val rest = list.toMutableList()
+        val out = ArrayList<Slot>(list.size)
+        while (rest.isNotEmpty()) {
+            var r = Math.random() * rest.sumOf { maxOf(1, it.weight) }
+            var idx = rest.lastIndex
+            for ((i, s) in rest.withIndex()) { r -= maxOf(1, s.weight); if (r < 0) { idx = i; break } }
+            out += rest.removeAt(idx)
+        }
+        return out
+    }
+
+    /**
+     * 多条位置：返回该位置所有可展示条目（priority 降序，同优先级按 weight 加权随机），每次启动排一次序。
+     * 当天已曝光的不排除；按条目关闭的（当天）过滤掉；单条位置请用 [slot]。
+     */
+    fun slots(position: String): List<Slot> {
+        @Suppress("UNUSED_VARIABLE") val rev = slotRev
+        if (!enabled || !showSlots) return emptyList()
+        val c = config ?: return emptyList()
+        val ctx = appCtx ?: return emptyList()
+        if (dismissed(ctx, position)) return emptyList()
+        val all = synchronized(pickedMulti) {
+            pickedMulti.getOrPut(position) {
+                c.slots.filter { it.position == position }.groupBy { it.priority }
+                    .toSortedMap(compareByDescending { it }).values.flatMap { weightedShuffle(it) }
+            }
+        }
+        val gone = dismissedIdsToday(ctx)
+        return all.filter { "${it.id}|$position" !in gone }
+    }
+
+    /** 关闭多条位置里的某一条：只隐藏这一条到当天本地 24:00 */
+    fun dismissSlotItem(s: Slot, position: String = s.position) {
+        val ctx = appCtx ?: return
+        val d = today()
+        val sp = Prefs.main(ctx)
+        val cur = sp.getStringSet(K_DISMISS_IDS, emptySet())!!
+        sp.edit().putStringSet(K_DISMISS_IDS, cur.filter { it.startsWith("$d|") }.toSet() + "$d|${s.id}|$position").apply()
+        slotRev++
     }
 
     /** 关闭某个位置：home_bottom 7 天不再出，其他位置当天不再出 */

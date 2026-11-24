@@ -44,6 +44,8 @@ data class UiState(
     val progress: Float = 0f,
 
     val resultFile: File? = null,
+    /** 文件变声：点开始变声后为 true（转换中+完成后保持，用于 file_result 推荐位）；换输入/失败时清掉 */
+    val fileVcStarted: Boolean = false,
     val resultDisplay: String? = null,
     val resultSeconds: Float = 0f,
     val elapsedMs: Long = 0L,
@@ -1958,7 +1960,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             recCount = s.recCount + 1,
             srcName = r.file.name,
             srcInfo = desc,
-            resultFile = null,
+            resultFile = null, fileVcStarted = false,
             error = null,
             toast = when {
                 r.tooQuiet -> tr("录到的几乎都是底噪，请检查麦克风后重录")
@@ -1992,7 +1994,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     srcInfo = tr("录音文件 · %.1f 秒 · %d Hz").format(
                         raw.samples.size.toFloat() / raw.sampleRate, raw.sampleRate
                     ),
-                    resultFile = null,
+                    resultFile = null, fileVcStarted = false,
                 )
             } catch (t: Throwable) {
                 L.e("读取录音失败", t)
@@ -2408,7 +2410,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun pickAudio(uri: Uri) {
         val nm = runCatching { AudioIo.displayName(ctx, uri) }.getOrNull() ?: uri.lastPathSegment ?: ""
-        _state.value = _state.value.copy(busy = true, stage = tr("解码音频"), progress = 0.02f, error = null, resultFile = null, srcLoading = nm)
+        _state.value = _state.value.copy(busy = true, stage = tr("解码音频"), progress = 0.02f, error = null, resultFile = null, fileVcStarted = false, srcLoading = nm)
         viewModelScope.launch(Dispatchers.Default) {
             try {
                 // 解码前先看时长：整段转换内存随时长线性涨，超长直接拦下，不白等解码
@@ -2442,7 +2444,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(
             srcName = name,
             srcInfo = tr("已注入 16 kHz 音频 · %.1f 秒").format(samples16k.size / 16000f),
-            resultFile = null, error = null,
+            resultFile = null, fileVcStarted = false, error = null,
         )
     }
 
@@ -2458,7 +2460,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         val s = _state.value
         if (s.busy) return
-        _state.value = s.copy(busy = true, stage = tr("准备"), progress = 0f, error = null, resultFile = null)
+        _state.value = s.copy(busy = true, stage = tr("准备"), progress = 0f, error = null, resultFile = null, fileVcStarted = true)
         viewModelScope.launch(Dispatchers.Default) {
             try {
                 val cfg = RvcConfig(
@@ -2496,7 +2498,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             } catch (t: Throwable) {
                 L.e("转换失败", t)
                 _state.value = _state.value.copy(
-                    busy = false, stage = "",
+                    busy = false, stage = "", fileVcStarted = false,
                     error = tr("转换失败：{0}", t.message),
                 )
             }

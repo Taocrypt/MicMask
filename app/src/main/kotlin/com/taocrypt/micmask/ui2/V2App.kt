@@ -753,13 +753,21 @@ private fun LazyListScope.aiPage(vm: MainViewModel, st: UiState, open: (String) 
     if (st.repoModels.isNotEmpty() && shown.isEmpty()) item {
         Text(if (st.repoQuery.isNotBlank()) tr("没有找到「{0}」", st.repoQuery.trim()) else tr("这个分类下还没有模型"), Modifier.padding(horizontal = 28.dp, vertical = 8.dp), fontSize = 13.sp, color = Summary)
     }
-    // 推荐位 repo_list：第 3 个音色之后插一条（不足 3 个不插），样式同音色项，带「推广」
-    val slotAt = 3
-    items(shown.take(slotAt), key = { "r_${it.id}" }) { m -> RepoItem(vm, st, m) }
-    if (shown.size >= slotAt) item(key = "slot_repo_list") {
-        BeaconSlotRepoItem("repo_list", st.liveOn, Modifier.fillMaxWidth().padding(PagePad).padding(bottom = 8.dp))
+    // 推荐位 repo_list（alpha91 支持多条）：第 3 个音色后插第 1 条，之后每隔 5 个音色插下一条；音色不够就不插剩下的
+    val repoSlots = if (st.liveOn) emptyList() else com.taocrypt.micmask.BeaconHub.slots("repo_list")
+    var from = 0
+    var at = 3
+    for ((n, sl) in repoSlots.withIndex()) {
+        if (shown.size < at) break
+        val seg = shown.subList(from, at)
+        items(seg, key = { "r_${it.id}" }) { m -> RepoItem(vm, st, m) }
+        item(key = "slot_repo_list_${sl.id}_$n") {
+            BeaconSlotRepoItem(sl, "repo_list", st.liveOn, Modifier.fillMaxWidth().padding(PagePad).padding(bottom = 8.dp))
+        }
+        from = at
+        at += 5
     }
-    items(shown.drop(slotAt), key = { "r_${it.id}" }) { m -> RepoItem(vm, st, m) }
+    items(shown.subList(from, shown.size), key = { "r_${it.id}" }) { m -> RepoItem(vm, st, m) }
     item { SmallTitle(tr("更多")) }
     item {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {

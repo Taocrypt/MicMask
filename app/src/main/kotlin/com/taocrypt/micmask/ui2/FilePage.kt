@@ -249,7 +249,8 @@ internal fun FilePage(vm: MainViewModel, st: UiState) {
             }
         }
 
-        if (st.resultFile != null) BeaconSlotCard("file_result", st.liveOn, Modifier.fillMaxWidth().padding(Pad2).padding(top = 12.dp))
+        // alpha91：点开始变声就显示（转换中+完成后保持同一条；BeaconHub 每次启动每位置只挑一次）
+        if (st.fileVcStarted || st.resultFile != null) BeaconSlotCard("file_result", st.liveOn, Modifier.fillMaxWidth().padding(Pad2).padding(top = 12.dp))
 
         val resCount = remember(st.resultFile, resList) { vm.listResults().size }
         if (resCount > 0) Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(top = 12.dp)) {
