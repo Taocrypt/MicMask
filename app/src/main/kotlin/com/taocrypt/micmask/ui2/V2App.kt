@@ -239,7 +239,7 @@ fun V2App(vm: MainViewModel) {
                     "file" -> SubPage(tr("文件变声"), { sub = null }) { FilePage(vm, st) }
                     "whitelist" -> SubPage(tr("目标应用"), { sub = null }) { WhitelistPage(vm) }
                     "theme" -> SubPage(tr("外观"), { sub = null }) { ThemePage(ui) }
-                    "about" -> SubPage(tr("关于"), { sub = null }) { AboutPage(vm, { sub = "logs" }, { sub = "mirrors" }, { sub = "disclaimer" }, { sub = "refs" }) }
+                    "about" -> SubPage(tr("关于"), { sub = null }) { AboutPage(vm, { sub = "logs" }, { sub = "mirrors" }, { sub = "disclaimer" }, { sub = "refs" }, { sub = "privacy" }) }
                     "disclaimer" -> SubPage(tr("免责声明"), { sub = "about" }) { DisclaimerPage() }
                     "refs" -> SubPage(tr("参考项目"), { sub = "about" }) { RefsPage() }
                     "mirrors" -> SubPage(tr("下载镜像"), { sub = "about" }) { com.taocrypt.micmask.update.MirrorPage() }
@@ -1370,8 +1370,6 @@ private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (St
     item { PermModeCard(vm, st) }
     item { SmallTitle(tr("模型仓库")) }
     item { RepoSetting(vm, st) }
-    item { SmallTitle(tr("隐私")) }
-    item { PrivacySettings(vm, open) }
     item { SmallTitle(tr("其他")) }
     item {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
@@ -1381,40 +1379,6 @@ private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (St
                 else tr("QQ 群 {0} · GitHub Issues", AboutLinks.QQ_GROUP_NO), onClick = { open("feedback") })
             ArrowPreference(title = tr("音频还原"), summary = tr("应用没声音时点这里还原"), onClick = { vm.repairAudio() })
             ArrowPreference(title = tr("关于 MicMask"), summary = tr("v{0} · 更新、反馈、赞赏", com.taocrypt.micmask.BuildConfig.VERSION_NAME), onClick = { open("about") })
-        }
-    }
-}
-
-/** 设置 → 隐私：匿名统计开关、删除统计数据、显示推荐、隐私说明 */
-@Composable
-private fun PrivacySettings(vm: MainViewModel, open: (String) -> Unit) {
-    val ctx = LocalContext.current
-    val hub = com.taocrypt.micmask.BeaconHub
-    var confirm by remember { mutableStateOf(false) }
-    var forgetting by remember { mutableStateOf(false) }
-    Card(Modifier.fillMaxWidth().padding(PagePad)) {
-        if (hub.enabled) {
-            SwitchPreference(checked = hub.analytics, onCheckedChange = { hub.setAnalytics(it) }, title = tr("匿名统计"),
-                summary = if (hub.analytics) tr("已开：上报版本、机型、功能使用与崩溃信息，不含录音") else tr("已关：不上报任何统计"))
-            ArrowPreference(title = tr("删除我的统计数据"), summary = if (forgetting) tr("正在删除…") else tr("删除服务器上本机的全部统计记录并重置安装 ID"),
-                enabled = !forgetting, onClick = { confirm = true })
-            SwitchPreference(checked = hub.showSlots, onCheckedChange = { hub.setShowSlots(ctx, it) }, title = tr("显示推荐"),
-                summary = tr("在首页、结果页和关于页显示作者的推荐内容"))
-        }
-        ArrowPreference(title = tr("隐私说明"), summary = if (hub.enabled) tr("收集什么、不收集什么") else tr("当前版本未启用统计"), onClick = { open("privacy") })
-    }
-    if (confirm) WindowDialog(show = true, title = tr("删除我的统计数据"), summary = tr("将删除服务器上本机的全部统计记录，并关闭匿名统计。此操作不可撤销。"),
-        onDismissRequest = { confirm = false }) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(tr("取消"), onClick = { confirm = false }, modifier = Modifier.weight(1f))
-            TextButton(tr("删除"), onClick = {
-                confirm = false; forgetting = true
-                hub.forgetMe { ok ->
-                    forgetting = false
-                    if (ok) hub.setAnalytics(false)
-                    Toast.makeText(ctx, if (ok) tr("已删除，匿名统计已关闭") else tr("删除失败，请检查网络后重试"), Toast.LENGTH_LONG).show()
-                }
-            }, modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary())
         }
     }
 }

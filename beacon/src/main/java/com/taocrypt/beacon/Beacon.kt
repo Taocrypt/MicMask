@@ -79,16 +79,41 @@ object Beacon {
 
     // ---------------- 统计 ----------------
 
-    /** 用户是否同意统计（默认 false）。关闭时会清空本地队列 */
+    /**
+     * 基础统计事件（MicMask 副本新增）：启动（活跃用户数）、公告/推荐位的曝光与点击。
+     * [setEssentialEnabled] 打开后，即使关闭了完整统计也会上报这几种事件，且不带机型、系统版本。
+     */
+    private val ESSENTIAL = setOf("\$launch", "\$notice_view", "\$notice_click", "\$slot_view", "\$slot_click")
+
+    /** 用户是否同意统计（默认 false）。关闭时清空本地队列里的非基础事件 */
     @JvmStatic
     fun setAnalyticsEnabled(enabled: Boolean) {
         if (!::prefs.isInitialized) return
         prefs.edit().putBoolean("analytics", enabled).apply()
-        if (!enabled) io.execute { synchronized(queue) { queue.clear() }; saveQueue() }
+        if (!enabled) io.execute { dropQueued(); saveQueue() }
     }
 
     @JvmStatic
     fun isAnalyticsEnabled(): Boolean = ::prefs.isInitialized && prefs.getBoolean("analytics", false)
+
+    /** 基础统计开关（MicMask 副本新增，用户同意使用说明后打开）。关闭时清空队列里的基础事件 */
+    @JvmStatic
+    fun setEssentialEnabled(enabled: Boolean) {
+        if (!::prefs.isInitialized) return
+        prefs.edit().putBoolean("essential", enabled).apply()
+        if (!enabled) io.execute { dropQueued(); saveQueue() }
+    }
+
+    @JvmStatic
+    fun isEssentialEnabled(): Boolean = ::prefs.isInitialized && prefs.getBoolean("essential", false)
+
+    private fun allowed(name: String) = isAnalyticsEnabled() || (isEssentialEnabled() && name in ESSENTIAL)
+
+    /** 按当前两个开关删掉队列里不允许上报的事件 */
+    private fun dropQueued() = synchronized(queue) {
+        val full = isAnalyticsEnabled(); val ess = isEssentialEnabled()
+        queue.removeAll { !full && !(ess && it.optString("n") in ESSENTIAL) }
+    }
 
     /** 匿名安装 ID（随机生成，卸载重装会变） */
     @JvmStatic
@@ -107,7 +132,7 @@ object Beacon {
     @JvmStatic
     @JvmOverloads
     fun track(name: String, props: Map<String, Any?> = emptyMap()) {
-        if (opts == null || !isAnalyticsEnabled()) return
+        if (opts == null || !allowed(name)) return
         val now = System.currentTimeMillis()
         touchSession(now)
         val p = JSONObject()
@@ -133,7 +158,7 @@ object Beacon {
     @JvmStatic
     @JvmOverloads
     fun trackSync(name: String, props: Map<String, Any?> = emptyMap(), timeoutMs: Long = 1500) {
-        if (opts == null || !isAnalyticsEnabled()) return
+        if (opts == null || !allowed(name)) return
         val p = JSONObject()
         for ((k, v) in props.entries.take(10)) {
             when (v) {
@@ -369,14 +394,16 @@ object Beacon {
 
     private fun flushNow() {
         val o = opts ?: return
-        if (!isAnalyticsEnabled()) return
+        val full = isAnalyticsEnabled()
+        if (!full && !isEssentialEnabled()) return
+        if (!full) dropQueued()
         while (true) {
             val batch = synchronized(queue) { queue.take(BATCH) }
             if (batch.isEmpty()) return
             val body = JSONObject()
                 .put("iid", installId()).put("sid", sessionId.ifEmpty { "s" + installId() })
                 .put("ver", o.versionCode).put("ch", o.channel)
-                .put("os", Build.VERSION.RELEASE ?: "").put("dev", Build.MODEL ?: "")
+                .put("os", if (full) Build.VERSION.RELEASE ?: "" else "").put("dev", if (full) Build.MODEL ?: "" else "")
                 .put("lang", Locale.getDefault().toLanguageTag())
                 .put("ev", JSONArray(batch))
             val code = runCatching { Http.request("${o.baseUrl}/v1/${o.appId}/events", "POST", o.clientKey, body.toString()).code }.getOrDefault(-1)

@@ -94,10 +94,11 @@ import java.net.URL
 
 /** 信息收集说明：标题 to 正文 */
 internal fun privacySections(): List<Pair<String, String>> = listOf(
-    tr("匿名统计会收集") to tr("• App 版本号、手机型号与系统版本\n• 功能使用事件，如开始/停止 AI 变声（ai_start / ai_stop）、切换音色、应用预设、文件变声、文字转语音，以及时长、档位等数值\n• 崩溃时的异常类名与本应用的几行栈帧\n• 随机生成的安装 ID（与你的身份无关，卸载重装会变）"),
+    tr("基础统计（使用即开启）") to tr("• 启动次数（用于统计活跃用户数）\n• 公告与推荐位的曝光、点击\n• App 版本号、系统语言、随机生成的安装 ID\n不含手机型号、系统版本与功能使用情况。"),
+    tr("匿名统计（可选）还会收集") to tr("• App 版本号、手机型号与系统版本\n• 功能使用事件，如开始/停止 AI 变声（ai_start / ai_stop）、切换音色、应用预设、文件变声、文字转语音，以及时长、档位等数值\n• 崩溃时的异常类名与本应用的几行栈帧\n• 随机生成的安装 ID（与你的身份无关，卸载重装会变）"),
     tr("不会收集") to tr("• 录音、音频内容和变声后的声音\n• 音色模型、文字转语音输入的文字\n• 账号、手机号、联系人、短信、精确位置等个人信息"),
     tr("其他联网") to tr("获取公告与推荐时会发送版本号、系统语言与安装 ID；主动提交反馈时，会上传你填写的内容、联系方式，以及你选择附带的日志与截图。"),
-    tr("你可以随时") to tr("在 设置 → 隐私 中关闭匿名统计、删除已上传的统计数据，或关闭推荐。匿名统计默认关闭，只有你勾选同意后才会开启。"),
+    tr("你可以随时") to tr("在 关于 → 其他 中关闭匿名统计。同意弹窗里「同意匿名统计」默认已勾选，取消勾选则只保留基础统计。"),
 )
 
 /** 免责声明要点（完整版见 关于 → 免责声明） */
@@ -147,7 +148,7 @@ fun BeaconConsentDialog(show: Boolean, onDone: () -> Unit) {
     if (!show) return
     val ctx = LocalContext.current
     val beacon = BeaconHub.enabled
-    var stats by remember { mutableStateOf(false) }
+    var stats by remember { mutableStateOf(true) }  // 首次默认勾选（alpha94），可取消
     WindowDialog(show = true, title = if (beacon) tr("使用前请阅读") else tr("免责声明"),
         onDismissRequest = {}) {
         Column {
@@ -174,7 +175,7 @@ fun BeaconConsentDialog(show: Boolean, onDone: () -> Unit) {
                     Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
                         Text(tr("同意匿名统计"), fontSize = 14.sp)
-                        Text(tr("可选，帮助改进兼容性；不勾选也能正常使用"), fontSize = 11.sp, color = Dim)
+                        Text(tr("可选，帮助改进兼容性；取消勾选也能正常使用，只保留基础统计"), fontSize = 11.sp, color = Dim)
                     }
                 }
             }
@@ -203,12 +204,17 @@ private fun NoticeKindTag(n: Notice, modifier: Modifier = Modifier) {
         modifier = modifier.background(color.copy(alpha = 0.12f), RoundedCornerShape(6.dp)).padding(horizontal = 7.dp, vertical = 2.dp))
 }
 
-/** 公告头图：加载成功才占位，宽度铺满，按原图比例（限制在 1:1 ~ 3:1 之间），圆角裁切 */
+/**
+ * 公告头图：加载成功才占位，宽度铺满，按原图比例（限制在 [minRatio]:1 ~ 3:1 之间），圆角裁切。
+ * 不要再叠 heightIn：和 aspectRatio 冲突时图片会画出自身边界、盖住标题和正文（alpha93 横幅的问题）。
+ */
 @Composable
-private fun NoticeHeaderImage(n: Notice, modifier: Modifier = Modifier) {
+private fun NoticeHeaderImage(n: Notice, modifier: Modifier = Modifier, minRatio: Float = 1f) {
     val img = rememberBeaconImage(n.image, header = true) ?: return
-    val ratio = (img.width.toFloat() / img.height.coerceAtLeast(1)).coerceIn(1f, 3f)
-    Image(img, null, modifier.fillMaxWidth().aspectRatio(ratio).clip(RoundedCornerShape(12.dp)), contentScale = ContentScale.Crop)
+    val ratio = (img.width.toFloat() / img.height.coerceAtLeast(1)).coerceIn(minRatio, 3f)
+    Box(modifier.fillMaxWidth().aspectRatio(ratio).clip(RoundedCornerShape(12.dp))) {
+        Image(img, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+    }
 }
 
 /** 弹窗正文：类型标签 + 头图 + Markdown 正文（可滚动） */
@@ -328,7 +334,7 @@ fun BeaconBanners() {
                         Icon(MiuixIcons.Close, tr("关闭"), tint = Dim, modifier = Modifier.size(18.dp))
                     }
                 }
-                NoticeHeaderImage(n, Modifier.padding(end = 12.dp, bottom = 8.dp).heightIn(max = 140.dp))
+                NoticeHeaderImage(n, Modifier.padding(end = 12.dp, bottom = 8.dp), minRatio = 2.2f)  // 横幅压成宽条
                 if (n.body.isNotBlank()) Text(md(n.body), fontSize = 13.sp, lineHeight = 19.sp, color = Dim, modifier = Modifier.padding(end = 12.dp))
                 if (n.buttons.isNotEmpty()) {
                     Spacer(Modifier.height(8.dp))
@@ -405,7 +411,7 @@ private fun rememberBeaconImage(url: String?, header: Boolean): ImageBitmap? {
 }
 
 /**
- * 推荐位公共规则（三种样式共用）：变声中（[liveOn]）隐藏；设置里关闭「显示推荐」、SDK 关闭、该位置已被关闭或没有内容时不显示；
+ * 推荐位公共规则（三种样式共用）：变声中（[liveOn]）隐藏；SDK 关闭、该位置已被关闭或没有内容时不显示；
  * 曝光与关闭的频控在 [BeaconHub.slot] / [BeaconHub.slotViewed] / [BeaconHub.dismissSlot]。
  * 不要放进悬浮窗、常驻通知、Shizuku 授权/权限引导、开屏/插屏。
  */

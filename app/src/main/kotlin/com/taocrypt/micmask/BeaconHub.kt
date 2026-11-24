@@ -17,11 +17,11 @@ import com.taocrypt.beacon.Slot
  *
  * - 只在 App 主进程初始化（[MicMaskApp]）；Shizuku shell 进程（InjectorService 等）不走 Application，也不会调用这里。
  * - BuildConfig 里的 BEACON_* 为空（源码、本地构建、fork）时 SDK 关闭：[enabled]=false，所有入口隐藏、调用空操作。
- * - 统计默认关闭，只有首启同意弹窗里勾选「同意匿名统计」或设置里打开才上报。
+ * - 统计只在首启同意弹窗里勾选「同意匿名统计」（默认勾选）并同意，或在 关于 → 其他 打开后才上报。
  */
 object BeaconHub {
     /** 同意弹窗（免责声明 + 信息收集说明）版本；声明有实质改动时 +1，所有人重新确认 */
-    const val CONSENT_VERSION = 1
+    const val CONSENT_VERSION = 2  // 2：alpha94 加基础统计（始终开启）、匿名统计默认勾选
     private const val K_CONSENT = "consent_v"
     private const val K_SLOTS = "show_slots"
 
@@ -30,7 +30,8 @@ object BeaconHub {
 
     /** Compose 可观察：统计开关、推荐位开关、配置 */
     @set:JvmName("setAnalyticsState") var analytics by mutableStateOf(false); private set
-    var showSlots by mutableStateOf(true); private set
+    /** 推荐位总开关已移除（alpha94），恒为 true；保留字段供现有判断使用 */
+    val showSlots = true
     var config by mutableStateOf<BeaconConfig?>(null); private set
 
     /** 本次启动待弹的 dialog 公告（首次拉到配置时快照一次） */
@@ -58,7 +59,8 @@ object BeaconHub {
         appCtx = app.applicationContext
         inited = true
         analytics = Beacon.isAnalyticsEnabled()
-        showSlots = Prefs.main(app).getBoolean(K_SLOTS, true)
+        // 基础统计只在同意过当前版本说明后开启；旧版同意（v1）要重新弹窗确认
+        Beacon.setEssentialEnabled(enabled && !consentNeeded(app))
         if (!Beacon.isEnabled) return
         config = Beacon.config
         installCrashHook()
@@ -90,6 +92,7 @@ object BeaconHub {
     /** 同意弹窗「同意并继续」：记录版本；统计开关按勾选框 */
     fun acceptConsent(ctx: Context, stats: Boolean) {
         Prefs.main(ctx).edit().putInt(K_CONSENT, CONSENT_VERSION).apply()
+        Beacon.setEssentialEnabled(enabled)
         setAnalytics(stats)
         L.i("同意弹窗 v$CONSENT_VERSION：已同意，匿名统计=${stats && enabled}")
     }
@@ -100,12 +103,6 @@ object BeaconHub {
         analytics = v
     }
 
-    fun forgetMe(cb: (Boolean) -> Unit) = Beacon.forgetMe(cb)
-
-    fun setShowSlots(ctx: Context, on: Boolean) {
-        Prefs.main(ctx).edit().putBoolean(K_SLOTS, on).apply()
-        showSlots = on
-    }
 
     // ------------------------------------------------ 统计
 

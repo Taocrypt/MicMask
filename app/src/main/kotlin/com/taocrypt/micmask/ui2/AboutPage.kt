@@ -114,7 +114,7 @@ internal fun openQqGroup(ctx: Context) {
 }
 
 @Composable
-fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit = {}, openDisclaimer: () -> Unit = {}, openRefs: () -> Unit = {}) {
+fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit = {}, openDisclaimer: () -> Unit = {}, openRefs: () -> Unit = {}, openPrivacy: () -> Unit = {}) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val upd by Updater.state.collectAsState()
@@ -214,6 +214,10 @@ fun AboutPage(vm: MainViewModel, openLogs: () -> Unit, openMirrors: () -> Unit =
         Card(Modifier.fillMaxWidth().padding(pad)) {
             ArrowPreference(title = tr("免责声明"), summary = tr("版权归属、使用准则与隐私"), onClick = openDisclaimer)
             ArrowPreference(title = tr("参考项目"), summary = AboutLinks.REFS.joinToString(" · ") { it.first }, onClick = openRefs)
+            val hub = com.taocrypt.micmask.BeaconHub
+            if (hub.enabled) SwitchPreference(checked = hub.analytics, onCheckedChange = { hub.setAnalytics(it) }, title = tr("匿名统计"),
+                summary = if (hub.analytics) tr("已开：上报版本、机型、功能使用与崩溃信息，不含录音") else tr("已关：只上报基础统计（启动、公告与推荐的曝光点击）"))
+            ArrowPreference(title = tr("隐私说明"), summary = if (hub.enabled) tr("收集什么、不收集什么") else tr("当前版本未启用统计"), onClick = openPrivacy)
         }
         Text("© 2026 Taocrypt · Made with AI & ❤️",
             fontSize = 11.sp, color = summary, textAlign = TextAlign.Center,
