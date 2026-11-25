@@ -1,0 +1,744 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MicMask 官网 — 安卓端真正的原生实时 AI 变声</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400&display=swap"
+    />
+    <link rel="stylesheet" href="hark.css" />
+    <link rel="stylesheet" href="hark-hero.css" />
+    <style>
+      /* 整体版式：浅色、留白、青蓝到紫的渐变点缀 */
+      :root {
+        --x-a: #0b7489;
+        --x-b: #5b47e0;
+        --x-ink: light-dark(#5b47e0, #b3a8ff);
+        --x-green: light-dark(#007a4b, #3ddc97);
+        --x-grad: linear-gradient(120deg, var(--x-a), var(--x-b));
+        --x-soft: color-mix(in srgb, var(--x-a) 10%, transparent);
+        --x-card: light-dark(#ffffff, #1f1f22);
+        --x-shadow: 0 1px 2px light-dark(#1d1d1f0a, #0000), 0 10px 30px light-dark(#1d1d1f0f, #0000004d);
+      }
+      .x-page { max-width: var(--page-max); margin: 0 auto; padding: 0 var(--gutter) 56px; }
+      .x-sec { padding-block: clamp(56px, 8vw, 96px); scroll-margin-top: 80px; }
+      .x-sec + .x-sec { border-top: 1px solid var(--stroke-secondary); }
+      .x-eyebrow { font: var(--type-label); color: var(--x-ink); margin-bottom: 10px; }
+      .x-h2 { font: var(--weight-medium) clamp(26px, 3.4vw, 38px)/1.2 var(--sans); margin: 0 0 12px; }
+      .x-sub { font-size: var(--size-prose); color: var(--text-secondary); max-width: 60ch; }
+      .x-head { margin-bottom: clamp(28px, 4vw, 44px); }
+
+      /* 顶部固定导航 */
+      .x-nav { position: fixed; inset: 0 0 auto 0; z-index: 50; background: color-mix(in srgb, var(--fill-primary-on) 84%, transparent); -webkit-backdrop-filter: var(--hark-blur); backdrop-filter: var(--hark-blur); border-bottom: 1px solid var(--stroke-secondary); }
+      .x-nav__in { max-width: var(--page-max); margin: 0 auto; padding: 10px var(--gutter); display: flex; align-items: center; gap: 12px; }
+      .x-logo { display: inline-flex; align-items: center; gap: 9px; min-height: var(--tap); text-decoration: none; font: var(--weight-bold) 18px/1 var(--sans); color: var(--text-primary); }
+      .x-logo__mark { width: 26px; height: 26px; border-radius: 9px; background: var(--x-grad); display: grid; place-items: center; }
+      .x-logo__mark span { display: block; width: 8px; height: 12px; border-radius: 4px; background: #fff; }
+      .x-nav__links { display: flex; gap: 2px; margin-inline: auto; }
+      .x-nav__links a { padding: 9px 13px; border-radius: var(--r-pill); font: var(--type-label); color: var(--text-secondary); text-decoration: none; white-space: nowrap; }
+      .x-nav__links a:hover { background: var(--fill-tertiary); color: var(--text-primary); }
+      .x-dl { display: inline-flex; align-items: center; justify-content: center; min-height: var(--tap); padding: 0 18px; border-radius: var(--r-pill); background: var(--x-grad) var(--x-b); color: #fff; font: var(--type-body-strong); text-decoration: none; box-shadow: 0 6px 18px color-mix(in srgb, var(--x-b) 28%, transparent); }
+      .x-dl:hover { filter: brightness(1.06); }
+      .x-ghost { display: inline-flex; align-items: center; justify-content: center; min-height: var(--tap); padding: 0 18px; border-radius: var(--r-pill); border: 1px solid var(--stroke-primary); background: var(--fill-primary-on); color: var(--text-primary); font: var(--type-body-strong); text-decoration: none; }
+      .x-ghost:hover { background: var(--fill-tertiary); }
+      @media (max-width: 899px) { .x-nav__links { display: none; } .x-logo { margin-right: auto; } }
+
+      /* Hero */
+      .x-hero { position: relative; isolation: isolate; display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr); gap: clamp(24px, 5vw, 64px); align-items: center; padding: clamp(96px, 12vw, 140px) 0 clamp(56px, 8vw, 96px); }
+      .x-hero__bg { position: absolute; inset: -10% -20% auto; height: 120%; width: 140%; object-fit: cover; opacity: 0.06; filter: saturate(1.2); pointer-events: none; -webkit-mask-image: radial-gradient(60% 60% at 70% 40%, #000, transparent 75%); mask-image: radial-gradient(60% 60% at 70% 40%, #000, transparent 75%); z-index: -1; }
+      .x-tag { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px; border-radius: var(--r-pill); border: 1px solid var(--stroke-primary); background: var(--fill-primary-on); font: var(--type-tag); color: var(--text-secondary); }
+      .x-tag::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--x-grad); }
+      .x-h1 { font: var(--weight-bold) clamp(36px, 6.4vw, 62px)/1.12 var(--sans); margin: 20px 0 0; letter-spacing: -0.01em; }
+      .x-h1 em { font-style: normal; color: var(--x-ink); }
+      .x-lede { margin-top: 16px; font: var(--weight-medium) clamp(17px, 2vw, 21px)/1.4 var(--sans); color: var(--text-primary); }
+      .x-hero p.x-body { margin-top: 14px; font-size: var(--size-prose); color: var(--text-secondary); max-width: 46ch; line-height: 1.6; }
+      .x-btns { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; }
+      .x-req { margin-top: 14px; font: var(--type-caption); color: var(--text-secondary); }
+
+      /* 手机模型 */
+      .x-phonewrap { position: relative; justify-self: center; padding: 10px 0; }
+      .x-phonewrap::before { content: ""; position: absolute; inset: 6% 8%; border-radius: 50%; background: var(--x-grad); filter: blur(60px); opacity: 0.22; }
+      .x-phone { position: relative; width: min(300px, 78vw); aspect-ratio: 9 / 18.6; border-radius: 42px; border: 1px solid var(--stroke-primary); background: var(--x-card); box-shadow: var(--x-shadow), 0 30px 60px light-dark(#1d1d1f1f, #0008); padding: 10px; }
+      .x-screen { height: 100%; border-radius: 34px; background: linear-gradient(170deg, color-mix(in srgb, var(--x-a) 9%, var(--fill-primary-on)), var(--fill-primary-on) 55%); border: 1px solid var(--stroke-secondary); padding: 20px 14px 16px; display: grid; grid-template-rows: auto auto 1fr auto auto; gap: 12px; overflow: hidden; }
+      .x-screen__top { display: flex; align-items: center; justify-content: space-between; font: var(--weight-bold) 15px/1 var(--sans); }
+      .x-screen__top small { font: var(--type-caption); color: var(--x-green); }
+      .x-vcard { border: 1px solid var(--stroke-primary); border-radius: var(--r-m); background: var(--x-card); padding: 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px; box-shadow: var(--x-shadow); }
+      .x-vcard b { font: var(--type-body-strong); }
+      .x-vcard small { display: block; font: var(--type-caption); color: var(--text-secondary); margin-top: 4px; }
+      .x-semi { font: var(--weight-medium) 13px/1 "Geist Mono", monospace; padding: 7px 10px; border-radius: var(--r-pill); background: var(--x-soft); color: var(--x-ink); }
+      .x-wave { display: flex; align-items: center; justify-content: center; gap: 4px; height: 100%; min-height: 70px; }
+      .x-wave i { display: block; width: 5px; height: 14px; border-radius: 3px; background: var(--x-grad); animation: x-bounce 1s var(--ease-out) infinite alternate; }
+      .x-wave i:nth-child(2) { animation-delay: 0.08s; }
+      .x-wave i:nth-child(3) { animation-delay: 0.16s; }
+      .x-wave i:nth-child(4) { animation-delay: 0.24s; }
+      .x-wave i:nth-child(5) { animation-delay: 0.32s; }
+      .x-wave i:nth-child(6) { animation-delay: 0.4s; }
+      .x-wave i:nth-child(7) { animation-delay: 0.48s; }
+      .x-wave i:nth-child(8) { animation-delay: 0.56s; }
+      .x-wave i:nth-child(9) { animation-delay: 0.64s; }
+      @keyframes x-bounce { from { height: 12px; opacity: 0.6; } to { height: 54px; opacity: 1; } }
+      .x-stop { display: grid; place-items: center; min-height: 48px; border-radius: var(--r-pill); background: var(--x-grad) var(--x-b); color: #fff; font: var(--type-body-strong); }
+      .x-mono { font: 12px/1.4 "Geist Mono", monospace; color: var(--text-secondary); text-align: center; }
+      .x-bubble { position: absolute; left: -10%; bottom: 16%; width: min(220px, 62vw); padding: 12px 14px; border-radius: var(--r-m); background: var(--x-card); border: 1px solid var(--stroke-primary); box-shadow: var(--x-shadow); font: var(--type-caption); color: var(--text-secondary); }
+      .x-bubble b { display: block; font: var(--type-label); color: var(--text-primary); margin-bottom: 4px; }
+      @media (max-width: 899px) { .x-hero { grid-template-columns: 1fr; } .x-bubble { left: auto; right: -4%; } }
+      @media (prefers-reduced-motion: reduce) { .x-wave i { animation: none; height: 32px; } }
+
+      /* 步骤卡 / 卡片网格 */
+      .x-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+      .x-step { border: 1px solid var(--stroke-primary); border-radius: var(--r-l); background: var(--x-card); padding: 26px 24px; box-shadow: var(--x-shadow); }
+      .x-step p.x-step__n { width: 34px; height: 34px; border-radius: 12px; background: var(--x-grad) var(--x-b); color: #fff; display: grid; place-items: center; font: var(--weight-bold) 14px/1 "Geist Mono", monospace; margin-bottom: 16px; }
+      .x-step h3, .x-card h3 { font: var(--type-heading); margin-bottom: 8px; }
+      .x-step p, .x-card p { font-size: var(--size-body); color: var(--text-secondary); line-height: 1.6; }
+      .x-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 16px; }
+      .x-card { border: 1px solid var(--stroke-primary); border-radius: var(--r-l); background: var(--x-card); padding: 24px; box-shadow: var(--x-shadow); }
+      .x-card__ico { width: 36px; height: 36px; border-radius: 11px; background: var(--x-soft); display: grid; place-items: center; font-size: 17px; margin-bottom: 14px; }
+      .x-card--wide { grid-column: span 2; }
+      @media (max-width: 899px) { .x-steps { grid-template-columns: 1fr; } .x-card--wide { grid-column: span 1; } }
+
+      /* 卡片内小示意 */
+      .x-demo { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--stroke-secondary); }
+      .x-num { font: var(--weight-medium) 34px/1 "Geist Mono", monospace; color: var(--x-ink); }
+      .x-num span { font: var(--type-caption); color: var(--text-secondary); -webkit-text-fill-color: var(--text-secondary); margin-left: 6px; }
+      .x-gears { display: flex; gap: 6px; flex-wrap: wrap; }
+      .x-gears span { font: var(--type-tag); padding: 7px 12px; border-radius: var(--r-pill); background: var(--fill-tertiary); color: var(--text-secondary); }
+      .x-gears span.is-on { background: var(--x-grad) var(--x-b); color: #fff; }
+      .x-files { display: flex; gap: 6px; margin-bottom: 10px; }
+      .x-files code { font-family: "Geist Mono", monospace; font-size: var(--size-caption); background: var(--fill-tertiary); border-radius: 6px; padding: 3px 8px; }
+      .x-bar { height: 7px; border-radius: 4px; background: var(--fill-tertiary); overflow: hidden; }
+      .x-bar i { display: block; height: 100%; width: 72%; border-radius: 4px; background: var(--x-grad); }
+      .x-barcap { display: flex; justify-content: space-between; font: var(--type-caption); color: var(--text-secondary); margin-top: 7px; }
+
+      /* 常见问题 */
+      .x-faqs { display: grid; gap: 10px; max-width: 860px; }
+      .x-faq { border: 1px solid var(--stroke-primary); border-radius: var(--r-m); background: var(--x-card); padding: 4px 20px; }
+      .x-faq summary { cursor: pointer; list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 0; font: var(--type-body-strong); min-height: var(--tap); }
+      .x-faq summary::-webkit-details-marker { display: none; }
+      .x-faq summary::after { content: "+"; font: 20px/1 var(--sans); color: var(--text-secondary); }
+      .x-faq[open] summary::after { content: "–"; }
+      .x-faq p { padding: 0 0 18px; font-size: var(--size-body); color: var(--text-secondary); line-height: 1.65; max-width: 68ch; }
+
+      /* 结尾 CTA 与页脚 */
+      .x-band { margin-top: 16px; border-radius: var(--r-xl); border: 1px solid var(--stroke-primary); background: linear-gradient(140deg, color-mix(in srgb, var(--x-a) 12%, var(--fill-primary-on)), color-mix(in srgb, var(--x-b) 12%, var(--fill-primary-on))); padding: clamp(40px, 7vw, 72px) var(--gutter); text-align: center; }
+      .x-band h2 { font: var(--weight-bold) clamp(28px, 4.4vw, 44px)/1.15 var(--sans); }
+      .x-band p { margin-top: 12px; color: var(--text-secondary); font-size: var(--size-prose); }
+      .x-band .x-btns { justify-content: center; }
+      .x-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding-top: 28px; margin-top: 40px; border-top: 1px solid var(--stroke-secondary); font: var(--type-caption); color: var(--text-secondary); }
+      .x-foot a { color: var(--text-secondary); }
+      .x-foot__sep a { display: inline-flex; align-items: center; justify-content: center; min-height: var(--tap); min-width: var(--tap); vertical-align: middle; }
+      .x-foot__sep { margin-inline: auto; }
+
+      /* 实机截图 */
+      .x-shots { display: flex; gap: 12px; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 8px; -webkit-overflow-scrolling: touch; }
+      .x-shots img { flex: 0 0 auto; width: 200px; aspect-ratio: 9 / 19.5; object-fit: cover; border-radius: var(--r-m); border: 1px solid var(--stroke-secondary); background: var(--fill-tertiary); scroll-snap-align: start; }
+
+      /* 使用手册 */
+      .x-manual { border: 1px solid var(--stroke-primary); border-radius: var(--r-l); background: var(--x-card); padding: clamp(20px, 3vw, 32px); box-shadow: var(--x-shadow); }
+      .x-toc { background: var(--fill-tertiary); border-radius: var(--r-m); padding: 16px 20px; margin-bottom: 24px; }
+      .x-toc p { font: var(--type-label); color: var(--text-secondary); margin: 0 0 8px; }
+      .x-toc ol { margin: 0; padding-left: 20px; font: var(--type-small); columns: 2 220px; }
+      .x-toc li { padding: 4px 0; break-inside: avoid; }
+      .x-md { font: var(--type-body); color: var(--text-primary); max-width: 72ch; }
+      .x-md h1 { font: var(--type-title); margin: 24px 0 12px; }
+      .x-md h2 { font: var(--type-heading); margin: 32px 0 12px; padding-top: 16px; border-top: 1px solid var(--stroke-secondary); scroll-margin-top: 88px; }
+      .x-md h3 { font: var(--type-body-strong); margin: 24px 0 8px; }
+      .x-md h4 { font: var(--type-label); color: var(--text-secondary); margin: 20px 0 8px; }
+      .x-md > :first-child, .x-md-rest > :first-child { margin-top: 0; }
+      .x-md p, .x-md ul, .x-md ol, .x-md blockquote, .x-md pre, .x-md .x-md-table { margin: 0 0 12px; }
+      .x-md ul, .x-md ol { padding-left: 22px; }
+      .x-md li { margin: 4px 0; }
+      .x-md li > ul, .x-md li > ol { margin: 4px 0 0; }
+      .x-md code { font-family: "Geist Mono", monospace; font-size: var(--size-small); background: var(--fill-tertiary); border-radius: 6px; padding: 1px 6px; }
+      .x-md pre { background: var(--fill-tertiary); border-radius: var(--r-s); padding: 14px 16px; overflow-x: auto; }
+      .x-md pre code { background: none; padding: 0; white-space: pre; }
+      .x-md blockquote { border-left: 3px solid var(--stroke-primary); padding: 2px 0 2px 14px; color: var(--text-secondary); }
+      .x-md blockquote > :last-child { margin-bottom: 0; }
+      .x-md hr { border: 0; border-top: 1px solid var(--stroke-secondary); margin: 24px 0; }
+      .x-md a { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+      .x-md-table { overflow-x: auto; }
+      .x-md table { font: var(--type-small); }
+      .x-md th, .x-md td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--stroke-secondary); vertical-align: top; }
+      .x-md thead th { font: var(--type-tag); color: var(--text-secondary); }
+      .x-md-rest[hidden] { display: none; }
+      .x-manual__more { margin-top: 16px; }
+      .x-status { font: var(--type-small); color: var(--text-secondary); }
+
+      /* 赞赏墙 */
+      .x-spon { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+      @media (max-width: 899px) { .x-spon { grid-template-columns: 1fr; } }
+      .x-plans { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; padding: 0; list-style: none; }
+      .x-plans li { font: var(--type-tag); padding: 6px 12px; border-radius: var(--r-pill); background: var(--fill-tertiary); color: var(--text-secondary); }
+      .x-sponsors { list-style: none; margin: 0; padding: 0; }
+      .x-sponsors li { display: flex; justify-content: space-between; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--stroke-secondary); font: var(--type-small); }
+      .x-sponsors li b { font: var(--type-label); font-variant-numeric: tabular-nums; white-space: nowrap; }
+      .x-sponsors li.is-expired { color: var(--text-secondary); opacity: 0.6; }
+    </style>
+  </head>
+  <body>
+    <header class="x-nav">
+      <div class="x-nav__in">
+        <a class="x-logo" href="#top"><span class="x-logo__mark"><span></span></span>MicMask</a>
+        <nav class="x-nav__links" aria-label="页面导航">
+          <a href="#howto">怎么用</a>
+          <a href="#features">能力</a>
+          <a href="#privacy">隐私</a>
+          <a href="#faq">常见问题</a>
+          <a href="#manual">手册</a>
+          <a href="#sponsors">赞赏</a>
+        </nav>
+        <a class="x-dl" href="https://github.com/Taocrypt/MicMask/releases/latest" target="_blank" rel="noopener">下载</a>
+      </div>
+    </header>
+
+    <div class="x-page" id="top">
+      <main>
+        <section class="x-hero">
+          <img class="x-hero__bg" src="micmask_hero.jpg" alt="" aria-hidden="true" />
+          <div>
+            <p class="x-tag">v2.0.0 首个正式版 · 免费开源</p>
+            <h1 class="x-h1">你的声音，<br /><em>实时换一副</em></h1>
+            <p class="x-lede">安卓端真正的原生实时 AI 变声软件</p>
+            <p class="x-body">无需 root，也无需把 QQ / 游戏装进虚拟机。RVC 流式模型在手机上做本地 AI 实时推理，端到端约 300ms，全程开源免费。</p>
+            <div class="x-btns">
+              <a class="x-dl" href="https://github.com/Taocrypt/MicMask/releases/latest" target="_blank" rel="noopener">下载最新版</a>
+              <a class="x-ghost" href="https://github.com/Taocrypt/MicMask" target="_blank" rel="noopener">GitHub 源码</a>
+            </div>
+            <p class="x-req">64 位 Android 手机 · 无需 ROOT · 需要 Shizuku</p>
+          </div>
+          <div class="x-phonewrap">
+            <div class="x-phone" role="img" aria-label="MicMask 界面示意：正在使用示例音色变声，端到端 298 毫秒">
+              <div class="x-screen">
+                <div class="x-screen__top">AI 变声 <small>● 运行中</small></div>
+                <div class="x-vcard">
+                  <div><b>示例音色</b><small>当前音色 · RVC v2</small></div>
+                  <span class="x-semi">+12</span>
+                </div>
+                <div class="x-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+                <div class="x-stop">停止变声</div>
+                <p class="x-mono">端到端 298ms · 合成 128ms · 检索 3ms</p>
+              </div>
+            </div>
+            <div class="x-bubble"><b>QQ 语音通话中</b>对方听到的是变声后的声音</div>
+          </div>
+        </section>
+
+        <section class="x-sec" id="howto">
+          <div class="x-head">
+            <p class="x-eyebrow">怎么用</p>
+            <h2 class="x-h2">三步，开口就是另一个人。</h2>
+            <p class="x-sub">装好 Shizuku，选个音色，剩下的交给手机上的模型。</p>
+          </div>
+          <div class="x-steps">
+            <article class="x-step">
+              <p class="x-step__n">01</p>
+              <h3>装好 Shizuku 并授权</h3>
+              <p>安装并启动 Shizuku，在 MicMask 内完成授权，变声即可注入系统麦克风。</p>
+            </article>
+            <article class="x-step">
+              <p class="x-step__n">02</p>
+              <h3>下载或导入音色</h3>
+              <p>从内置音色仓库一键下载，或导入自己的 .pth（可同时选中 .index）。</p>
+            </article>
+            <article class="x-step">
+              <p class="x-step__n">03</p>
+              <h3>开始变声</h3>
+              <p>点「开始变声」，直接打开 QQ 或游戏说话，原应用原样使用。</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="x-sec" id="features">
+          <div class="x-head">
+            <p class="x-eyebrow">能力</p>
+            <h2 class="x-h2">不 root、不装虚拟机，声音只在你的手机里变。</h2>
+            <p class="x-sub">从 AI 音色到文件变声，一个应用全包。</p>
+          </div>
+          <div class="x-grid">
+            <article class="x-card">
+              <p class="x-card__ico" aria-hidden="true">🔓</p>
+              <h3>无需 Root</h3>
+              <p>借助 Shizuku 的 shell 权限，把变声直接注入系统麦克风。QQ、游戏等应用听到的就是变声后的声音。</p>
+            </article>
+            <article class="x-card">
+              <p class="x-card__ico" aria-hidden="true">📱</p>
+              <h3>不用虚拟机</h3>
+              <p>不需要把 QQ / 游戏装进虚拟机或双开容器。生效范围自动识别，只接管正在录音的目标应用。</p>
+            </article>
+            <article class="x-card">
+              <p class="x-card__ico" aria-hidden="true">⚡</p>
+              <h3>低延迟</h3>
+              <p>骁龙 8 Gen3 / vivo V2329A 实测端到端约 300 毫秒，卡顿时自动切换更稳的档位。</p>
+              <div class="x-demo">
+                <p class="x-num">298<span>ms 端到端</span></p>
+                <div class="x-gears" style="margin-top: 12px">
+                  <span class="is-on">0.3s 档</span><span>0.5s 档</span><span>自动降档</span>
+                </div>
+              </div>
+            </article>
+            <article class="x-card">
+              <p class="x-card__ico" aria-hidden="true">🧠</p>
+              <h3>真本地 AI 推理</h3>
+              <p>RVC v1 / v2 流式模型在手机 CPU 上实时运行，声音不上传任何服务器。</p>
+            </article>
+            <article class="x-card">
+              <p class="x-card__ico" aria-hidden="true">📦</p>
+              <h3>导入自有模型</h3>
+              <p>手机直接导入 .pth 训练权重与 .index 检索索引，约 18 秒完成转换。</p>
+              <div class="x-demo">
+                <div class="x-files"><code>my_voice.pth</code><code>my_voice.index</code></div>
+                <div class="x-bar" aria-hidden="true"><i></i></div>
+                <p class="x-barcap"><span>正在转换模型</span><span>约 18s</span></p>
+              </div>
+            </article>
+            <article class="x-card">
+              <p class="x-card__ico" aria-hidden="true">🎛️</p>
+              <h3>还有这些</h3>
+              <p>普通变声预设（变调等常用效果）、悬浮窗随时切换音色与开关、对已有音频做文件变声、无 Shizuku 时的普通模式（外放 / 录播回退），以及一键日志导出。</p>
+            </article>
+            <article class="x-card">
+              <p class="x-card__ico" aria-hidden="true">⚖️</p>
+              <h3>开源免费</h3>
+              <p>GPL-3.0 协议，代码全部公开，没有付费墙，赞助完全自愿。</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="x-sec" id="shots" hidden>
+          <div class="x-head">
+            <p class="x-eyebrow">实机截图</p>
+            <h2 class="x-h2">看看它在手机上的样子。</h2>
+            <p class="x-sub">左右滑动查看更多。</p>
+          </div>
+          <div class="x-shots" id="shot-row" tabindex="0" aria-label="MicMask 实机截图"></div>
+        </section>
+
+        <section class="x-sec" id="privacy">
+          <div class="x-head">
+            <p class="x-eyebrow">隐私</p>
+            <h2 class="x-h2">声音去哪儿，说清楚。</h2>
+          </div>
+          <div class="x-grid">
+            <article class="x-card">
+              <p class="x-card__ico" aria-hidden="true">🎙️</p>
+              <h3>声音只在本机推理</h3>
+              <p>所有录音与模型推理都在你的手机上完成，音频不上传任何服务器，也不经过我们的中转。</p>
+            </article>
+            <article class="x-card">
+              <p class="x-card__ico" aria-hidden="true">📊</p>
+              <h3>匿名统计需同意</h3>
+              <p>匿名使用统计需要你先同意才会开启，并且随时可以在设置里关掉。</p>
+            </article>
+            <article class="x-card">
+              <p class="x-card__ico" aria-hidden="true">📝</p>
+              <h3>日志发不发由你</h3>
+              <p>日志不会自动上传。需要反馈时自己在 App 里导出，再发到 QQ 群或 Issue。</p>
+            </article>
+            <article class="x-card">
+              <p class="x-card__ico" aria-hidden="true">⚠️</p>
+              <h3>第三方音色授权自负</h3>
+              <p>第三方音色模型的授权与肖像、声音权利由使用者自行确认，请勿用于违法用途。</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="x-sec" id="manual">
+          <div class="x-head">
+            <p class="x-eyebrow">使用手册</p>
+            <h2 class="x-h2">详细说明都在这里。</h2>
+            <p class="x-sub">内容同步自 GitHub 仓库的 docs/manual.md。</p>
+          </div>
+          <div class="x-manual" id="manual-box">
+            <p class="x-status" id="manual-status" role="status">正在加载手册…</p>
+          </div>
+        </section>
+
+        <section class="x-sec" id="sponsors">
+          <div class="x-head">
+            <p class="x-eyebrow">赞赏墙</p>
+            <h2 class="x-h2">喜欢 MicMask？可以请作者喝杯奶茶。</h2>
+            <p class="x-sub">赞助完全自愿，不赞助也能使用全部功能。</p>
+          </div>
+          <div class="x-spon">
+            <div class="x-card">
+              <ul class="x-sponsors" id="sponsor-list" aria-live="polite">
+                <li><span class="x-status">正在加载赞助者…</span></li>
+              </ul>
+            </div>
+            <aside class="x-card" aria-label="赞助">
+              <h3>赞助档位</h3>
+              <ul class="x-plans" id="plan-list"></ul>
+              <p>支持持续开发，通过爱发电赞助 Taocrypt。</p>
+              <p style="margin-top: 16px"><a class="x-ghost" href="https://afdian.com/a/taocrypt" target="_blank" rel="noopener">去爱发电赞助</a></p>
+            </aside>
+          </div>
+        </section>
+
+        <section class="x-sec" id="faq">
+          <div class="x-head">
+            <p class="x-eyebrow">常见问题</p>
+            <h2 class="x-h2">开口之前，先问清楚。</h2>
+          </div>
+          <div class="x-faqs">
+            <details class="x-faq">
+              <summary>需要 ROOT 吗？</summary>
+              <p>不需要。MicMask 借助 Shizuku 拿到的 shell 权限工作，手机无需解锁 Bootloader 或刷机。</p>
+            </details>
+            <details class="x-faq">
+              <summary>对手机有什么要求？</summary>
+              <p>需要 64 位 Android 手机。推荐骁龙 8 Gen2 / Gen3 等旗舰芯片；中端机也能用，切到 0.5s 档更稳。</p>
+            </details>
+            <details class="x-faq">
+              <summary>需要把 QQ 装进虚拟机吗？</summary>
+              <p>不需要。原应用直接使用，MicMask 自动识别正在录音的目标应用并接管麦克风。</p>
+            </details>
+            <details class="x-faq">
+              <summary>收费吗？</summary>
+              <p>免费，并且以 GPL-3.0 协议开源。赞助完全自愿，不影响任何功能。</p>
+            </details>
+            <details class="x-faq">
+              <summary>会上传我的声音吗？</summary>
+              <p>不会。全部为本地推理，音频不离开你的手机。</p>
+            </details>
+            <details class="x-faq">
+              <summary>没有 Shizuku 能用吗？</summary>
+              <p>可以用普通模式（外放 / 录播回退），但效果有限，实时通话场景仍建议配合 Shizuku。</p>
+            </details>
+            <details class="x-faq">
+              <summary>怎么反馈问题？</summary>
+              <p>在 App 的日志页导出日志，加 QQ 群 780988679，或到 <a class="link" href="https://github.com/Taocrypt/MicMask/issues" target="_blank" rel="noopener">GitHub Issues</a> 提交，附上日志更好定位问题。</p>
+            </details>
+          </div>
+        </section>
+
+        <section class="x-band">
+          <h2>现在就换个声音说话</h2>
+          <p>免费下载 v2.0.0，安装后几分钟就能上手。遇到问题欢迎加 QQ 群 780988679。</p>
+          <div class="x-btns">
+            <a class="x-dl" href="https://github.com/Taocrypt/MicMask/releases/latest" target="_blank" rel="noopener">下载最新版</a>
+            <a class="x-ghost" href="https://github.com/Taocrypt/MicMask" target="_blank" rel="noopener">GitHub 源码</a>
+          </div>
+        </section>
+      </main>
+
+      <footer class="x-foot">
+        <a class="x-logo" href="#top"><span class="x-logo__mark"><span></span></span>MicMask</a>
+        <span class="x-foot__sep">© 2026 Taocrypt · GPL-3.0 · <a href="https://github.com/Taocrypt/MicMask" target="_blank" rel="noopener">GitHub</a> · <a href="https://afdian.com/a/taocrypt" target="_blank" rel="noopener">爱发电</a> · 仅供娱乐与学习交流，请勿用于诈骗、冒充他人等违法用途，本说明不构成法律意见。</span>
+      </footer>
+    </div>
+    <script src="hark.js"></script>
+    <script>
+      (function () {
+        var MANUAL_RAW = "manual.md";
+        var MANUAL_WEB = "https://github.com/Taocrypt/MicMask/blob/main/docs/manual.md";
+        var BASE_WEB = "https://github.com/Taocrypt/MicMask/blob/main/docs/";
+
+        function esc(s) {
+          return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+        }
+        function safeUrl(u) {
+          u = u.trim().replace(/^<|>$/g, "");
+          if (/^(https?:|mailto:)/i.test(u)) return u;
+          if (/^#/.test(u)) return u;
+          if (/^[a-z][a-z0-9+.-]*:/i.test(u)) return "";
+          try { return new URL(u, BASE_WEB).href; } catch (e) { return ""; }
+        }
+        function inline(src) {
+          var codes = [];
+          var s = src.replace(/`([^`]+)`/g, function (_, c) { codes.push(c); return "\u0000" + (codes.length - 1) + "\u0000"; });
+          var links = [];
+          s = s.replace(/!?\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, function (_, text, url) {
+            links.push({ text: text, url: safeUrl(url) });
+            return "\u0001" + (links.length - 1) + "\u0001";
+          });
+          s = esc(s);
+          s = fmt(s);
+          s = s.replace(/\u0001(\d+)\u0001/g, function (_, i) {
+            var l = links[+i];
+            var t = fmt(esc(l.text || l.url));
+            if (!l.url) return t;
+            if (l.url.charAt(0) === "#") return '<a href="' + esc(l.url) + '">' + t + "</a>";
+            return '<a href="' + esc(l.url) + '" target="_blank" rel="noopener noreferrer">' + t + "</a>";
+          });
+          s = s.replace(/\u0000(\d+)\u0000/g, function (_, i) { return "<code>" + esc(codes[+i]) + "</code>"; });
+          return s;
+        }
+        function fmt(s) {
+          return s
+            .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+            .replace(/__([^_]+)__/g, "<strong>$1</strong>")
+            .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>")
+            .replace(/(^|[^\w_])_([^_\s][^_]*)_(?!\w)/g, "$1<em>$2</em>");
+        }
+        var reList = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
+        var reHr = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
+        var reHead = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
+        var reFence = /^\s*(```|~~~)/;
+        function splitRow(line) {
+          var t = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+          return t.split(/(?<!\\)\|/).map(function (c) { return c.trim().replace(/\\\|/g, "|"); });
+        }
+        function isTableSep(line) { return /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(line || ""); }
+        function startsBlock(line, next) {
+          return reFence.test(line) || reHead.test(line) || reHr.test(line) || /^\s*>/.test(line) || reList.test(line) || (line.indexOf("|") >= 0 && isTableSep(next));
+        }
+        var h2s = [];
+        function blocks(lines) {
+          var out = [], i = 0;
+          while (i < lines.length) {
+            var line = lines[i], m;
+            if (!line.trim()) { i++; continue; }
+            if ((m = line.match(reFence))) {
+              var fence = m[1], code = [];
+              i++;
+              while (i < lines.length && lines[i].trim().indexOf(fence) !== 0) { code.push(lines[i]); i++; }
+              i++;
+              out.push("<pre><code>" + esc(code.join("\n")) + "</code></pre>");
+              continue;
+            }
+            if ((m = line.match(reHead))) {
+              var lvl = Math.min(m[1].length, 4), html = inline(m[2]);
+              if (lvl === 2) {
+                var id = "manual-sec-" + (h2s.length + 1);
+                h2s.push({ id: id, html: html });
+                out.push('<h2 id="' + id + '">' + html + "</h2>");
+              } else out.push("<h" + lvl + ">" + html + "</h" + lvl + ">");
+              i++;
+              continue;
+            }
+            if (reHr.test(line)) { out.push("<hr />"); i++; continue; }
+            if (/^\s*>/.test(line)) {
+              var q = [];
+              while (i < lines.length && lines[i].trim() && (/^\s*>/.test(lines[i]) || !startsBlock(lines[i], lines[i + 1]))) {
+                q.push(lines[i].replace(/^\s*>\s?/, ""));
+                i++;
+              }
+              out.push("<blockquote>" + blocks(q) + "</blockquote>");
+              continue;
+            }
+            if (line.indexOf("|") >= 0 && isTableSep(lines[i + 1])) {
+              var head = splitRow(line);
+              var aligns = splitRow(lines[i + 1]).map(function (c) { return /:$/.test(c) ? (/^:/.test(c) ? "center" : "right") : ""; });
+              i += 2;
+              var t = '<div class="x-md-table"><table><thead><tr>';
+              head.forEach(function (c, k) { t += "<th" + (aligns[k] ? ' style="text-align:' + aligns[k] + '"' : "") + ">" + inline(c) + "</th>"; });
+              t += "</tr></thead><tbody>";
+              while (i < lines.length && lines[i].trim() && lines[i].indexOf("|") >= 0) {
+                var cells = splitRow(lines[i]);
+                t += "<tr>";
+                head.forEach(function (_, k) { t += "<td" + (aligns[k] ? ' style="text-align:' + aligns[k] + '"' : "") + ">" + inline(cells[k] || "") + "</td>"; });
+                t += "</tr>";
+                i++;
+              }
+              out.push(t + "</tbody></table></div>");
+              continue;
+            }
+            if ((m = line.match(reList))) {
+              var baseIndent = m[1].length, ordered = /\d/.test(m[2]);
+              var start = ordered ? parseInt(m[2], 10) : 1;
+              var items = [], cur = null;
+              while (i < lines.length) {
+                var l = lines[i], lm = l.match(reList);
+                if (lm && lm[1].length <= baseIndent + 1 && /\d/.test(lm[2]) === ordered) {
+                  cur = [lm[3]];
+                  items.push(cur);
+                  i++;
+                  continue;
+                }
+                if (lm && lm[1].length <= baseIndent + 1) break;
+                if (!l.trim()) {
+                  var nx = lines[i + 1];
+                  if (nx && (/^\s{2,}/.test(nx) || (reList.test(nx) && nx.match(reList)[1].length <= baseIndent + 1 && /\d/.test(nx.match(reList)[2]) === ordered))) { cur.push(""); i++; continue; }
+                  break;
+                }
+                var ind = l.match(/^\s*/)[0].length;
+                if (ind > baseIndent) { cur.push(l.slice(Math.min(ind, baseIndent + 2 + (ordered ? 1 : 0)))); i++; continue; }
+                if (startsBlock(l, lines[i + 1])) break;
+                cur.push(l.trim());
+                i++;
+              }
+              var tag = ordered ? "ol" : "ul";
+              var lh = "<" + tag + (ordered && start !== 1 ? ' start="' + start + '"' : "") + ">";
+              items.forEach(function (it) {
+                var first = [], k = 0;
+                while (k < it.length && it[k].trim() && !(k > 0 && startsBlock(it[k], it[k + 1]))) { first.push(it[k].trim()); k++; }
+                var task = first[0] && first[0].match(/^\[([ xX])\]\s+(.*)$/);
+                if (task) first[0] = (task[1] === " " ? "☐ " : "☑ ") + task[2];
+                lh += "<li>" + inline(first.join(" ")) + (k < it.length ? blocks(it.slice(k)) : "") + "</li>";
+              });
+              out.push(lh + "</" + tag + ">");
+              continue;
+            }
+            var p = [];
+            while (i < lines.length && lines[i].trim() && !(p.length && startsBlock(lines[i], lines[i + 1]))) { p.push(lines[i].trim()); i++; }
+            out.push("<p>" + p.map(inline).join("<br />") + "</p>");
+          }
+          return out.join("\n");
+        }
+
+        function renderManual(md) {
+          h2s = [];
+          var html = blocks(md.replace(/\r\n?/g, "\n").replace(/<!--[\s\S]*?-->/g, "").split("\n"));
+          var box = document.getElementById("manual-box");
+          var tmp = document.createElement("div");
+          tmp.innerHTML = html;
+          box.innerHTML = "";
+          if (h2s.length) {
+            var toc = document.createElement("nav");
+            toc.className = "x-toc";
+            toc.setAttribute("aria-label", "手册目录");
+            toc.innerHTML = "<p>目录</p><ol>" + h2s.map(function (h) { return '<li><a class="link" href="#' + h.id + '">' + h.html + "</a></li>"; }).join("") + "</ol>";
+            box.appendChild(toc);
+          }
+          var intro = document.createElement("div");
+          intro.className = "x-md";
+          var rest = document.createElement("div");
+          rest.className = "x-md x-md-rest";
+          rest.id = "manual-rest";
+          var seen = 0, target = intro;
+          while (tmp.firstChild) {
+            var n = tmp.firstChild;
+            if (n.nodeType === 1 && n.tagName === "H2") { seen++; if (seen === 2) target = rest; }
+            target.appendChild(n);
+          }
+          box.appendChild(intro);
+          if (rest.childNodes.length) {
+            rest.hidden = true;
+            box.appendChild(rest);
+            var wrap = document.createElement("div");
+            wrap.className = "links x-manual__more";
+            var btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "btn";
+            btn.setAttribute("aria-controls", "manual-rest");
+            btn.setAttribute("aria-expanded", "false");
+            btn.textContent = "展开全文";
+            btn.addEventListener("click", function () {
+              var open = rest.hidden;
+              rest.hidden = !open;
+              btn.setAttribute("aria-expanded", String(open));
+              btn.textContent = open ? "收起" : "展开全文";
+              if (!open) document.getElementById("manual").scrollIntoView({ behavior: "smooth", block: "start" });
+            });
+            wrap.appendChild(btn);
+            box.appendChild(wrap);
+            box.addEventListener("click", function (e) {
+              var a = e.target.closest && e.target.closest('a[href^="#"]');
+              if (!a) return;
+              var el = document.getElementById(decodeURIComponent(a.getAttribute("href").slice(1)));
+              if (el && rest.contains(el) && rest.hidden) {
+                rest.hidden = false;
+                btn.setAttribute("aria-expanded", "true");
+                btn.textContent = "收起";
+              }
+            });
+          }
+        }
+
+        function manualFailed() {
+          document.getElementById("manual-box").innerHTML =
+            '<p class="x-status">手册加载失败。可以前往 <a class="link" href="' + MANUAL_WEB + '" target="_blank" rel="noopener">GitHub 查看使用手册</a>。</p>';
+        }
+        function loadManual() {
+          fetch(MANUAL_RAW, { cache: "no-cache" })
+            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); })
+            .then(function (md) { if (!md.trim()) throw new Error("empty"); renderManual(md); })
+            .catch(manualFailed);
+        }
+
+        // 截图：按 01–06 顺序，只加载仓库中存在的文件
+        var SHOT_BASE = "screenshots/";
+        function loadShots(names) {
+          var row = document.getElementById("shot-row");
+          var sec = document.getElementById("shots");
+          names.forEach(function (n, k) {
+            var img = document.createElement("img");
+            img.alt = "MicMask 截图 " + (k + 1);
+            img.loading = "lazy";
+            img.onload = function () { sec.hidden = false; };
+            img.onerror = function () { img.remove(); if (!row.children.length) sec.hidden = true; };
+            img.src = SHOT_BASE + n;
+            row.appendChild(img);
+          });
+        }
+
+        // 文件树 API 只作优化：成功时跳过不存在的文件；失败、限流或结果不完整时直接尝试 raw 地址
+        var ALL_SHOTS = ["01.png", "02.png", "03.png", "04.png", "05.png", "06.png"];
+        var started = false;
+        function loadDirect() {
+          if (started) return;
+          started = true;
+          loadShots(ALL_SHOTS);
+          loadManual();
+        }
+        loadDirect();
+
+        // 赞赏墙
+        var list = document.getElementById("sponsor-list");
+        var plansEl = document.getElementById("plan-list");
+        function emptySponsors(msg) {
+          list.innerHTML = "";
+          var li = document.createElement("li");
+          var s = document.createElement("span");
+          s.textContent = msg;
+          li.appendChild(s);
+          list.appendChild(li);
+        }
+        function num(v) {
+          if (typeof v === "number") return isFinite(v) ? v : 0;
+          var n = parseFloat(String(v == null ? "" : v).replace(/[^\d.\-]/g, ""));
+          return isFinite(n) ? n : 0;
+        }
+        function money(v) {
+          if (v == null || v === "") return "";
+          if (typeof v === "string" && /[^\d.\s]/.test(v)) return v;
+          var n = num(v);
+          return "￥" + (Math.round(n * 100) / 100).toLocaleString("zh-CN");
+        }
+        function renderSponsors(d) {
+          var plans = Array.isArray(d && d.plans) ? d.plans : [];
+          plansEl.innerHTML = "";
+          plans.forEach(function (p) {
+            if (!p || (!p.title && !p.price)) return;
+            var li = document.createElement("li");
+            li.className = "pill";
+            li.textContent = [p.title, p.price].filter(Boolean).join(" · ");
+            plansEl.appendChild(li);
+          });
+          if (!plansEl.children.length) plansEl.remove();
+          var now = Date.now() / 1000;
+          var sp = (Array.isArray(d && d.sponsors) ? d.sponsors : [])
+            .filter(function (s) { return s && typeof s === "object"; })
+            .map(function (s) {
+              var exp = num(s.expire);
+              return { name: s.name ? String(s.name) : "匿名赞助者", amount: s.amount, value: num(s.amount), expired: exp > 0 && exp < now };
+            });
+          if (!sp.length) { emptySponsors("还没有赞助者，成为第一位支持 MicMask 的人吧"); return; }
+          sp.sort(function (a, b) { return (a.expired - b.expired) || (b.value - a.value); });
+          list.innerHTML = "";
+          sp.forEach(function (s) {
+            var li = document.createElement("li");
+            if (s.expired) li.className = "is-expired";
+            var n = document.createElement("span");
+            n.textContent = s.name;
+            var a = document.createElement("b");
+            a.textContent = money(s.amount);
+            li.appendChild(n);
+            li.appendChild(a);
+            if (s.expired) li.title = "已过期";
+            list.appendChild(li);
+          });
+        }
+        try {
+          fetch("https://beacon.0666555.xyz/v1/micmask/sponsors", { cache: "no-cache" })
+            .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+            .then(renderSponsors)
+            .catch(function () { plansEl.remove(); emptySponsors("赞助名单暂时无法加载，请稍后再试。"); });
+        } catch (e) { emptySponsors("赞助名单暂时无法加载，请稍后再试。"); }
+      })();
+    </script>
+  </body>
+</html>

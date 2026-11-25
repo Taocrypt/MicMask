@@ -74,7 +74,7 @@ object AboutLinks {
     const val RELEASES = "https://github.com/Taocrypt/MicMask/releases"
     const val ISSUES = "https://github.com/Taocrypt/MicMask/issues"
     /** 官网（暂定主仓库 GitHub Pages，尚未建站） */
-    const val SITE = "https://taocrypt.github.io/MicMask/"
+    const val SITE = "https://micmask.taocrypt.com/"
     val RELEASE_TAG get() = "$RELEASES/tag/v${BuildConfig.VERSION_NAME}"
         const val MODEL_REPO = "https://cnb.build/taocrypt/MicMask"
     const val QQ_GROUP = "https://qm.qq.com/q/WHDZb3bXws"
