@@ -3,15 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MicMask — 安卓原生实时 AI 变声 · 无需 Root · 开源免费</title>
-<meta name="description" content="MicMask 是安卓端原生实时 AI 变声软件：借助 Shizuku 直接注入系统麦克风，无需 Root、不用虚拟机；RVC 模型在手机本地推理，录音不上传。开源免费，GPL-3.0。">
+<title data-i18n="meta.title">MicMask — 安卓原生实时 AI 变声 · 无需 Root · 开源免费</title>
+<meta data-i18n-attr="content:meta.desc" name="description" content="MicMask 是安卓端原生实时 AI 变声软件：借助 Shizuku 直接注入系统麦克风，无需 Root、不用虚拟机；RVC 模型在手机本地推理，录音不上传。开源免费，GPL-3.0。">
 <link rel="canonical" href="https://micmask.taocrypt.com/">
+<link rel="alternate" hreflang="zh-CN" href="https://micmask.taocrypt.com/?lang=zh">
+<link rel="alternate" hreflang="en" href="https://micmask.taocrypt.com/?lang=en">
+<link rel="alternate" hreflang="x-default" href="https://micmask.taocrypt.com/">
 <meta name="theme-color" content="#F3F4F6" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0F1114" media="(prefers-color-scheme: dark)">
 <meta property="og:type" content="website">
+<meta property="og:locale" content="zh_CN" data-i18n-attr="content:meta.ogLocale">
 <meta property="og:url" content="https://micmask.taocrypt.com/">
-<meta property="og:title" content="MicMask · 安卓实时 AI 变声">
-<meta property="og:description" content="把你的声音，实时换一副。无需 Root，不用虚拟机，声音只在你的手机里变。">
+<meta property="og:title" content="MicMask · 安卓实时 AI 变声" data-i18n-attr="content:meta.ogTitle">
+<meta data-i18n-attr="content:meta.ogDesc" property="og:description" content="把你的声音，实时换一副。无需 Root，不用虚拟机，声音只在你的手机里变。">
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" href="icon.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -86,6 +90,43 @@ code { font-family: var(--mono); font-size: .88em; background: var(--fill); padd
   .nav .wrap { gap: 12px; }
   .nav-links .opt { display: none; }
   .nav .btn { min-height: 44px; }
+}
+
+/* ---------- language switch ---------- */
+html[lang="en"] { --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial,
+  "PingFang SC", "HarmonyOS Sans SC", "MiSans", "Noto Sans SC", "Microsoft YaHei", sans-serif; }
+.lang { display: inline-flex; align-items: center; background: var(--fill); border-radius: 999px; padding: 3px; font-size: 13px; line-height: 1; flex: none; }
+.nav-links .lang a { display: inline-flex; align-items: center; min-height: 30px; padding: 0 11px; border-radius: 999px; color: var(--text-2); font-weight: 550; white-space: nowrap; }
+.nav-links .lang a:hover { color: var(--text); }
+.nav-links .lang a[aria-current="true"] { background: var(--surface); color: var(--text); font-weight: 650; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+.nav-links { align-items: center; }
+.nav .btn { white-space: nowrap; }
+.en-only { display: none; }
+html[lang="en"] .en-only { display: revert; }
+.sub .note { font-size: 14px; color: var(--text-3); margin-top: 6px; }
+html[lang="en"] .sub .note { display: block; }
+.manual-note { background: var(--agent-light); border-radius: 20px; padding: 18px 22px; margin-bottom: 16px; }
+html[lang="en"] .manual-note { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; }
+.manual-note p { margin: 0; flex: 1 1 100%; color: var(--text-2); font-size: 15px; }
+.manual-note p b { color: var(--text); }
+.manual-note .btn { min-height: 40px; padding: 8px 18px; font-size: 14px; }
+html[lang="en"] .bars div { grid-template-columns: 5.4em 1fr 3.6em; }
+html[lang="en"] .presets span { white-space: normal; line-height: 1.3; display: grid; place-items: center; }
+html[lang="en"] .ui-tg span { white-space: nowrap; }
+.prog-cap { gap: 12px; }
+.prog-cap span:last-child { white-space: nowrap; }
+@media (max-width: 760px) { .nav-links { gap: 0; } }
+@media (max-width: 430px) {
+  .nav .wrap { gap: 10px; }
+  .nav .btn { padding: 8px 15px; }
+  .nav-links .lang a { padding: 0 9px; }
+  html[lang="en"] .brand small { display: none; }
+}
+@media (max-width: 360px) {
+  .brand small { display: none; }
+  .nav .wrap { gap: 8px; }
+  .nav .btn { padding: 8px 12px; }
+  .nav-links .lang a { padding: 0 7px; }
 }
 
 /* ---------- buttons ---------- */
@@ -363,19 +404,29 @@ footer .brand .mark svg { width: 13px; height: 13px; }
   html { scroll-behavior: auto; }
 }
 </style>
+<script>
+(function () {
+  var q = (location.search.match(/[?&]lang=(en|zh)/i) || [])[1], l = q && q.toLowerCase();
+  if (!l) { try { l = localStorage.getItem("micmask-lang"); } catch (e) {} }
+  if (l !== "en" && l !== "zh") l = /^zh/i.test(navigator.language || "") ? "zh" : "en";
+  window.__MM_LANG = l;
+  if (l === "en") document.documentElement.lang = "en";
+})();
+</script>
 </head>
 <body>
 
 <header class="nav">
   <div class="wrap">
-    <a class="brand" href="#top" aria-label="MicMask 首页"><img class="mark" src="icon.png" alt="" width="26" height="26">MicMask <small>2.0</small></a>
-    <nav class="nav-links" aria-label="页面导航">
-      <a class="opt" href="#how">怎么用</a>
-      <a class="opt" href="#features">能力</a>
-      <a class="opt" href="#privacy">隐私</a>
-      <a class="opt" href="#faq">常见问题</a>
+    <a class="brand" href="#top" aria-label="MicMask 首页" data-i18n-attr="aria-label:nav.home"><img class="mark" src="icon.png" alt="" width="26" height="26">MicMask <small>2.0</small></a>
+    <nav class="nav-links" aria-label="页面导航" data-i18n-attr="aria-label:nav.aria">
+      <a class="opt" href="#how" data-i18n="nav.how">怎么用</a>
+      <a class="opt" href="#features" data-i18n="nav.features">能力</a>
+      <a class="opt" href="#privacy" data-i18n="nav.privacy">隐私</a>
+      <a class="opt" href="#faq" data-i18n="nav.faq">常见问题</a>
+      <span class="lang" role="group" aria-label="语言 / Language"><a href="?lang=en" lang="en" hreflang="en" data-lang="en">EN</a><a href="?lang=zh" lang="zh-CN" hreflang="zh-CN" data-lang="zh">中文</a></span>
     </nav>
-    <a class="btn" href="https://github.com/Taocrypt/MicMask/releases/latest" target="_blank" rel="noopener">下载</a>
+    <a class="btn" href="https://github.com/Taocrypt/MicMask/releases/latest" target="_blank" rel="noopener" data-i18n="nav.download">下载</a>
   </div>
 </header>
 
@@ -385,60 +436,60 @@ footer .brand .mark svg { width: 13px; height: 13px; }
 <section class="hero">
   <div class="wrap">
     <div>
-      <span class="eyebrow"><i></i>开源免费 · 2.0.0 正式版</span>
-      <h1>把你的声音，<br><span class="shine">实时换一副</span></h1>
-      <p class="lead">安卓端原生的实时 AI 变声。MicMask 借助 Shizuku 把变声直接送进系统麦克风，RVC 模型在手机本地推理；QQ、微信、游戏照常打开，对方听到的就是新声音。</p>
+      <span class="eyebrow"><i></i><span data-i18n="hero.eyebrow">开源免费 · 2.0.0 正式版</span></span>
+      <h1 data-i18n="hero.h1">把你的声音，<br><span class="shine">实时换一副</span></h1>
+      <p class="lead" data-i18n="hero.lead">安卓端原生的实时 AI 变声。MicMask 借助 Shizuku 把变声直接送进系统麦克风，RVC 模型在手机本地推理；QQ、微信、游戏照常打开，对方听到的就是新声音。</p>
       <div class="cta">
         <a class="btn" href="https://github.com/Taocrypt/MicMask/releases/latest" target="_blank" rel="noopener">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0l-5-5m5 5l5-5M5 21h14"/></svg>
-          下载 APK
+          <span data-i18n="cta.apk">下载 APK</span>
         </a>
         <a class="btn ghost gh" href="https://github.com/Taocrypt/MicMask" target="_blank" rel="noopener">
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
           GitHub
         </a>
       </div>
-      <p class="cta-note">64 位 Android 8.0+ · 无需 ROOT · 不用虚拟机</p>
+      <p class="cta-note" data-i18n="hero.note">64 位 Android 8.0+ · 无需 ROOT · 不用虚拟机</p>
     </div>
 
     <div class="stage" aria-hidden="true">
       <div class="phone">
         <div class="app">
           <div class="island"></div>
-          <div class="ui-top"><b>AI 变声</b><span class="seg"><span class="on">AI</span><span>普通</span><span>声卡</span></span></div>
-          <div class="ui-card ui-run"><span class="dot"></span><div><p>运行中 · QQ 语音</p><p>生效范围：自动识别</p></div><em>已注入</em></div>
+          <div class="ui-top"><b data-i18n="ph.title">AI 变声</b><span class="seg"><span class="on">AI</span><span data-i18n="ph.basic">普通</span><span data-i18n="ph.card">声卡</span></span></div>
+          <div class="ui-card ui-run"><span class="dot"></span><div><p data-i18n="ph.running">运行中 · QQ 语音</p><p data-i18n="ph.scope">生效范围：自动识别</p></div><em data-i18n="ph.injected">已注入</em></div>
           <div class="ui-card">
             <div class="ui-voice">
               <span class="av"><svg viewBox="0 0 24 24"><circle cx="12" cy="9" r="4"/><path d="M5 20c1.2-3.3 4-5 7-5s5.8 1.7 7 5"/></svg></span>
-              <div><p class="lbl">当前音色</p><p class="nm">正太音</p></div>
+              <div><p class="lbl" data-i18n="ph.cur">当前音色</p><p class="nm" data-i18n="ph.voice">正太音</p></div>
               <span class="tag">RVC · .index</span>
             </div>
             <div class="ui-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
           </div>
           <div class="ui-perf">
-            <div><b>~300ms</b><span>端到端</span></div>
-            <div><b>128ms</b><span>合成</span></div>
-            <div><b>3ms</b><span>检索</span></div>
+            <div><b>~300ms</b><span data-i18n="ph.e2e">端到端</span></div>
+            <div><b>128ms</b><span data-i18n="ph.syn">合成</span></div>
+            <div><b>3ms</b><span data-i18n="ph.ret">检索</span></div>
           </div>
           <div class="ui-card ui-slider">
-            <div class="row"><span>音高</span><b>+6</b></div>
+            <div class="row"><span data-i18n="ph.pitch">音高</span><b>+6</b></div>
             <div class="track"></div>
           </div>
-          <div class="ui-card ui-tg"><span>耳返</span><i></i><span>降噪</span><i class="on"></i></div>
-          <p class="ui-hint">悬浮窗已开启 · 可在游戏内切换</p>
-          <div class="ui-stop">停止变声</div>
+          <div class="ui-card ui-tg"><span data-i18n="ph.monitor">耳返</span><i></i><span data-i18n="ph.nr">降噪</span><i class="on"></i></div>
+          <p class="ui-hint" data-i18n="ph.hint">悬浮窗已开启 · 可在游戏内切换</p>
+          <div class="ui-stop" data-i18n="ph.stop">停止变声</div>
         </div>
       </div>
 
       <div class="float ask">
-        <div class="who">QQ 语音 · 通话中</div>
-        <div class="bubble-me">对方听到的是「正太音」</div>
+        <div class="who" data-i18n="fl.who">QQ 语音 · 通话中</div>
+        <div class="bubble-me" data-i18n="fl.bubble">对方听到的是「正太音」</div>
       </div>
       <div class="float need">
-        <div class="who">MicMask · 生效范围</div>
-        <div class="need-q">QQ 正在使用麦克风</div>
-        <div class="need-c">已自动接管，变声生效中</div>
-        <div class="need-a"><span>暂停</span><span>继续</span></div>
+        <div class="who" data-i18n="fl.who2">MicMask · 生效范围</div>
+        <div class="need-q" data-i18n="fl.q">QQ 正在使用麦克风</div>
+        <div class="need-c" data-i18n="fl.c">已自动接管，变声生效中</div>
+        <div class="need-a"><span data-i18n="fl.pause">暂停</span><span data-i18n="fl.resume">继续</span></div>
       </div>
     </div>
   </div>
@@ -447,21 +498,21 @@ footer .brand .mark svg { width: 13px; height: 13px; }
 <!-- ============ how ============ -->
 <section id="how">
   <div class="wrap">
-    <p class="kicker">怎么用</p>
-    <h2>三步，开口就是另一副嗓子</h2>
-    <p class="sub">第一次大约几分钟。之后打开 MicMask，点一下「开始变声」就行。</p>
+    <p class="kicker" data-i18n="how.k">怎么用</p>
+    <h2 data-i18n="how.h">三步，开口就是另一副嗓子</h2>
+    <p class="sub" data-i18n="how.sub">第一次大约几分钟。之后打开 MicMask，点一下「开始变声」就行。</p>
     <div class="steps">
       <div class="step">
-        <h3>授权 Shizuku</h3>
-        <p>安装并启动 Shizuku，在 MicMask 里点授权。变声会以 shell 身份注入系统麦克风，手机不用 Root。</p>
+        <h3 data-i18n="how.s1t">授权 Shizuku</h3>
+        <p data-i18n="how.s1p">安装并启动 Shizuku，在 MicMask 里点授权。变声会以 shell 身份注入系统麦克风，手机不用 Root。</p>
       </div>
       <div class="step">
-        <h3>选或导入音色</h3>
-        <p>从内置音色仓库一键下载，或者直接在手机上导入自己的 .pth 模型，可同时带上 .index 检索索引。</p>
+        <h3 data-i18n="how.s2t">选或导入音色</h3>
+        <p data-i18n="how.s2p">从内置音色仓库一键下载，或者直接在手机上导入自己的 .pth 模型，可同时带上 .index 检索索引。</p>
       </div>
       <div class="step">
-        <h3>打开应用直接说话</h3>
-        <p>点「开始变声」，然后照常打开 QQ、微信或游戏开麦。原应用原样使用，不用装进虚拟机。</p>
+        <h3 data-i18n="how.s3t">打开应用直接说话</h3>
+        <p data-i18n="how.s3p">点「开始变声」，然后照常打开 QQ、微信或游戏开麦。原应用原样使用，不用装进虚拟机。</p>
       </div>
     </div>
   </div>
@@ -470,86 +521,86 @@ footer .brand .mark svg { width: 13px; height: 13px; }
 <!-- ============ features ============ -->
 <section id="features" class="pt0">
   <div class="wrap">
-    <p class="kicker">能力</p>
-    <h2>不 Root、不装虚拟机，声音只在你的手机里变</h2>
-    <p class="sub">从 AI 音色到普通变声、虚拟声卡、文件变声，一个应用全包。</p>
+    <p class="kicker" data-i18n="ft.k">能力</p>
+    <h2 data-i18n="ft.h">不 Root、不装虚拟机，声音只在你的手机里变</h2>
+    <p class="sub" data-i18n="ft.sub">从 AI 音色到普通变声、虚拟声卡、文件变声，一个应用全包。</p>
 
     <div class="grid">
       <div class="card wide">
-        <h3>无需 Root</h3>
-        <p>Shizuku 让 MicMask 以 shell 身份工作，把变声后的声音直接注入系统麦克风。不解锁、不刷机。</p>
+        <h3 data-i18n="ft.root.t">无需 Root</h3>
+        <p data-i18n="ft.root.p">Shizuku 让 MicMask 以 shell 身份工作，把变声后的声音直接注入系统麦克风。不解锁、不刷机。</p>
         <div class="demo" aria-hidden="true">
-          <div class="chain"><span>你的麦克风</span><i>→</i><span class="hl">MicMask · shell</span><i>→</i><span>QQ / 微信 / 游戏</span></div>
-          <div class="chain-note">Shizuku 注入模式需要 Android 10 及以上</div>
+          <div class="chain"><span data-i18n="ft.root.c1">你的麦克风</span><i>→</i><span class="hl">MicMask · shell</span><i>→</i><span data-i18n="ft.root.c3">QQ / 微信 / 游戏</span></div>
+          <div class="chain-note" data-i18n="ft.root.note">Shizuku 注入模式需要 Android 10 及以上</div>
         </div>
       </div>
 
       <div class="card wide">
-        <h3>低延迟</h3>
-        <p>流式推理，边说边变。卡顿时可以切到更稳的省电档。</p>
+        <h3 data-i18n="ft.lat.t">低延迟</h3>
+        <p data-i18n="ft.lat.p">流式推理，边说边变。卡顿时可以切到更稳的省电档。</p>
         <div class="demo" aria-hidden="true">
-          <div class="lat"><b>~300ms</b><span>端到端</span></div>
+          <div class="lat"><b>~300ms</b><span data-i18n="ft.lat.e2e">端到端</span></div>
           <div class="bars">
-            <div>合成<u style="--w:64%"></u><em>128ms</em></div>
-            <div>检索<u style="--w:4%"></u><em>3ms</em></div>
+            <div><span data-i18n="ft.lat.syn">合成</span><u style="--w:64%"></u><em>128ms</em></div>
+            <div><span data-i18n="ft.lat.ret">检索</span><u style="--w:4%"></u><em>3ms</em></div>
           </div>
         </div>
-        <p class="fineprint">骁龙 8 Gen 3 标准档实测，其他机型可能更高。</p>
+        <p class="fineprint" data-i18n="ft.lat.fine">骁龙 8 Gen 3 标准档实测，其他机型可能更高。</p>
       </div>
 
       <div class="card">
         <div class="ico"><svg viewBox="0 0 24 24"><rect x="6" y="2.5" width="12" height="19" rx="3"/><path d="M10.5 18.5h3"/></svg></div>
-        <h3>不用虚拟机 / 双开</h3>
-        <p>QQ、微信、游戏都用手机里原来那一个，不需要装进虚拟机或双开容器，账号环境不变。</p>
+        <h3 data-i18n="ft.vm.t">不用虚拟机 / 双开</h3>
+        <p data-i18n="ft.vm.p">QQ、微信、游戏都用手机里原来那一个，不需要装进虚拟机或双开容器，账号环境不变。</p>
       </div>
       <div class="card">
         <div class="ico"><svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="3"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg></div>
-        <h3>真·本地 AI 推理</h3>
-        <p>RVC 模型经 ONNX Runtime 在手机 CPU 上实时运行。录音不上传，也不经过任何服务器。</p>
+        <h3 data-i18n="ft.local.t">真·本地 AI 推理</h3>
+        <p data-i18n="ft.local.p">RVC 模型经 ONNX Runtime 在手机 CPU 上实时运行。录音不上传，也不经过任何服务器。</p>
       </div>
       <div class="card">
         <div class="ico"><svg viewBox="0 0 24 24"><path d="M9 18l-6-6 6-6M15 6l6 6-6 6"/></svg></div>
-        <h3>开源免费</h3>
-        <p>GPL-3.0 协议，代码全部公开在 GitHub。没有付费墙，赞助完全自愿。</p>
+        <h3 data-i18n="ft.oss.t">开源免费</h3>
+        <p data-i18n="ft.oss.p">GPL-3.0 协议，代码全部公开在 GitHub。没有付费墙，赞助完全自愿。</p>
       </div>
 
       <div class="card wide">
-        <h3>手机直接导入 .pth / .index</h3>
-        <p>训练好的 RVC 权重和检索索引，选中就能导入，App 在本机转换成实时音色，不用电脑。</p>
+        <h3 data-i18n="ft.imp.t">手机直接导入 .pth / .index</h3>
+        <p data-i18n="ft.imp.p">训练好的 RVC 权重和检索索引，选中就能导入，App 在本机转换成实时音色，不用电脑。</p>
         <div class="demo" aria-hidden="true">
           <div class="files"><span>my_voice.pth</span><span>added_IVF256.index</span></div>
           <div class="prog"><i></i></div>
-          <div class="prog-cap"><span>正在生成标准档 / 省电档</span><span>几十秒～一两分钟</span></div>
+          <div class="prog-cap"><span data-i18n="ft.imp.c1">正在生成标准档 / 省电档</span><span data-i18n="ft.imp.c2">几十秒～一两分钟</span></div>
         </div>
       </div>
 
       <div class="card wide">
-        <h3>生效范围，自动识别</h3>
-        <p>默认自动识别：哪个应用开始录音就给哪个变声，不用挑应用。想精确控制，也可以手动只勾选目标应用。</p>
+        <h3 data-i18n="ft.scope.t">生效范围，自动识别</h3>
+        <p data-i18n="ft.scope.p">默认自动识别：哪个应用开始录音就给哪个变声，不用挑应用。想精确控制，也可以手动只勾选目标应用。</p>
         <div class="demo apps" aria-hidden="true">
-          <div class="on"><i>Q</i><p>QQ</p><em>录音中 · 变声中</em></div>
-          <div><i>微</i><p>微信</p><em>未在录音</em></div>
-          <div><i>游</i><p>游戏</p><em>未在录音</em></div>
+          <div class="on"><i>Q</i><p>QQ</p><em data-i18n="ft.scope.on">录音中 · 变声中</em></div>
+          <div><i data-i18n="ft.scope.wi">微</i><p data-i18n="ft.scope.w">微信</p><em data-i18n="ft.scope.off">未在录音</em></div>
+          <div><i data-i18n="ft.scope.gi">游</i><p data-i18n="ft.scope.g">游戏</p><em data-i18n="ft.scope.off">未在录音</em></div>
         </div>
       </div>
 
       <div class="card">
-        <h3>普通变声与虚拟声卡</h3>
-        <p>不用 AI 模型的低延迟升降调预设，中端机也轻松；虚拟声卡适合唱歌、直播。</p>
+        <h3 data-i18n="ft.basic.t">普通变声与虚拟声卡</h3>
+        <p data-i18n="ft.basic.p">不用 AI 模型的低延迟升降调预设，中端机也轻松；虚拟声卡适合唱歌、直播。</p>
         <div class="presets" aria-hidden="true">
-          <span>原声</span><span class="on">男变女</span><span>萝莉</span>
-          <span>御姐</span><span>大叔</span><span>机器人</span>
+          <span data-i18n="ft.basic.p1">原声</span><span class="on" data-i18n="ft.basic.p2">男变女</span><span data-i18n="ft.basic.p3">萝莉</span>
+          <span data-i18n="ft.basic.p4">御姐</span><span data-i18n="ft.basic.p5">大叔</span><span data-i18n="ft.basic.p6">机器人</span>
         </div>
       </div>
       <div class="card">
         <div class="ico"><svg viewBox="0 0 24 24"><circle cx="17" cy="7" r="3.5"/><rect x="3" y="11" width="12" height="10" rx="3"/></svg></div>
-        <h3>悬浮窗</h3>
-        <p>游戏里不用切回来：单击悬浮球切换模式、选预设、看性能，开关耳返和降噪。</p>
+        <h3 data-i18n="ft.float.t">悬浮窗</h3>
+        <p data-i18n="ft.float.p">游戏里不用切回来：单击悬浮球切换模式、选预设、看性能，开关耳返和降噪。</p>
       </div>
       <div class="card">
         <div class="ico"><svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div>
-        <h3>文件变声 · TTS · 音效包</h3>
-        <p>整段音频高质量转换，中文文字转语音，内置和自制音效包，一点就送进麦克风。</p>
+        <h3 data-i18n="ft.file.t">文件变声 · TTS · 音效包</h3>
+        <p data-i18n="ft.file.p">整段音频高质量转换，中文文字转语音，内置和自制音效包，一点就送进麦克风。</p>
       </div>
     </div>
   </div>
@@ -558,24 +609,24 @@ footer .brand .mark svg { width: 13px; height: 13px; }
 <!-- ============ screenshots ============ -->
 <section id="shots" class="pt0" hidden>
   <div class="wrap">
-    <p class="kicker">实机截图</p>
-    <h2>看看它在手机上的样子</h2>
-    <p class="sub">左右滑动查看更多。</p>
-    <div class="shots" id="shot-row" tabindex="0" aria-label="MicMask 实机截图"></div>
+    <p class="kicker" data-i18n="sh.k">实机截图</p>
+    <h2 data-i18n="sh.h">看看它在手机上的样子</h2>
+    <p class="sub"><span data-i18n="sh.sub">左右滑动查看更多。</span><span class="en-only note">Screenshots show the Chinese UI; the app also supports English.</span></p>
+    <div class="shots" id="shot-row" tabindex="0" aria-label="MicMask 实机截图" data-i18n-attr="aria-label:sh.aria"></div>
   </div>
 </section>
 
 <!-- ============ privacy ============ -->
 <section id="privacy" class="pt0">
   <div class="wrap">
-    <p class="kicker">隐私</p>
-    <h2>声音去哪儿，说清楚</h2>
-    <p class="sub">MicMask 没有变声服务器。完整说明见 App 内「关于 → 其他 → 隐私说明」。</p>
+    <p class="kicker" data-i18n="pv.k">隐私</p>
+    <h2 data-i18n="pv.h">声音去哪儿，说清楚</h2>
+    <p class="sub" data-i18n="pv.sub">MicMask 没有变声服务器。完整说明见 App 内「关于 → 其他 → 隐私说明」。</p>
     <div class="privacy">
-      <div><h3>录音只在本机推理</h3><p>录音和模型推理都在你的手机上完成，音频不上传任何服务器，也不经过中转。</p></div>
-      <div><h3>匿名统计可以关</h3><p>首次打开时由你选择是否参与匿名统计，之后随时可在设置里关闭。基础统计不含机型信息。</p></div>
-      <div><h3>模型来源与授权自负</h3><p>第三方音色模型的来源、授权和相关声音权利，请使用者自行确认，勿用于违法用途。</p></div>
-      <div><h3>日志只在你导出时打包</h3><p>日志不会自动上传。需要反馈时由你在 App 里导出，自己决定发给谁。</p></div>
+      <div><h3 data-i18n="pv.1t">录音只在本机推理</h3><p data-i18n="pv.1p">录音和模型推理都在你的手机上完成，音频不上传任何服务器，也不经过中转。</p></div>
+      <div><h3 data-i18n="pv.2t">匿名统计可以关</h3><p data-i18n="pv.2p">首次打开时由你选择是否参与匿名统计，之后随时可在设置里关闭。基础统计不含机型信息。</p></div>
+      <div><h3 data-i18n="pv.3t">模型来源与授权自负</h3><p data-i18n="pv.3p">第三方音色模型的来源、授权和相关声音权利，请使用者自行确认，勿用于违法用途。</p></div>
+      <div><h3 data-i18n="pv.4t">日志只在你导出时打包</h3><p data-i18n="pv.4p">日志不会自动上传。需要反馈时由你在 App 里导出，自己决定发给谁。</p></div>
     </div>
   </div>
 </section>
@@ -583,11 +634,16 @@ footer .brand .mark svg { width: 13px; height: 13px; }
 <!-- ============ manual ============ -->
 <section id="manual" class="pt0">
   <div class="wrap">
-    <p class="kicker">使用手册</p>
-    <h2>详细说明都在这里</h2>
-    <p class="sub">内容同步自 GitHub 仓库的 docs/manual.md。</p>
-    <div class="manual" id="manual-box">
-      <p class="x-status" id="manual-status" role="status">正在加载手册…</p>
+    <p class="kicker" data-i18n="mn.k">使用手册</p>
+    <h2 data-i18n="mn.h">详细说明都在这里</h2>
+    <p class="sub" data-i18n="mn.sub">内容同步自 GitHub 仓库的 docs/manual.md。</p>
+    <div class="manual-note en-only" id="manual-note">
+      <p><b>The manual is currently in Chinese.</b> Your browser's Translate feature works on this section, or open a machine-translated copy.</p>
+      <a class="btn" id="manual-translate" href="https://translate.google.com/translate?sl=zh-CN&amp;tl=en&amp;u=https%3A%2F%2Fgithub.com%2FTaocrypt%2FMicMask%2Fblob%2Fmain%2Fdocs%2Fmanual.md" target="_blank" rel="noopener">Read in Google Translate</a>
+      <a class="btn ghost" href="https://github.com/Taocrypt/MicMask/blob/main/docs/manual.md" target="_blank" rel="noopener">View on GitHub</a>
+    </div>
+    <div class="manual" id="manual-box" lang="zh-CN">
+      <p class="x-status" id="manual-status" role="status" data-i18n="mn.loading">正在加载手册…</p>
     </div>
   </div>
 </section>
@@ -595,20 +651,20 @@ footer .brand .mark svg { width: 13px; height: 13px; }
 <!-- ============ sponsors ============ -->
 <section id="sponsors" class="pt0">
   <div class="wrap">
-    <p class="kicker">赞赏墙</p>
-    <h2>喜欢 MicMask？请作者喝杯奶茶</h2>
-    <p class="sub">赞助完全自愿，不赞助也能使用全部功能。</p>
+    <p class="kicker" data-i18n="sp.k">赞赏墙</p>
+    <h2 data-i18n="sp.h">喜欢 MicMask？请作者喝杯奶茶</h2>
+    <p class="sub" data-i18n="sp.sub">赞助完全自愿，不赞助也能使用全部功能。</p>
     <div class="spon">
       <div>
         <ul class="x-sponsors" id="sponsor-list" aria-live="polite">
-          <li class="empty"><span class="x-status">正在加载赞助者…</span></li>
+          <li class="empty"><span class="x-status" data-i18n="sp.loading">正在加载赞助者…</span></li>
         </ul>
       </div>
-      <div aria-label="赞助">
-        <h3>赞助档位</h3>
+      <div aria-label="赞助" data-i18n-attr="aria-label:sp.aria">
+        <h3 data-i18n="sp.plans">赞助档位</h3>
         <ul class="x-plans" id="plan-list"></ul>
-        <p>通过爱发电支持 Taocrypt 持续开发。</p>
-        <p style="margin-top:18px"><a class="btn" href="https://afdian.com/a/taocrypt" target="_blank" rel="noopener">去爱发电赞助</a></p>
+        <p data-i18n="sp.via">通过爱发电支持 Taocrypt 持续开发。</p>
+        <p style="margin-top:18px"><a class="btn" href="https://afdian.com/a/taocrypt" target="_blank" rel="noopener" data-i18n="sp.btn">去爱发电赞助</a></p>
       </div>
     </div>
   </div>
@@ -617,35 +673,35 @@ footer .brand .mark svg { width: 13px; height: 13px; }
 <!-- ============ faq ============ -->
 <section id="faq" class="pt0">
   <div class="wrap">
-    <h2 class="center">常见问题</h2>
+    <h2 class="center" data-i18n="fq.h">常见问题</h2>
     <div class="faq">
       <details>
-        <summary>需要 ROOT 吗？</summary>
-        <p>不需要。MicMask 借助 Shizuku 拿到的 shell 权限工作，手机无需解锁 Bootloader 或刷机。</p>
+        <summary data-i18n="fq.1q">需要 ROOT 吗？</summary>
+        <p data-i18n="fq.1a">不需要。MicMask 借助 Shizuku 拿到的 shell 权限工作，手机无需解锁 Bootloader 或刷机。</p>
       </details>
       <details>
-        <summary>对手机有什么要求？</summary>
-        <p>64 位 Android 手机，安装需要 Android 8.0 及以上，Shizuku 注入模式需要 Android 10 及以上。AI 实时变声对 CPU 要求较高：骁龙 8 Gen 3 等旗舰可以跑标准档，中端芯片建议用省电档 0.5 秒。</p>
+        <summary data-i18n="fq.2q">对手机有什么要求？</summary>
+        <p data-i18n="fq.2a">64 位 Android 手机，安装需要 Android 8.0 及以上，Shizuku 注入模式需要 Android 10 及以上。AI 实时变声对 CPU 要求较高：骁龙 8 Gen 3 等旗舰可以跑标准档，中端芯片建议用省电档 0.5 秒。</p>
       </details>
       <details>
-        <summary>需要把 QQ 装进虚拟机吗？</summary>
-        <p>不需要。原应用直接使用，MicMask 自动识别正在录音的目标应用并接管麦克风。</p>
+        <summary data-i18n="fq.3q">需要把 QQ 装进虚拟机吗？</summary>
+        <p data-i18n="fq.3a">不需要。原应用直接使用，MicMask 自动识别正在录音的目标应用并接管麦克风。</p>
       </details>
       <details>
-        <summary>收费吗？</summary>
-        <p>免费，并且以 GPL-3.0 协议开源。赞助完全自愿，不影响任何功能。</p>
+        <summary data-i18n="fq.4q">收费吗？</summary>
+        <p data-i18n="fq.4a">免费，并且以 GPL-3.0 协议开源。赞助完全自愿，不影响任何功能。</p>
       </details>
       <details>
-        <summary>会上传我的声音吗？</summary>
-        <p>不会。全部为本地推理，音频不离开你的手机。</p>
+        <summary data-i18n="fq.5q">会上传我的声音吗？</summary>
+        <p data-i18n="fq.5a">不会。全部为本地推理，音频不离开你的手机。</p>
       </details>
       <details>
-        <summary>没有 Shizuku 能用吗？</summary>
-        <p>可以用普通模式（外放 / 录播回退），但效果有限，实时通话场景仍建议配合 Shizuku。</p>
+        <summary data-i18n="fq.6q">没有 Shizuku 能用吗？</summary>
+        <p data-i18n="fq.6a">可以用普通模式（外放 / 录播回退），但效果有限，实时通话场景仍建议配合 Shizuku。</p>
       </details>
       <details>
-        <summary>怎么反馈问题？</summary>
-        <p>在 App 的日志页导出日志，加 QQ 群 780988679，或到 <a href="https://github.com/Taocrypt/MicMask/issues" target="_blank" rel="noopener">GitHub Issues</a> 提交，附上日志更好定位问题。</p>
+        <summary data-i18n="fq.7q">怎么反馈问题？</summary>
+        <p data-i18n="fq.7a">在 App 的日志页导出日志，加 QQ 群 780988679，或到 <a href="https://github.com/Taocrypt/MicMask/issues" target="_blank" rel="noopener">GitHub Issues</a> 提交，附上日志更好定位问题。</p>
       </details>
     </div>
   </div>
@@ -655,11 +711,11 @@ footer .brand .mark svg { width: 13px; height: 13px; }
 <section class="closing">
   <div class="wrap">
     <div class="box">
-      <h2>现在就换个声音说话</h2>
-      <p class="sub" style="margin:0 auto 30px">免费下载 2.0.0 正式版，几分钟就能上手。遇到问题欢迎加 QQ 群 780988679。</p>
+      <h2 data-i18n="cl.h">现在就换个声音说话</h2>
+      <p class="sub" style="margin:0 auto 30px" data-i18n="cl.sub">免费下载 2.0.0 正式版，几分钟就能上手。遇到问题欢迎加 QQ 群 780988679。</p>
       <div class="cta">
-        <a class="btn" href="https://github.com/Taocrypt/MicMask/releases/latest" target="_blank" rel="noopener">下载 APK</a>
-        <a class="btn ghost" href="https://github.com/Taocrypt/MicMask" target="_blank" rel="noopener">查看源码</a>
+        <a class="btn" href="https://github.com/Taocrypt/MicMask/releases/latest" target="_blank" rel="noopener" data-i18n="cta.apk">下载 APK</a>
+        <a class="btn ghost" href="https://github.com/Taocrypt/MicMask" target="_blank" rel="noopener" data-i18n="cl.src">查看源码</a>
       </div>
     </div>
   </div>
@@ -672,17 +728,232 @@ footer .brand .mark svg { width: 13px; height: 13px; }
     <a class="brand" href="#top"><img class="mark" src="icon.png" alt="" width="26" height="26">MicMask</a>
     <span>© 2026 MicMask · GPL-3.0</span>
     <span class="sp"></span>
-    <span>QQ 群 780988679</span>
+    <span data-i18n="ft2.qq">QQ 群 780988679</span>
     <a href="https://github.com/Taocrypt/MicMask/issues" target="_blank" rel="noopener">GitHub Issues</a>
     <a href="https://github.com/Taocrypt/MicMask" target="_blank" rel="noopener">GitHub</a>
-    <a href="https://afdian.com/a/taocrypt" target="_blank" rel="noopener">爱发电</a>
-    <p class="legal">仅供娱乐与学习交流，请勿用于诈骗、冒充他人等违法用途。</p>
+    <a href="https://afdian.com/a/taocrypt" target="_blank" rel="noopener" data-i18n="ft2.afd">爱发电</a>
+    <a href="?lang=en" class="lang-alt" data-lang-toggle data-i18n="ft2.lang">English</a>
+    <p class="legal" data-i18n="ft2.legal">仅供娱乐与学习交流，请勿用于诈骗、冒充他人等违法用途。</p>
   </div>
 </footer>
 
 <script>
+/* i18n: 中文是页面内原文（单一来源），这里只放英文字典 + 动态文案 */
+(function () {
+  var EN = {
+    "meta.title": "MicMask — Real-time AI voice changer for Android · No root · Free & open source",
+    "meta.desc": "MicMask is a native real-time AI voice changer for Android. It uses Shizuku to inject your new voice straight into the system microphone — no root, no virtual machine. RVC voice models run on your phone, and recordings are never uploaded. Free and open source under GPL-3.0.",
+    "meta.ogLocale": "en_US",
+    "meta.ogTitle": "MicMask · Real-time AI voice changer for Android",
+    "meta.ogDesc": "Swap your voice in real time. No root, no virtual machine — your voice changes on your phone and nowhere else.",
+    "nav.home": "MicMask home",
+    "nav.aria": "Page navigation",
+    "nav.how": "How it works",
+    "nav.features": "Features",
+    "nav.privacy": "Privacy",
+    "nav.faq": "FAQ",
+    "nav.download": "Download",
+    "hero.eyebrow": "Free &amp; open source · 2.0.0 stable",
+    "hero.h1": "Swap your voice<br><span class=\"shine\">in real time</span>",
+    "hero.lead": "A native real-time AI voice changer for Android. MicMask uses Shizuku to feed your changed voice straight into the system microphone, while RVC voice models run right on your phone. Open QQ, WeChat or your game as usual — the other side hears your new voice.",
+    "cta.apk": "Download APK",
+    "hero.note": "64-bit Android 8.0+ · No root · No virtual machine",
+    "ph.title": "AI Voice",
+    "ph.basic": "Basic",
+    "ph.card": "Card",
+    "ph.running": "Running · QQ voice",
+    "ph.scope": "Scope: Auto-detect",
+    "ph.injected": "Injected",
+    "ph.cur": "Current voice",
+    "ph.voice": "Young boy",
+    "ph.e2e": "end-to-end",
+    "ph.syn": "synthesis",
+    "ph.ret": "retrieval",
+    "ph.pitch": "Pitch",
+    "ph.monitor": "Monitor",
+    "ph.nr": "Noise reduction",
+    "ph.hint": "Floating window on · switch in-game",
+    "ph.stop": "Stop Voice Changing",
+    "fl.who": "QQ voice · In call",
+    "fl.bubble": "They hear you as “Young boy”",
+    "fl.who2": "MicMask · Scope",
+    "fl.q": "QQ is using the microphone",
+    "fl.c": "Taken over — voice changer on",
+    "fl.pause": "Pause",
+    "fl.resume": "Resume",
+    "how.k": "How it works",
+    "how.h": "Three steps to a whole new voice",
+    "how.sub": "First-time setup takes a few minutes. After that, just open MicMask and tap Start Voice Changing.",
+    "how.s1t": "Authorize Shizuku",
+    "how.s1p": "Install and start Shizuku, then tap Authorize in MicMask. Your changed voice is injected into the system microphone with shell privileges — no root required.",
+    "how.s2t": "Pick or import a voice",
+    "how.s2p": "Grab a voice from the built-in library in one tap, or import your own .pth model right on the phone, optionally with its .index retrieval file.",
+    "how.s3t": "Open your app and talk",
+    "how.s3p": "Tap Start Voice Changing, then open QQ, WeChat or your game and unmute as usual. Your apps stay exactly as they are — nothing to install in a virtual machine.",
+    "ft.k": "Features",
+    "ft.h": "No root, no virtual machine — your voice changes on your phone and nowhere else",
+    "ft.sub": "AI voices, basic voice effects, a virtual sound card and file conversion, all in one app.",
+    "ft.root.t": "No root needed",
+    "ft.root.p": "Shizuku lets MicMask run with shell privileges and inject the changed voice straight into the system microphone. No bootloader unlock, no flashing.",
+    "ft.root.c1": "Your mic",
+    "ft.root.c3": "QQ / WeChat / games",
+    "ft.root.note": "Shizuku injection requires Android 10 or later",
+    "ft.lat.t": "Low latency",
+    "ft.lat.p": "Streaming inference changes your voice as you speak. If it stutters, switch to the steadier battery saver tier.",
+    "ft.lat.e2e": "end-to-end",
+    "ft.lat.syn": "Synthesis",
+    "ft.lat.ret": "Retrieval",
+    "ft.lat.fine": "Measured on Snapdragon 8 Gen 3, standard tier. Latency may be higher on other devices.",
+    "ft.vm.t": "No virtual machine or app cloning",
+    "ft.vm.p": "Use the QQ, WeChat and games already on your phone. No virtual machine or dual-app container, so your accounts and setup stay untouched.",
+    "ft.local.t": "Truly on-device AI",
+    "ft.local.p": "RVC voice models run in real time on your phone’s CPU via ONNX Runtime. Recordings are never uploaded and never touch a server.",
+    "ft.oss.t": "Free &amp; open source",
+    "ft.oss.p": "Licensed under GPL-3.0, with all the code public on GitHub. No paywall — sponsorship is entirely optional.",
+    "ft.imp.t": "Import .pth / .index on your phone",
+    "ft.imp.p": "Pick a trained RVC model and its retrieval index to import them. The app turns them into a real-time voice on the device — no computer needed.",
+    "ft.imp.c1": "Building standard / battery saver tiers",
+    "ft.imp.c2": "30 s – 2 min",
+    "ft.scope.t": "Scope, auto-detected",
+    "ft.scope.p": "By default, whichever app starts recording gets the changed voice — no need to pick apps. Want precise control? Select target apps manually instead.",
+    "ft.scope.on": "Recording · Voice on",
+    "ft.scope.wi": "W",
+    "ft.scope.w": "WeChat",
+    "ft.scope.off": "Not recording",
+    "ft.scope.gi": "G",
+    "ft.scope.g": "Games",
+    "ft.basic.t": "Basic Voice &amp; Virtual Sound Card",
+    "ft.basic.p": "Low-latency pitch presets with no AI model, easy on mid-range phones. The virtual sound card is made for singing and streaming.",
+    "ft.basic.p1": "Original",
+    "ft.basic.p2": "Male→Female",
+    "ft.basic.p3": "Loli",
+    "ft.basic.p4": "Mature female",
+    "ft.basic.p5": "Uncle",
+    "ft.basic.p6": "Robot",
+    "ft.float.t": "Floating window",
+    "ft.float.p": "No need to leave your game: tap the floating ball to switch modes, pick presets, check performance, and toggle monitoring and noise reduction.",
+    "ft.file.t": "File conversion · TTS · Sound packs",
+    "ft.file.p": "Convert whole audio clips in high quality, turn Chinese text into speech, and play built-in or custom sound packs into the mic with one tap.",
+    "sh.k": "Screenshots",
+    "sh.h": "See it on a real phone",
+    "sh.sub": "Swipe to see more.",
+    "sh.aria": "MicMask screenshots",
+    "pv.k": "Privacy",
+    "pv.h": "Where your voice goes, spelled out",
+    "pv.sub": "MicMask has no voice-changing server. For the full details, see About → Other → Privacy notice in the app.",
+    "pv.1t": "Recording stays on your phone",
+    "pv.1p": "Recording and model inference both happen on your phone. Audio is never uploaded to a server or relayed anywhere.",
+    "pv.2t": "Anonymous stats are optional",
+    "pv.2p": "On first launch you choose whether to share anonymous statistics, and you can turn them off in Settings anytime. Basic stats include no device model info.",
+    "pv.3t": "Voice models are your call",
+    "pv.3p": "For third-party voice models, it’s up to you to check the source, the license and any rights to the voice. Don’t use them for anything illegal.",
+    "pv.4t": "Logs leave only when you export them",
+    "pv.4p": "Logs are never uploaded automatically. When you need help, export them from the app and decide who gets them.",
+    "mn.k": "User manual",
+    "mn.h": "Everything in detail",
+    "mn.sub": "Synced from docs/manual.md in the GitHub repo.",
+    "mn.loading": "Loading the manual…",
+    "sp.k": "Sponsors",
+    "sp.h": "Enjoy MicMask? Buy the developer a bubble tea",
+    "sp.sub": "Sponsorship is entirely optional — every feature works without it.",
+    "sp.loading": "Loading sponsors…",
+    "sp.aria": "Sponsor",
+    "sp.plans": "Sponsorship tiers",
+    "sp.via": "Support Taocrypt’s ongoing development on Afdian.",
+    "sp.btn": "Sponsor on Afdian",
+    "fq.h": "FAQ",
+    "fq.1q": "Do I need root?",
+    "fq.1a": "No. MicMask works with the shell privileges granted through Shizuku — no bootloader unlock or flashing required.",
+    "fq.2q": "What phone do I need?",
+    "fq.2a": "A 64-bit Android phone. Installing requires Android 8.0 or later, and Shizuku injection mode requires Android 10 or later. Real-time AI voice changing is CPU-heavy: flagships like the Snapdragon 8 Gen 3 can run the standard tier, while mid-range chips should use the 0.5 s battery saver tier.",
+    "fq.3q": "Do I have to put QQ in a virtual machine?",
+    "fq.3a": "No. Use your apps as they are — MicMask detects which app is recording and takes over its microphone automatically.",
+    "fq.4q": "Does it cost anything?",
+    "fq.4a": "It’s free and open source under GPL-3.0. Sponsorship is entirely optional and doesn’t unlock anything.",
+    "fq.5q": "Is my voice uploaded?",
+    "fq.5a": "No. Everything runs locally — your audio never leaves your phone.",
+    "fq.6q": "Can I use it without Shizuku?",
+    "fq.6a": "Yes, in Normal Mode (speaker playback / record-and-play fallback), but it’s limited. For real-time calls, Shizuku is still recommended.",
+    "fq.7q": "How do I report a problem?",
+    "fq.7a": "Export your logs from the Logs page in the app, then join our QQ group 780988679 or open an issue on <a href=\"https://github.com/Taocrypt/MicMask/issues\" target=\"_blank\" rel=\"noopener\">GitHub Issues</a>. Attaching logs helps pin down the problem.",
+    "cl.h": "Start talking in a new voice",
+    "cl.sub": "Download the free 2.0.0 release and get going in minutes. Questions? Join our QQ group 780988679.",
+    "cl.src": "View source",
+    "ft2.qq": "QQ group 780988679",
+    "ft2.afd": "Afdian",
+    "ft2.lang": "中文",
+    "ft2.legal": "For entertainment and learning only. Do not use MicMask for fraud, impersonation or anything else illegal."
+  };
+  // 动态文案（JS 生成的部分），两种语言都在这里
+  var DYN = {
+    zh: { manualFail: '手册加载失败。可以前往 <a class="link" href="{0}" target="_blank" rel="noopener">GitHub 查看使用手册</a>。',
+          toc: "目录", tocAria: "手册目录", more: "展开全文", less: "收起", shotAlt: "MicMask 截图 {0}",
+          noSpon: "还没有赞助者。", first: "成为第一位赞助者", sponFail: "赞助名单暂时无法加载，请稍后再试。",
+          anon: "匿名赞助者", expired: "已过期", langAria: "语言 / Language" },
+    en: { manualFail: 'Couldn’t load the manual. You can <a class="link" href="{0}" target="_blank" rel="noopener">read it on GitHub</a> instead.',
+          toc: "Contents", tocAria: "Manual contents", more: "Show full manual", less: "Show less", shotAlt: "MicMask screenshot {0}",
+          noSpon: "No sponsors yet.", first: "Be the first sponsor", sponFail: "Couldn’t load the sponsor list. Please try again later.",
+          anon: "Anonymous sponsor", expired: "Expired", langAria: "Language / 语言" }
+  };
+  var ZH = {}, listeners = [], cur = "zh";
+  var nodes = document.querySelectorAll("[data-i18n]");
+  var attrNodes = document.querySelectorAll("[data-i18n-attr]");
+  Array.prototype.forEach.call(nodes, function (el) { ZH[el.getAttribute("data-i18n")] = el.innerHTML; });
+  Array.prototype.forEach.call(attrNodes, function (el) {
+    el.getAttribute("data-i18n-attr").split(";").forEach(function (pair) {
+      var p = pair.split(":"); ZH[p[1]] = el.getAttribute(p[0]);
+    });
+  });
+  function t(k, a) {
+    var v = (DYN[cur] && DYN[cur][k]) != null ? DYN[cur][k] : (cur === "en" && EN[k] != null ? EN[k] : ZH[k]);
+    return v == null ? k : String(v).replace("{0}", a == null ? "" : a);
+  }
+  function apply(l, save) {
+    cur = l === "en" ? "en" : "zh";
+    var root = document.documentElement;
+    root.lang = cur === "en" ? "en" : "zh-CN";
+    Array.prototype.forEach.call(nodes, function (el) {
+      var k = el.getAttribute("data-i18n"), v = cur === "en" ? EN[k] : ZH[k];
+      if (v != null && el.innerHTML !== v) el.innerHTML = v;
+    });
+    Array.prototype.forEach.call(attrNodes, function (el) {
+      el.getAttribute("data-i18n-attr").split(";").forEach(function (pair) {
+        var p = pair.split(":"), v = cur === "en" ? EN[p[1]] : ZH[p[1]];
+        if (v != null) el.setAttribute(p[0], v.replace(/&amp;/g, "&"));
+      });
+    });
+    document.title = (cur === "en" ? EN["meta.title"] : ZH["meta.title"]).replace(/&amp;/g, "&");
+    Array.prototype.forEach.call(document.querySelectorAll("[data-lang]"), function (a) {
+      a.setAttribute("aria-current", String(a.getAttribute("data-lang") === cur));
+    });
+    var g = document.querySelector(".lang"); if (g) g.setAttribute("aria-label", t("langAria"));
+    Array.prototype.forEach.call(document.querySelectorAll("[data-lang-toggle]"), function (a) {
+      a.setAttribute("href", "?lang=" + (cur === "en" ? "zh" : "en"));
+      a.setAttribute("lang", cur === "en" ? "zh-CN" : "en");
+    });
+    if (save) {
+      try { localStorage.setItem("micmask-lang", cur); } catch (e) {}
+      if (/[?&]lang=/.test(location.search)) {
+        try { history.replaceState(null, "", location.pathname + location.search.replace(/([?&]lang=)(en|zh)/i, "$1" + cur) + location.hash); } catch (e) {}
+      }
+    }
+    listeners.forEach(function (fn) { try { fn(cur); } catch (e) {} });
+  }
+  document.addEventListener("click", function (e) {
+    var a = e.target.closest && e.target.closest("[data-lang],[data-lang-toggle]");
+    if (!a) return;
+    e.preventDefault();
+    var l = a.hasAttribute("data-lang") ? a.getAttribute("data-lang") : (cur === "en" ? "zh" : "en");
+    if (l !== cur) apply(l, true);
+  });
+  window.MMI18N = { t: t, lang: function () { return cur; }, onChange: function (fn) { listeners.push(fn); } };
+  apply(window.__MM_LANG || "zh", false);
+})();
+</script>
+<script>
 
       (function () {
+        var T = window.MMI18N.t;
         var MANUAL_RAW = "manual.md";
         var MANUAL_WEB = "https://github.com/Taocrypt/MicMask/blob/main/docs/manual.md";
         var BASE_WEB = "https://github.com/Taocrypt/MicMask/blob/main/docs/";
@@ -854,11 +1125,12 @@ footer .brand .mark svg { width: 13px; height: 13px; }
             if (slugs[k]) a.setAttribute("href", "#" + slugs[k]);
           });
           box.innerHTML = "";
+          var toc = null;
           if (h2s.length) {
-            var toc = document.createElement("nav");
+            toc = document.createElement("nav");
             toc.className = "x-toc";
-            toc.setAttribute("aria-label", "手册目录");
-            toc.innerHTML = "<p>目录</p><ol>" + h2s.map(function (h) { return '<li><a class="link" href="#' + h.id + '">' + h.html + "</a></li>"; }).join("") + "</ol>";
+            toc.setAttribute("aria-label", T("tocAria"));
+            toc.innerHTML = '<p data-dyn="toc">' + T("toc") + "</p><ol>" + h2s.map(function (h) { return '<li><a class="link" href="#' + h.id + '">' + h.html + "</a></li>"; }).join("") + "</ol>";
             box.appendChild(toc);
           }
           var intro = document.createElement("div");
@@ -883,16 +1155,21 @@ footer .brand .mark svg { width: 13px; height: 13px; }
             btn.className = "btn";
             btn.setAttribute("aria-controls", "manual-rest");
             btn.setAttribute("aria-expanded", "false");
-            btn.textContent = "展开全文";
+            btn.textContent = T("more");
             btn.addEventListener("click", function () {
               var open = rest.hidden;
               rest.hidden = !open;
               btn.setAttribute("aria-expanded", String(open));
-              btn.textContent = open ? "收起" : "展开全文";
+              btn.textContent = open ? T("less") : T("more");
               if (!open) document.getElementById("manual").scrollIntoView({ behavior: "smooth", block: "start" });
             });
             wrap.appendChild(btn);
             box.appendChild(wrap);
+            window.MMI18N.onChange(function () {
+              btn.textContent = rest.hidden ? T("more") : T("less");
+              toc && toc.setAttribute("aria-label", T("tocAria"));
+              var tp = box.querySelector('[data-dyn="toc"]'); if (tp) tp.textContent = T("toc");
+            });
             box.addEventListener("click", function (e) {
               var a = e.target.closest && e.target.closest('a[href^="#"]');
               if (!a) return;
@@ -900,15 +1177,19 @@ footer .brand .mark svg { width: 13px; height: 13px; }
               if (el && rest.contains(el) && rest.hidden) {
                 rest.hidden = false;
                 btn.setAttribute("aria-expanded", "true");
-                btn.textContent = "收起";
+                btn.textContent = T("less");
               }
             });
           }
         }
 
         function manualFailed() {
-          document.getElementById("manual-box").innerHTML =
-            '<p class="x-status">手册加载失败。可以前往 <a class="link" href="' + MANUAL_WEB + '" target="_blank" rel="noopener">GitHub 查看使用手册</a>。</p>';
+          var box = document.getElementById("manual-box");
+          box.innerHTML = '<p class="x-status" id="manual-status"></p>';
+          var st = box.firstChild;
+          function upd() { st.setAttribute("lang", window.MMI18N.lang() === "en" ? "en" : "zh-CN"); st.innerHTML = T("manualFail", MANUAL_WEB); }
+          upd();
+          window.MMI18N.onChange(function () { if (st.isConnected) upd(); });
         }
         function loadManual() {
           fetch(MANUAL_RAW, { cache: "no-cache" })
@@ -924,7 +1205,8 @@ footer .brand .mark svg { width: 13px; height: 13px; }
           var sec = document.getElementById("shots");
           names.forEach(function (n, k) {
             var img = document.createElement("img");
-            img.alt = "MicMask 截图 " + (k + 1);
+            img.alt = T("shotAlt", k + 1);
+            window.MMI18N.onChange(function () { img.alt = T("shotAlt", k + 1); });
             img.decoding = "async";
             var card = document.createElement("div");
             card.className = "shot";
@@ -963,7 +1245,7 @@ footer .brand .mark svg { width: 13px; height: 13px; }
           return li;
         }
         function firstSponsor() {
-          var li = emptySponsors("还没有赞助者。");
+          var li = emptySponsors(T("noSpon"));
           li.appendChild(document.createElement("br"));
           var a = document.createElement("a");
           a.className = "btn ghost";
@@ -971,7 +1253,7 @@ footer .brand .mark svg { width: 13px; height: 13px; }
           a.href = "https://afdian.com/a/taocrypt";
           a.target = "_blank";
           a.rel = "noopener";
-          a.textContent = "成为第一位赞助者";
+          a.textContent = T("first");
           li.appendChild(a);
         }
         function num(v) {
@@ -1001,7 +1283,7 @@ footer .brand .mark svg { width: 13px; height: 13px; }
             .filter(function (s) { return s && typeof s === "object"; })
             .map(function (s) {
               var exp = num(s.expire);
-              return { name: s.name ? String(s.name) : "匿名赞助者", amount: s.amount, value: num(s.amount), expired: exp > 0 && exp < now };
+              return { name: s.name ? String(s.name) : T("anon"), amount: s.amount, value: num(s.amount), expired: exp > 0 && exp < now };
             });
           if (!sp.length) { firstSponsor(); return; }
           sp.sort(function (a, b) { return (a.expired - b.expired) || (b.value - a.value); });
@@ -1015,16 +1297,22 @@ footer .brand .mark svg { width: 13px; height: 13px; }
             a.textContent = money(s.amount);
             li.appendChild(n);
             li.appendChild(a);
-            if (s.expired) li.title = "已过期";
+            if (s.expired) li.title = T("expired");
             list.appendChild(li);
           });
         }
+        var sponState = null; // null=加载中, false=失败, 对象=数据
+        function sponFailed() { sponState = false; plansEl.remove(); emptySponsors(T("sponFail")); }
+        window.MMI18N.onChange(function () {
+          if (sponState === false) emptySponsors(T("sponFail"));
+          else if (sponState) renderSponsors(sponState);
+        });
         try {
           fetch("https://beacon.0666555.xyz/v1/micmask/sponsors", { cache: "no-cache" })
             .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-            .then(renderSponsors)
-            .catch(function () { plansEl.remove(); emptySponsors("赞助名单暂时无法加载，请稍后再试。"); });
-        } catch (e) { emptySponsors("赞助名单暂时无法加载，请稍后再试。"); }
+            .then(function (d) { sponState = d || {}; renderSponsors(sponState); })
+            .catch(sponFailed);
+        } catch (e) { sponFailed(); }
       })();
     </script>
 </body>
