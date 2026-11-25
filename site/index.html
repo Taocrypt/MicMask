@@ -426,7 +426,7 @@ footer .brand .mark svg { width: 13px; height: 13px; }
       <a class="opt" href="#faq" data-i18n="nav.faq">常见问题</a>
       <span class="lang" role="group" aria-label="语言 / Language"><a href="?lang=en" lang="en" hreflang="en" data-lang="en">EN</a><a href="?lang=zh" lang="zh-CN" hreflang="zh-CN" data-lang="zh">中文</a></span>
     </nav>
-    <a class="btn" href="https://github.com/Taocrypt/MicMask/releases/latest" target="_blank" rel="noopener" data-i18n="nav.download">下载</a>
+    <a class="btn" href="https://github.com/Taocrypt/MicMask/releases/latest" target="_blank" rel="noopener" data-dl data-i18n="nav.download">下载</a>
   </div>
 </header>
 
@@ -440,7 +440,7 @@ footer .brand .mark svg { width: 13px; height: 13px; }
       <h1 data-i18n="hero.h1">把你的声音，<br><span class="shine">实时换一副</span></h1>
       <p class="lead" data-i18n="hero.lead">安卓端原生的实时 AI 变声。MicMask 借助 Shizuku 把变声直接送进系统麦克风，RVC 模型在手机本地推理；QQ、微信、游戏照常打开，对方听到的就是新声音。</p>
       <div class="cta">
-        <a class="btn" href="https://github.com/Taocrypt/MicMask/releases/latest" target="_blank" rel="noopener">
+        <a class="btn" href="https://github.com/Taocrypt/MicMask/releases/latest" target="_blank" rel="noopener" data-dl>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0l-5-5m5 5l5-5M5 21h14"/></svg>
           <span data-i18n="cta.apk">下载 APK</span>
         </a>
@@ -449,6 +449,7 @@ footer .brand .mark svg { width: 13px; height: 13px; }
           GitHub
         </a>
       </div>
+      <p class="cta-note dl-status" aria-live="polite" hidden></p>
       <p class="cta-note" data-i18n="hero.note">64 位 Android 8.0+ · 无需 ROOT · 不用虚拟机</p>
     </div>
 
@@ -714,7 +715,7 @@ footer .brand .mark svg { width: 13px; height: 13px; }
       <h2 data-i18n="cl.h">现在就换个声音说话</h2>
       <p class="sub" style="margin:0 auto 30px" data-i18n="cl.sub">免费下载 2.0.0 正式版，几分钟就能上手。遇到问题欢迎加 QQ 群 780988679。</p>
       <div class="cta">
-        <a class="btn" href="https://github.com/Taocrypt/MicMask/releases/latest" target="_blank" rel="noopener" data-i18n="cta.apk">下载 APK</a>
+        <a class="btn" href="https://github.com/Taocrypt/MicMask/releases/latest" target="_blank" rel="noopener" data-dl data-i18n="cta.apk">下载 APK</a>
         <a class="btn ghost" href="https://github.com/Taocrypt/MicMask" target="_blank" rel="noopener" data-i18n="cl.src">查看源码</a>
       </div>
     </div>
@@ -889,11 +890,13 @@ footer .brand .mark svg { width: 13px; height: 13px; }
     zh: { manualFail: '手册加载失败。可以前往 <a class="link" href="{0}" target="_blank" rel="noopener">GitHub 查看使用手册</a>。',
           toc: "目录", tocAria: "手册目录", more: "展开全文", less: "收起", shotAlt: "MicMask 截图 {0}",
           noSpon: "还没有赞助者。", first: "成为第一位赞助者", sponFail: "赞助名单暂时无法加载，请稍后再试。",
-          anon: "匿名赞助者", expired: "已过期", langAria: "语言 / Language" },
+          anon: "匿名赞助者", expired: "已过期", langAria: "语言 / Language",
+          dlProbe: "正在测速，挑最快的下载线路…", dlGo: "开始下载 {0}", dlFail: "直链暂时连不上，已打开 GitHub 发布页。" },
     en: { manualFail: 'Couldn’t load the manual. You can <a class="link" href="{0}" target="_blank" rel="noopener">read it on GitHub</a> instead.',
           toc: "Contents", tocAria: "Manual contents", more: "Show full manual", less: "Show less", shotAlt: "MicMask screenshot {0}",
           noSpon: "No sponsors yet.", first: "Be the first sponsor", sponFail: "Couldn’t load the sponsor list. Please try again later.",
-          anon: "Anonymous sponsor", expired: "Expired", langAria: "Language / 语言" }
+          anon: "Anonymous sponsor", expired: "Expired", langAria: "Language / 语言",
+          dlProbe: "Testing mirrors to pick the fastest download…", dlGo: "Downloading via {0}", dlFail: "Direct download is unreachable right now, so we opened the GitHub release page." }
   };
   var ZH = {}, listeners = [], cur = "zh";
   var nodes = document.querySelectorAll("[data-i18n]");
@@ -1315,5 +1318,69 @@ footer .brand .mark svg { width: 13px; height: 13px; }
         } catch (e) { sponFailed(); }
       })();
     </script>
+<script>
+/* 直链下载：与 App 内更新同一思路——取最新版 APK 地址，直连与镜像并发测速，选最快的直接下载；全失败再打开发布页 */
+(function () {
+  var REL = "https://github.com/Taocrypt/MicMask/releases";
+  var UPDATE_JSON = REL + "/latest/download/update.json";
+  var MIRRORS = ["https://gh-proxy.com", "https://fastgit.cc", "https://ghfile.geekertao.top", "https://tvv.tw", "https://git.yylx.win"];
+  var T = function (k, a) { return window.MMI18N ? window.MMI18N.t(k, a) : k; };
+  function mu(b, u) { return b ? b.replace(/\/+$/, "") + "/" + u : u; }
+  function host(b) { try { return b ? new URL(b).host : "GitHub"; } catch (e) { return b; } }
+  function timeout(ms) { return new Promise(function (_, rej) { setTimeout(function () { rej(new Error("timeout")); }, ms); }); }
+  function json(u, ms) { return Promise.race([fetch(u, { cache: "no-store" }).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); }), timeout(ms)]); }
+  function any(ps) { return new Promise(function (ok, no) { var n = ps.length; if (!n) no(); ps.forEach(function (p) { p.then(ok, function () { if (--n === 0) no(new Error("all failed")); }); }); }); }
+  function apkOf(assets, urlKey) {
+    var a = (assets || []).filter(function (x) { return /\.apk$/.test(x.name); });
+    var b = a.filter(function (x) { return /arm64/.test(x.name); })[0] || a[0];
+    return b ? { name: b.name, url: b[urlKey] } : null;
+  }
+  var cache = null;
+  function latestApk() {
+    if (cache) return cache;
+    var api = json("https://api.github.com/repos/Taocrypt/MicMask/releases/latest", 6000).then(function (j) { var x = apkOf(j.assets, "browser_download_url"); if (!x) throw 0; return x; });
+    var feeds = MIRRORS.map(function (m) { return json(mu(m, UPDATE_JSON), 7000).then(function (j) { var x = apkOf(j.assets, "url"); if (!x) throw 0; return x; }); });
+    cache = any([api].concat(feeds)).catch(function (e) { cache = null; throw e; });
+    return cache;
+  }
+  /* 测速：每条线路读 update.json（小文件，测的是连通与延迟）；GitHub 直连不允许跨域读，用 no-cors 计时 */
+  function probe(b) {
+    var t0 = performance.now();
+    var req = b ? fetch(mu(b, UPDATE_JSON), { cache: "no-store" }).then(function (r) { if (!r.ok) throw 0; return r.text(); })
+                : fetch(UPDATE_JSON, { cache: "no-store", mode: "no-cors" });
+    return Promise.race([req, timeout(5000)]).then(function () { return { b: b, ms: performance.now() - t0 }; });
+  }
+  function best() {
+    var ps = [null].concat(MIRRORS).map(function (b) { return probe(b).catch(function () { return null; }); });
+    return Promise.all(ps).then(function (rs) {
+      rs = rs.filter(Boolean).sort(function (x, y) { return x.ms - y.ms; });
+      var d = rs.filter(function (r) { return r.b === null; })[0];
+      // 直连只要不比最快的镜像慢太多就优先直连（与 App 一致的偏好）
+      if (d && rs.length && d.ms <= rs[0].ms * 1.5 + 150) return null;
+      return rs.length ? rs[0].b : null;
+    });
+  }
+  var st = document.querySelector(".dl-status");
+  function say(m) { if (st) { st.hidden = !m; st.innerHTML = m || ""; } }
+  var busy = false;
+  document.addEventListener("click", function (e) {
+    var a = e.target.closest && e.target.closest("[data-dl]");
+    if (!a || e.ctrlKey || e.metaKey || e.shiftKey || e.button) return;
+    e.preventDefault();
+    if (busy) return; busy = true;
+    say(T("dlProbe"));
+    Promise.all([latestApk(), best()]).then(function (r) {
+      var url = mu(r[1], r[0].url);
+      say(T("dlGo", host(r[1])));
+      location.href = url;
+    }).catch(function () {
+      say(T("dlFail"));
+      window.open(REL + "/latest", "_blank", "noopener");
+    }).then(function () { busy = false; setTimeout(function () { say(""); }, 8000); });
+  });
+  // 页面空闲时预取版本信息，点击时更快
+  setTimeout(function () { latestApk().catch(function () {}); }, 1500);
+})();
+</script>
 </body>
 </html>
