@@ -436,7 +436,7 @@ footer .brand .mark svg { width: 13px; height: 13px; }
 <section class="hero">
   <div class="wrap">
     <div>
-      <span class="eyebrow"><i></i><span data-i18n="hero.eyebrow">开源免费 · 2.0.0 正式版</span></span>
+      <span class="eyebrow"><i></i><span data-i18n="hero.eyebrow">开源免费 · <span class="mm-ver">2.0.0</span> 正式版</span></span>
       <h1 data-i18n="hero.h1">把你的声音，<br><span class="shine">实时换一副</span></h1>
       <p class="lead" data-i18n="hero.lead">安卓端原生的实时 AI 变声。MicMask 借助 Shizuku 把变声直接送进系统麦克风，RVC 模型在手机本地推理；QQ、微信、游戏照常打开，对方听到的就是新声音。</p>
       <div class="cta">
@@ -713,7 +713,7 @@ footer .brand .mark svg { width: 13px; height: 13px; }
   <div class="wrap">
     <div class="box">
       <h2 data-i18n="cl.h">现在就换个声音说话</h2>
-      <p class="sub" style="margin:0 auto 30px" data-i18n="cl.sub">免费下载 2.0.0 正式版，几分钟就能上手。遇到问题欢迎加 QQ 群 780988679。</p>
+      <p class="sub" style="margin:0 auto 30px" data-i18n="cl.sub">免费下载 <span class="mm-ver">2.0.0</span> 正式版，几分钟就能上手。遇到问题欢迎加 QQ 群 780988679。</p>
       <div class="cta">
         <a class="btn" href="https://github.com/Taocrypt/MicMask/releases/latest" target="_blank" rel="noopener" data-dl data-i18n="cta.apk">下载 APK</a>
         <a class="btn ghost" href="https://github.com/Taocrypt/MicMask" target="_blank" rel="noopener" data-i18n="cl.src">查看源码</a>
@@ -754,7 +754,7 @@ footer .brand .mark svg { width: 13px; height: 13px; }
     "nav.privacy": "Privacy",
     "nav.faq": "FAQ",
     "nav.download": "Download",
-    "hero.eyebrow": "Free &amp; open source · 2.0.0 stable",
+    "hero.eyebrow": "Free &amp; open source · <span class=\"mm-ver\">2.0.0</span> stable",
     "hero.h1": "Swap your voice<br><span class=\"shine\">in real time</span>",
     "hero.lead": "A native real-time AI voice changer for Android. MicMask uses Shizuku to feed your changed voice straight into the system microphone, while RVC voice models run right on your phone. Open QQ, WeChat or your game as usual — the other side hears your new voice.",
     "cta.apk": "Download APK",
@@ -878,7 +878,7 @@ footer .brand .mark svg { width: 13px; height: 13px; }
     "fq.7q": "How do I report a problem?",
     "fq.7a": "Export your logs from the Logs page in the app, then join our QQ group 780988679 or open an issue on <a href=\"https://github.com/Taocrypt/MicMask/issues\" target=\"_blank\" rel=\"noopener\">GitHub Issues</a>. Attaching logs helps pin down the problem.",
     "cl.h": "Start talking in a new voice",
-    "cl.sub": "Download the free 2.0.0 release and get going in minutes. Questions? Join our QQ group 780988679.",
+    "cl.sub": "Download the free <span class=\"mm-ver\">2.0.0</span> release and get going in minutes. Questions? Join our QQ group 780988679.",
     "cl.src": "View source",
     "ft2.qq": "QQ group 780988679",
     "ft2.afd": "Afdian",
@@ -1338,8 +1338,8 @@ footer .brand .mark svg { width: 13px; height: 13px; }
   var cache = null;
   function latestApk() {
     if (cache) return cache;
-    var api = json("https://api.github.com/repos/Taocrypt/MicMask/releases/latest", 6000).then(function (j) { var x = apkOf(j.assets, "browser_download_url"); if (!x) throw 0; return x; });
-    var feeds = MIRRORS.map(function (m) { return json(mu(m, UPDATE_JSON), 7000).then(function (j) { var x = apkOf(j.assets, "url"); if (!x) throw 0; return x; }); });
+    var api = json("https://api.github.com/repos/Taocrypt/MicMask/releases/latest", 6000).then(function (j) { var x = apkOf(j.assets, "browser_download_url"); if (!x) throw 0; x.ver = j.tag_name; return x; });
+    var feeds = MIRRORS.map(function (m) { return json(mu(m, UPDATE_JSON), 7000).then(function (j) { var x = apkOf(j.assets, "url"); if (!x) throw 0; x.ver = j.tag || j.version; return x; }); });
     cache = any([api].concat(feeds)).catch(function (e) { cache = null; throw e; });
     return cache;
   }
@@ -1378,8 +1378,21 @@ footer .brand .mark svg { width: 13px; height: 13px; }
       window.open(REL + "/latest", "_blank", "noopener");
     }).then(function () { busy = false; setTimeout(function () { say(""); }, 8000); });
   });
-  // 页面空闲时预取版本信息，点击时更快
-  setTimeout(function () { latestApk().catch(function () {}); }, 1500);
+  /* 页面上的版本号（.mm-ver）跟随最新正式版：先用上次缓存，再取最新版更新；切换语言后重新填 */
+  var ver = null;
+  try { ver = localStorage.getItem("micmask-ver"); } catch (e) {}
+  function fill() {
+    if (!ver) return;
+    Array.prototype.forEach.call(document.querySelectorAll(".mm-ver"), function (el) { if (el.textContent !== ver) el.textContent = ver; });
+  }
+  if (window.MMI18N) window.MMI18N.onChange(fill);
+  fill();
+  latestApk().then(function (x) {
+    var v = String(x.ver || "").replace(/^v/i, "");
+    if (!/^\d+(\.\d+)+/.test(v)) return;
+    ver = v; fill();
+    try { localStorage.setItem("micmask-ver", v); } catch (e) {}
+  }).catch(function () {});
 })();
 </script>
 </body>
