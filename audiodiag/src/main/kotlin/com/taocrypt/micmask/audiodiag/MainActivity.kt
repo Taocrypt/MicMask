@@ -31,7 +31,7 @@ import java.util.Locale
  *  1. App 进程（前台 Activity）建一条普通 USAGE_MEDIA AudioTrack 作对照；
  *  2. 通过 Shizuku 以 shell 身份起 app_process 跑 [ShellDiag]，批量测注入轨道的各种组合；
  *  3. 可选：临时关闭 Android 17 音频加固后再测一遍，测完无论成败都恢复 enable；
- *  4. 报告可复制、分享 txt、保存到 Download/MicMask/。
+ *  4. 报告可复制、分享 txt、保存到 Download/MicMask/；报告最前面是「能用的组合」摘要。
  */
 class MainActivity : Activity() {
     private lateinit var log: TextView
@@ -39,6 +39,8 @@ class MainActivity : Activity() {
     private lateinit var hardenBox: CheckBox
     private val sb = StringBuilder()
     private val results = ArrayList<Triple<String, String, String>>() // 轮次, 编号, 状态|说明
+    private val descs = LinkedHashMap<String, String>() // 编号 → 分组｜说明
+    @Volatile private var summary = ""
     @Volatile private var busy = false
     private var savedUri: Uri? = null
     private val prefs by lazy { getSharedPreferences("diag", 0) }
@@ -50,7 +52,7 @@ class MainActivity : Activity() {
             .also { parent.addView(it, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).takeIf { parent !== root } ?: LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)) }
         root.addView(TextView(this).apply {
             textSize = 13f
-            text = "用途：排查 MicMask 注入通道（AudioPolicy 注入轨道）建不起来的问题。需要 Shizuku 已运行并授权。全程约 1–2 分钟，请保持亮屏、本 App 在前台。本工具不会录音，也不会播放可听见的声音。"
+            text = "用途：排查 MicMask 注入通道（AudioPolicy 注入轨道）建不起来的问题。需要 Shizuku 已运行并授权。全程约 2–4 分钟（共约 48 项，每项最多 15 秒），请保持亮屏、本 App 在前台。本工具不会录音，也不会播放可听见的声音。"
         })
         hardenBox = CheckBox(this).apply {
             text = "临时关闭音频加固后再测一遍\n⚠️ 会临时修改系统设置：先执行 cmd audio set-enable-hardening disable，测完无论成败都执行 cmd audio set-enable-hardening enable 恢复。"
@@ -119,10 +121,17 @@ class MainActivity : Activity() {
         busy = true; savedUri = null
         val harden = hardenBox.isChecked
         runOnUiThread { sb.setLength(0); log.text = "" }
-        synchronized(results) { results.clear() }
+        synchronized(results) { results.clear(); descs.clear() }
+        summary = ""
         Thread {
             try { runDiag(harden) } catch (t: Throwable) { out("诊断异常：${android.util.Log.getStackTraceString(t)}") }
-            finally { busy = false; out("\n诊断结束。可以「复制」「分享 txt」或「保存到 Download」。"); toast("诊断结束") }
+            finally {
+                summary = runCatching { buildSummary() }.getOrElse { "（生成摘要失败：$it）\n" }
+                out("\n诊断结束。可以「复制」「分享 txt」或「保存到 Download」。")
+                runOnUiThread { log.text = report(); scroll.post { scroll.fullScroll(ScrollView.FOCUS_UP) } }
+                busy = false
+                toast("诊断结束")
+            }
         }.start()
     }
 
@@ -189,7 +198,8 @@ class MainActivity : Activity() {
         synchronized(results) {
             for ((round, id, r) in results) out("[$round] $id → ${r.lineSequence().first().take(200)}")
             val ok = results.count { it.third.startsWith("OK") }
-            out("共 ${results.size} 项，成功 $ok，失败/超时 ${results.size - ok}")
+            val part = results.count { it.third.startsWith("PART") }
+            out("共 ${results.size} 项，成功 $ok，初始化成功但写入异常 $part，失败/超时 ${results.size - ok - part}")
         }
     }
 
@@ -202,11 +212,15 @@ class MainActivity : Activity() {
     private fun runShell(targetUid: Int, round: String) {
         val apk = applicationInfo.sourceDir
         val cmd = "CLASSPATH='$apk' app_process -Djava.class.path='$apk' /system/bin --nice-name=micmask-audiodiag " +
-            "com.taocrypt.micmask.audiodiag.ShellDiag $targetUid $packageName '$round'"
+            "com.taocrypt.micmask.audiodiag.ShellDiag $targetUid $packageName '$round' ${applicationInfo.uid}"
         var sawEnd = false
         val rc = runCatching {
-            sh(cmd, timeoutMs = 600_000) { l ->
-                if (l.startsWith("RESULT|")) record(round, l.removePrefix("RESULT|")) else out(l)
+            sh(cmd, timeoutMs = 1_200_000) { l ->
+                when {
+                    l.startsWith("RESULT|") -> record(round, l.removePrefix("RESULT|"))
+                    l.startsWith("DESC|") -> l.removePrefix("DESC|").split('|', limit = 2).let { synchronized(results) { descs[it[0]] = it.getOrElse(1) { "" } } }
+                    else -> out(l)
+                }
                 if (l.contains("结束 ==")) sawEnd = true
             }
         }.getOrElse { out("拉起 shell 进程失败：${android.util.Log.getStackTraceString(it)}"); -1 }
@@ -256,7 +270,41 @@ class MainActivity : Activity() {
 
     // ------------------------------------------------------------------ 导出
 
-    private fun report(): String = sb.toString()
+    private fun report(): String = if (summary.isEmpty()) sb.toString() else summary + "\n" + sb.toString()
+
+    /** 报告最前面的摘要：能用的组合（注入轨道初始化成功且写入正常）、部分成功、usage 对照、各轮统计 */
+    private fun buildSummary(): String {
+        val b = StringBuilder()
+        val rs = synchronized(results) { ArrayList(results) }
+        val ds = synchronized(results) { HashMap(descs) }
+        fun inj(id: String) = id.startsWith("SRC-") || id.startsWith("MAN-")
+        fun line(r: Triple<String, String, String>) = "  [${r.first}] ${r.second}\n      ${ds[r.second] ?: ""}\n      → ${r.third.lineSequence().first().take(200)}"
+        b.append("================ 能用的组合（注入 track 初始化成功且写入正常）================\n")
+        val ok = rs.filter { inj(it.second) && it.third.startsWith("OK") }
+        if (ok.isEmpty()) b.append("  无：所有注入组合都没能建出可正常写入的 track。\n")
+        else ok.forEach { b.append(line(it)).append('\n') }
+        val part = rs.filter { inj(it.second) && it.third.startsWith("PART") }
+        if (part.isNotEmpty()) {
+            b.append("\n-- 初始化成功但写入/播放异常 --\n")
+            part.forEach { b.append(line(it)).append('\n') }
+        }
+        b.append("\n-- usage 对照（只建 AudioAttributes）--\n")
+        rs.filter { it.second.startsWith("ATTR-") }.forEach { b.append("  [${it.first}] ${it.second}（${if (it.second == "ATTR-SYS") "反射 setSystemUsage" else "公开 setUsage"}）→ ${it.third.lineSequence().first().take(200)}\n") }
+        // 手建项按 usage 分开统计
+        for ((tok, name) in listOf("-SYS-" to "setSystemUsage", "-USG-" to "setUsage")) {
+            val m = rs.filter { it.second.startsWith("MAN-") && it.second.contains(tok) }
+            if (m.isNotEmpty()) b.append("  手建项用 $name：${m.size} 项，成功 ${m.count { it.third.startsWith("OK") }}，部分 ${m.count { it.third.startsWith("PART") }}\n")
+        }
+        b.append("\n-- 对照项 --\n")
+        rs.filter { it.second == "APP-MEDIA" || it.second.startsWith("S-MEDIA") }.forEach { b.append("  [${it.first}] ${it.second} → ${it.third.lineSequence().first().take(160)}\n") }
+        b.append("\n-- 各轮统计 --\n")
+        rs.groupBy { it.first }.forEach { (round, l) ->
+            val n = l.count { inj(it.second) }
+            b.append("  $round：注入组合 $n 项，成功 ${l.count { inj(it.second) && it.third.startsWith("OK") }}，部分 ${l.count { inj(it.second) && it.third.startsWith("PART") }}\n")
+        }
+        b.append("（下方为完整明细；编号含义见 audiodiag/README.md）\n")
+        return b.toString()
+    }
 
     private fun copy() {
         var s = report()

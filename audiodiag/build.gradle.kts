@@ -14,8 +14,8 @@ android {
         applicationId = "com.taocrypt.micmask.audiodiag"
         minSdk = 29
         targetSdk = 34
-        versionCode = 1
-        versionName = "audiodiag-1"
+        versionCode = 2
+        versionName = "audiodiag-2"
     }
     val signingProps = (project.findProperty("signingProps") as String?)?.let { path ->
         Properties().apply { FileInputStream(path).use { load(it) } }
