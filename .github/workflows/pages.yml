@@ -28,7 +28,7 @@ jobs:
           echo "micmask.taocrypt.com" > _site/CNAME
           touch _site/.nojekyll
       - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v4
         with:
           path: _site
       - id: d
