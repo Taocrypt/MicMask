@@ -136,6 +136,9 @@ object Updater {
         return nums.take(3) + stage + n
     }
 
+    /** 版本号标签（v2.0.0、v2.0-alpha.111）；qnntest-3 这类测试资产发布不参与更新 */
+    private val verTag = Regex("^[vV]?\\d")
+
     fun isNewer(remote: String, local: String): Boolean {
         val a = verKey(remote); val b = verKey(local)
         for (i in a.indices) if (a[i] != b[i]) return a[i] > b[i]
@@ -221,7 +224,7 @@ object Updater {
             val arr = JSONArray(getText(API_LIST, 8000, "application/vnd.github+json"))
             val rs = (0 until arr.length()).map { arr.getJSONObject(it) }
                 .filter { !it.optBoolean("draft") && it.optString("tag_name") != FEED_TAG }
-                .map { fromApi(it) }.filter { it.tag.isNotEmpty() && (beta || !isPre(it.tag)) }
+                .map { fromApi(it) }.filter { verTag.containsMatchIn(it.tag) && (beta || !isPre(it.tag)) }
             val best = rs.maxWithOrNull { a, b -> if (isNewer(a.tag, b.tag)) 1 else if (isNewer(b.tag, a.tag)) -1 else 0 }
             if (best != null) return best
             if (arr.length() > 0) throw if (beta) Exception(tr("暂无公开发布版本")) else noStable
@@ -244,6 +247,19 @@ object Updater {
         val ms = mirrorCandidates(ctx)
         for (u in urls) firstOf(ms.map { m -> suspend { parse(getText(mirrorUrl(m, u), 8000)) } })?.let { return it }
         throw if (last === noStable) noStable else Exception(tr("GitHub 和镜像都连不上"))
+    }
+
+    /**
+     * 读 GitHub 上的文本文件（如 raw.githubusercontent.com 的使用手册）：先用户镜像与直连，
+     * 不通再按「下载镜像」设置并发试候选镜像（与检查更新同一套）。[valid] 校验内容，不通过视为失败。全失败返回 null。
+     */
+    suspend fun fetchGhText(ctx: Context, url: String, valid: (String) -> Boolean = { true }): String? = withContext(Dispatchers.IO) {
+        for (m in userMirrors(ctx) + listOf<String?>(null)) {
+            runCatching { getText(mirrorUrl(m, url), 8000) }.getOrNull()?.takeIf(valid)?.let { return@withContext it }
+        }
+        if (mode(ctx) == 1) return@withContext null
+        val ms = mirrorCandidates(ctx)
+        firstOf(ms.map { m -> suspend { getText(mirrorUrl(m, url), 10000).takeIf(valid) } })
     }
 
     /** 检查更新；[silent]=启动时自动检查：只在有新版且没被跳过（或强制）时弹框 */

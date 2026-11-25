@@ -1066,5 +1066,11 @@
   "已从 .pth 生成 {0} 个音色（标准档+省电档）；没带 .index，检索功能不可用": "Created {0} voice(s) from .pth (standard + battery-saver); no .index included, so index retrieval is unavailable",
   "检索比例（index）": "Index ratio",
   "越高越像原音色、口音和原声漏出越少，但咬字可能变糊；默认 0.3": "Higher sounds more like the target voice with less accent/original-voice leakage, but articulation may blur. Default 0.3",
-  "当前音色没有检索索引：导入模型时把 .index 和 .pth 一起选上即可": "This voice has no index: select the .index together with the .pth when importing"
+  "当前音色没有检索索引：导入模型时把 .index 和 .pth 一起选上即可": "This voice has no index: select the .index together with the .pth when importing",
+  "正在获取最新版…": "Fetching the latest version…",
+  "网络不通，显示上次获取的版本": "Offline — showing the last downloaded version",
+  "网络不通，显示内置版本": "Offline — showing the built-in version",
+  "教程内容为空": "The guide is empty",
+  "使用教程": "User guide",
+  "安装、模式、AI 变声与常见问题": "Setup, modes, AI voice changing and FAQ"
 }

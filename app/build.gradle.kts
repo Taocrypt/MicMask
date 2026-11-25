@@ -14,8 +14,8 @@ android {
         applicationId = "com.taocrypt.micmask"
         minSdk = 26
         targetSdk = 34
-        versionCode = 138
-        versionName = "2.0-alpha.111"
+        versionCode = 139
+        versionName = "2.0.0"
         // Beacon 后台（公告 / 推荐位 / 匿名统计 / 反馈）：CI 从 Secrets 注入，源码与本地构建为空 → SDK 关闭
         fun env(k: String) = (System.getenv(k) ?: "").replace("\\", "").replace("\"", "")
         buildConfigField("String", "BEACON_URL", "\"${env("BEACON_URL")}\"")
@@ -119,6 +119,23 @@ dependencies {
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.22.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+}
+
+// 使用教程：构建时把 docs/manual.md 复制成生成的 assets/manual.md（只有一份源文件，App 内置副本永远与仓库一致）
+abstract class CopyManual : DefaultTask() {
+    @get:InputFile abstract val src: RegularFileProperty
+    @get:OutputDirectory abstract val outDir: DirectoryProperty
+    @TaskAction fun run() {
+        val d = outDir.get().asFile
+        d.mkdirs()
+        src.get().asFile.copyTo(File(d, "manual.md"), overwrite = true)
+    }
+}
+val copyManual = tasks.register<CopyManual>("copyManual") {
+    src.set(rootProject.layout.projectDirectory.file("docs/manual.md"))
+}
+androidComponents {
+    onVariants { v -> v.sources.assets?.addGeneratedSourceDirectory(copyManual, CopyManual::outDir) }
 }
 
 kotlin {

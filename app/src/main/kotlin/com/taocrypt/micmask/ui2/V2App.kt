@@ -253,6 +253,7 @@ fun V2App(vm: MainViewModel) {
                     "mim3" -> SubPage(tr("制作音效包"), { sub = null }) { Mim3Page(vm, st) }
                     "feedback" -> SubPage(tr("反馈问题"), { sub = null }) { FeedbackPage(st.aiTier, st.speakerMode) }
                     "privacy" -> SubPage(tr("隐私说明"), { sub = null }) { PrivacyPage() }
+                    "manual" -> SubPage(tr("使用教程"), { sub = null }) { ManualPage() }
                     else -> MainTabs(vm, st, ui, mainPage, { mainPage = it }) { sub = it }
                 }
             }
@@ -1449,6 +1450,7 @@ private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (St
             ArrowPreference(title = tr("外观"), summary = tr("深浅色、莫奈取色、液态玻璃"), onClick = { open("theme") })
             ArrowPreference(title = tr("日志"), summary = tr("查看、筛选、导出日志"), onClick = { open("logs") })
             ArrowPreference(title = tr("音频还原"), summary = tr("应用没声音时点这里还原"), onClick = { vm.repairAudio() })
+            ArrowPreference(title = tr("使用教程"), summary = tr("安装、模式、AI 变声与常见问题"), onClick = { open("manual") })
             ArrowPreference(title = tr("关于 MicMask"), summary = tr("v{0} · 更新、反馈、赞赏", com.taocrypt.micmask.BuildConfig.VERSION_NAME), onClick = { open("about") })
         }
     }
