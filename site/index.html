@@ -12,7 +12,9 @@
 <meta property="og:url" content="https://micmask.taocrypt.com/">
 <meta property="og:title" content="MicMask · 安卓实时 AI 变声">
 <meta property="og:description" content="把你的声音，实时换一副。无需 Root，不用虚拟机，声音只在你的手机里变。">
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2316181D'/%3E%3Crect x='24' y='12' width='16' height='26' rx='8' fill='%23fff'/%3E%3Cpath d='M17 31a15 15 0 0 0 30 0' fill='none' stroke='%23fff' stroke-width='4.5' stroke-linecap='round'/%3E%3Cpath d='M32 46v7M24 53h16' stroke='%23fff' stroke-width='4.5' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="icon" type="image/png" href="icon.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <style>
 :root {
   --bg: #F3F4F6;
@@ -73,7 +75,7 @@ code { font-family: var(--mono); font-size: .88em; background: var(--fill); padd
 }
 .nav .wrap { display: flex; align-items: center; gap: 28px; height: 64px; }
 .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; font-weight: 650; font-size: 18px; white-space: nowrap; }
-.brand .mark { width: 26px; height: 26px; border-radius: 7px; background: var(--ink); display: grid; place-items: center; flex: none; }
+.brand .mark { width: 26px; height: 26px; border-radius: 7px; flex: none; display: block; }
 .brand .mark svg { width: 16px; height: 16px; stroke: var(--on-ink); fill: none; stroke-width: 2.2; stroke-linecap: round; }
 .brand small { font-size: 11px; font-weight: 650; letter-spacing: .08em; color: var(--text-2); background: var(--fill); padding: 2px 7px; border-radius: 999px; }
 .nav-links { display: flex; gap: 22px; margin-left: auto; font-size: 15px; }
@@ -366,7 +368,7 @@ footer .brand .mark svg { width: 13px; height: 13px; }
 
 <header class="nav">
   <div class="wrap">
-    <a class="brand" href="#top" aria-label="MicMask 首页"><span class="mark"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3"/></svg></span>MicMask <small>2.0</small></a>
+    <a class="brand" href="#top" aria-label="MicMask 首页"><img class="mark" src="icon.png" alt="" width="26" height="26">MicMask <small>2.0</small></a>
     <nav class="nav-links" aria-label="页面导航">
       <a class="opt" href="#how">怎么用</a>
       <a class="opt" href="#features">能力</a>
@@ -667,7 +669,7 @@ footer .brand .mark svg { width: 13px; height: 13px; }
 
 <footer>
   <div class="wrap">
-    <a class="brand" href="#top"><span class="mark"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3"/></svg></span>MicMask</a>
+    <a class="brand" href="#top"><img class="mark" src="icon.png" alt="" width="26" height="26">MicMask</a>
     <span>© 2026 MicMask · GPL-3.0</span>
     <span class="sp"></span>
     <span>QQ 群 780988679</span>
