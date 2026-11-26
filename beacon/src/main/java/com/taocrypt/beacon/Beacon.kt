@@ -39,6 +39,8 @@ object Beacon {
         /** 更新通道：stable / beta */
         val track: String = "stable",
         val debug: Boolean = false,
+        /** 赞助状态验签公钥（SPKI DER base64），默认为 Beacon 服务端公钥 */
+        val sponsorPublicKey: String = SponsorSig.DEFAULT_KEY,
     )
 
     private const val TAG = "Beacon"
@@ -338,6 +340,57 @@ object Beacon {
     }
 
     // ---------------- 反馈 ----------------
+
+    // ---------------- 赞助者 ----------------
+
+    /** 拉取公开赞赏墙（赞助者、手动贡献者、GitHub 贡献者、档位）；不需要统计同意；回调在主线程，失败为 null */
+    @JvmStatic
+    fun fetchSponsors(callback: (SponsorWall?) -> Unit) {
+        val o = opts
+        if (o == null) { main.post { callback(null) }; return }
+        io.execute {
+            val r = runCatching { Http.request("${o.baseUrl}/v1/${o.appId}/sponsors", "GET", o.clientKey) }.getOrNull()
+            val w = if (r?.code == 200) runCatching { SponsorWall.parse(JSONObject(r.body)) }.getOrNull() else null
+            main.post { callback(w) }
+        }
+    }
+
+    /** 本机赞助到期时间（毫秒）：来自最近一次 config 的 sponsor 字段，验签通过且未过期才返回，否则 null */
+    @JvmStatic
+    fun sponsorUntil(): Long? {
+        val o = opts ?: return null
+        val s = config?.raw?.optJSONObject("sponsor") ?: return null
+        val until = s.optLong("until"); val iat = s.optLong("iat"); val sig = s.optString("sig")
+        if (until <= System.currentTimeMillis() || sig.isEmpty()) return null
+        return until.takeIf { SponsorSig.verify(o.sponsorPublicKey, o.appId, installId(), until, iat, sig) }
+    }
+
+    /** 本机是否为有效赞助设备（可据此隐藏推荐位） */
+    @JvmStatic fun isSponsor(): Boolean = sponsorUntil() != null
+
+    /** 爱发电下单链接，订单会自动绑定本机；planId 为空时走自选金额 */
+    @JvmStatic
+    fun sponsorOrderUrl(planId: String? = null): String? {
+        val o = opts ?: return null
+        val p = if (planId.isNullOrEmpty()) "" else "plan_id=${enc(planId)}&"
+        return "https://afdian.com/order/create?${p}product_type=0&custom_order_id=${enc("${o.appId}:${installId()}")}"
+    }
+
+    /** 「已赞助？输入订单号」：绑定成功后会自动重新拉取 config；回调在主线程 */
+    @JvmStatic
+    fun bindSponsor(orderNo: String, callback: (SponsorBindResult) -> Unit) {
+        val o = opts
+        if (o == null) { main.post { callback(SponsorBindResult(false, null, 0, "disabled", null)) }; return }
+        io.execute {
+            val body = JSONObject().put("iid", installId()).put("order_no", orderNo.trim()).toString()
+            val r = runCatching { Http.request("${o.baseUrl}/v1/${o.appId}/sponsors/bind", "POST", o.clientKey, body) }.getOrNull()
+            val j = runCatching { JSONObject(r!!.body) }.getOrNull() ?: JSONObject()
+            val res = if (r?.code == 200) SponsorBindResult(true, j.optLong("until"), j.optInt("evicted"), null, null)
+                else SponsorBindResult(false, null, 0, j.optStringOrNull("error") ?: "network", if (j.has("next_at")) j.optLong("next_at") else null)
+            if (res.ok) { prefs.edit().remove("etag").apply(); fetchConfig { main.post { callback(res) } } } else main.post { callback(res) }
+        }
+    }
+
 
     /**
      * 提交反馈（2-2000 字）。meta 可放机型等附加信息，最多 10 项；回调在主线程。

@@ -647,6 +647,13 @@ class InjectorService : Binder {
         list.any { val u = gu.invoke(it) as Int; u >= 10000 && u != callerUid && u != Process.myUid() && u != ShellAudioRecord.REC_UID && gs.invoke(it) == true }
     }.getOrDefault(false)
 
+    /** 有别的应用（uid≥10000，非我们自己）正在录音 */
+    private fun appRecording(): Boolean = runCatching {
+        val list = am?.activeRecordingConfigurations ?: return false
+        val gu = android.media.AudioRecordingConfiguration::class.java.getMethod("getClientUid")
+        list.any { val u = gu.invoke(it) as Int; u >= 10000 && u != callerUid && u != Process.myUid() && u != ShellAudioRecord.REC_UID }
+    }.getOrDefault(false)
+
     @Volatile private var a11yThread: Thread? = null
     @Volatile private var a11yOn = false
     private var a11yLast = ""
@@ -1086,7 +1093,7 @@ class InjectorService : Binder {
                     if (a11yOn && a11yChkSec in 0..3) {
                         if (a11yChkSec > 0) a11yPeak = maxOf(a11yPeak, liveLevelDb)
                         if (++a11yChkSec > 3) {
-                            if (a11yPeak < a11yFloor - 15f || a11yPeak < -90f) {
+                            if (a11yPeak < a11yFloor - 15f || a11yPeak < -80f) {
                                 slog('W', "无障碍录音输入只有 ${"%.0f".format(a11yPeak)}dB（改前 ${"%.0f".format(a11yFloor)}dB），退回录音源 $a11yPrevSrc")
                                 a11yThread?.interrupt(); a11yThread = null; a11yBoost(false); a11yFailed = true
                                 if (a11yPrevSrc >= 0) liveSource = a11yPrevSrc
@@ -1098,6 +1105,20 @@ class InjectorService : Binder {
                     if (sil) {
                         silSec++
                         if (!micHint.startsWith("麦克风被系统静音")) { micHint = "麦克风被系统静音（其他应用可能占用了录音）"; slog('W', micHint) }
+                        if (silSec >= 2 && !a11yOn && !a11yFailed && appRecording()) {
+                            // 被别的应用（微信等）抢了麦：先改无障碍录音，两边都不被静音；若再抢回来会让对方被静音（显示麦克风被占用）
+                            silSec = 0
+                            a11yFloor = lvlHist.maxOrNull() ?: -60f
+                            if (a11yBoost(true)) {
+                                a11yPrevSrc = liveSource
+                                slog('W', "录音被其他应用抢占（${silWho()}），改无障碍录音：录音源 $liveSource → 6，改前输入 ${"%.0f".format(a11yFloor)}dB")
+                                liveSource = 6; a11yChkSec = 0; a11yPeak = -200f
+                                a11yThread = Thread({ try { while (true) { Thread.sleep(3000); a11yBoost(true, quiet = true) } } catch (_: InterruptedException) {} }, "a11y-keep").apply { isDaemon = true; start() }
+                                if (!rebuildRec("改无障碍录音")) return
+                                micHint = "麦克风被系统静音，正在重新接管"
+                                continue
+                            } else a11yFailed = true
+                        }
                         if (silSec >= 2) {
                             // 被静音 2 s：重建录音（重建后 shell 成为最新开始的录音，实测 OPPO/一加 即可恢复）。
                             // 上次重建后恢复过 → 同一录音源再重建；上次重建没用 → 换下一种录音源（全试完就只重建）

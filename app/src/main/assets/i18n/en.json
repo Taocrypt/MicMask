@@ -1103,5 +1103,10 @@
   "性能测试中，约 1–2 分钟…": "Running performance test, about 1–2 minutes…",
   "性能测试：试线程 {0}/{1}…": "Performance test: trying threads {0}/{1}…",
   "已自动采用：档位自动 · 声码器 {0} · HuBERT {1} · 线程 {2}/{3}": "Applied automatically: tier auto · vocoder {0} · HuBERT {1} · threads {2}/{3}",
-  "性能测试结果": "Performance test results"
+  "性能测试结果": "Performance test results",
+  "赞助者": "Sponsors",
+  "贡献者": "Contributors",
+  "{0} 位贡献者，谢谢你们！": "{0} contributors, thank you!",
+  "全部贡献者 {0} 位": "All {0} contributors",
+  "提交 {0} 次": "{0} commits"
 }

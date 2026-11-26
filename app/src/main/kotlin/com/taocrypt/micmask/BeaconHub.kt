@@ -58,7 +58,6 @@ object BeaconHub {
         Beacon.init(app, o)
         appCtx = app.applicationContext
         clearLegacyDismiss(appCtx!!)
-        loadBoundSponsor(appCtx!!)
         inited = true
         analytics = Beacon.isAnalyticsEnabled()
         // 基础统计只在同意过当前版本说明后开启；旧版同意（v1）要重新弹窗确认
@@ -187,106 +186,34 @@ object BeaconHub {
 
     // ------------------------------------------------------------------ 赞助者（Beacon 赞助后端）
 
-    /**
-     * 赞助状态验签公钥（ECDSA P-256，SPKI DER base64，Beacon 后台公布）。
-     * 只认签名有效、app/iid 与本机一致的状态（app/iid 在待签内容里，不一致则验签失败）。留空 = 接受未签名（仅调试）。
-     */
-    private const val SPONSOR_PUBKEY = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEo9nVkReXAI+NQT0vG91+i9yLrk7Qt3ZGrPeB8hlyZgoxOQFsAUX5idzJg9NgehsK6ozxmXXLUtHgWogLXvdmSg=="
-    private const val K_SPONSOR = "sponsor_state"
-    /** bind 成功后本地保存的签名状态（重启后在配置刷新前也能生效） */
-    var boundSponsor by mutableStateOf<org.json.JSONObject?>(null); private set
-
     private val beaconApp get() = BuildConfig.BEACON_APP_ID.ifBlank { "micmask" }
     private fun iid() = Beacon.installId()
     /** 本设备 ID（赞赏弹窗里显示、可复制，找作者处理赞助时用）；Beacon 关闭时为 null */
     val deviceId: String? get() = if (enabled) runCatching { iid() }.getOrNull() else null
 
-    /** 验证 {until, iat, sig}；返回有效到期时间（毫秒），无效返回 0 */
-    private fun verifiedUntil(o: org.json.JSONObject?): Long {
-        o ?: return 0L
-        val until = o.optLong("until", 0L)
-        if (until <= 0) return 0L
-        if (SPONSOR_PUBKEY.isBlank()) return until
-        val sig = o.optString("sig").takeIf { it.isNotBlank() } ?: return 0L
-        val iat = o.optLong("iat", 0L)
-        return runCatching {
-            val key = java.security.KeyFactory.getInstance("EC").generatePublic(
-                java.security.spec.X509EncodedKeySpec(android.util.Base64.decode(SPONSOR_PUBKEY, android.util.Base64.DEFAULT)))
-            val msg = "beacon-sponsor-v1\n$beaconApp\n${iid()}\n$until\n$iat".toByteArray(Charsets.UTF_8)
-            val raw = android.util.Base64.decode(sig, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP)
-            val v = java.security.Signature.getInstance("SHA256withECDSA")
-            v.initVerify(key); v.update(msg)
-            if (raw.size == 64 && v.verify(p1363ToDer(raw))) until else 0L
-        }.getOrDefault(0L)
-    }
-
-    /** WebCrypto 的 r||s（各 32 字节）→ Java 要的 DER SEQUENCE{INTEGER r, INTEGER s} */
-    private fun p1363ToDer(rs: ByteArray): ByteArray {
-        fun int(b: ByteArray): ByteArray {
-            var i = 0; while (i < b.size - 1 && b[i] == 0.toByte()) i++
-            var v = b.copyOfRange(i, b.size)
-            if (v[0].toInt() and 0x80 != 0) v = byteArrayOf(0) + v
-            return byteArrayOf(0x02, v.size.toByte()) + v
-        }
-        val body = int(rs.copyOfRange(0, 32)) + int(rs.copyOfRange(32, 64))
-        return byteArrayOf(0x30, body.size.toByte()) + body
-    }
-
-    /** 赞助者到期时间（毫秒；配置下发或订单号绑定得到的签名状态，取较晚者；0=不是赞助者） */
-    val sponsorUntil: Long get() = maxOf(verifiedUntil(config?.raw?.optJSONObject("sponsor")), verifiedUntil(boundSponsor))
+    /** 赞助者到期时间（毫秒；Beacon SDK 用内置公钥对 config.sponsor 验签；0=不是赞助者）。读 config 以便界面随配置刷新 */
+    val sponsorUntil: Long get() { @Suppress("UNUSED_VARIABLE") val c = config; return if (enabled) Beacon.sponsorUntil() ?: 0L else 0L }
     /** 赞助者：有效期内隐藏所有推荐位 */
     val isSponsor: Boolean get() = enabled && sponsorUntil > System.currentTimeMillis()
 
-    /** 赞赏墙名单接口（Beacon 关闭时为 null，走 GitHub sponsors.json 兜底） */
-    val sponsorsUrl: String? get() = if (enabled) "${BuildConfig.BEACON_URL.trimEnd('/')}/v1/$beaconApp/sponsors" else null
-
-    /** 爱发电下单链接：带 custom_order_id=<app>:<设备 ID>，付款后后台自动把本设备记为赞助者。planId 为空=自选金额 */
-    fun donateUrl(planId: String?): String {
-        val sb = StringBuilder("https://afdian.com/order/create?product_type=0")
-        if (!planId.isNullOrBlank()) sb.append("&plan_id=").append(planId)
-        if (enabled) sb.append("&custom_order_id=").append(java.net.URLEncoder.encode("$beaconApp:${iid()}", "UTF-8"))
-        return sb.toString()
-    }
+    /** 爱发电下单链接：Beacon SDK 带 custom_order_id=<app>:<设备 ID>，付款后自动绑定。planId 为空=自选金额 */
+    fun donateUrl(planId: String?): String = (if (enabled) Beacon.sponsorOrderUrl(planId) else null)
+        ?: ("https://afdian.com/order/create?product_type=0" + (if (planId.isNullOrBlank()) "" else "&plan_id=$planId"))
 
     /** 订单号绑定结果：ok / not_found / limit / expired / rate_limited / bad_request / not_configured / network */
-    data class BindResult(val code: String, val until: Long = 0, val maxDevices: Int = 0, val expire: Long = 0, val evicted: Int = 0, val nextAt: Long = 0)
+    data class BindResult(val code: String, val until: Long = 0, val maxDevices: Int = 3, val expire: Long = 0, val evicted: Int = 0, val nextAt: Long = 0)
 
-    /** 用爱发电订单号把本设备绑定为赞助者（网页付款、换机、重装后用）。在 IO 线程调用。 */
+    /** 用爱发电订单号把本设备绑定为赞助者（Beacon SDK；成功后 SDK 自动刷新 config）。在 IO 线程调用。 */
     fun bindSponsor(orderNo: String): BindResult {
         if (!enabled) return BindResult("not_configured")
-        return runCatching {
-            val c = (java.net.URL("${BuildConfig.BEACON_URL.trimEnd('/')}/v1/$beaconApp/sponsors/bind").openConnection() as java.net.HttpURLConnection)
-            try {
-                val body = org.json.JSONObject().put("iid", iid()).put("order_no", orderNo.trim()).toString().toByteArray()
-                c.requestMethod = "POST"; c.connectTimeout = 8000; c.readTimeout = 10000; c.doOutput = true
-                c.setRequestProperty("X-Client-Key", BuildConfig.BEACON_KEY)
-                c.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                c.outputStream.use { it.write(body) }
-                val code = c.responseCode
-                val text = (if (code >= 400) c.errorStream else c.inputStream)?.use { it.readBytes().toString(Charsets.UTF_8) } ?: ""
-                val j = runCatching { org.json.JSONObject(text) }.getOrDefault(org.json.JSONObject())
-                when (code) {
-                    200 -> {
-                        val until = verifiedUntil(j)
-                        if (until > 0) {
-                            appCtx?.let { Prefs.main(it).edit().putString(K_SPONSOR, j.toString()).apply() }
-                            boundSponsor = j
-                            BindResult("ok", until, maxDevices = j.optInt("max_devices", 3), evicted = j.optInt("evicted", 0))
-                        } else BindResult("bad_sig")
-                    }
-                    404 -> BindResult("not_found")
-                    409 -> BindResult("limit", nextAt = j.optLong("next_at", 0))
-                    410 -> BindResult("expired", expire = j.optLong("expire", 0))
-                    429 -> BindResult("rate_limited")
-                    503 -> BindResult("not_configured")
-                    else -> BindResult(j.optString("error").ifBlank { "bad_request" })
-                }
-            } finally { c.disconnect() }
-        }.getOrElse { BindResult("network") }
-    }
-
-    private fun loadBoundSponsor(ctx: Context) {
-        boundSponsor = Prefs.main(ctx).getString(K_SPONSOR, null)?.let { runCatching { org.json.JSONObject(it) }.getOrNull() }
+        val latch = java.util.concurrent.CountDownLatch(1)
+        var r: com.taocrypt.beacon.SponsorBindResult? = null
+        Beacon.bindSponsor(orderNo) { r = it; latch.countDown() }
+        if (!latch.await(20, java.util.concurrent.TimeUnit.SECONDS)) return BindResult("network")
+        val x = r ?: return BindResult("network")
+        if (x.ok) config = Beacon.config
+        return if (x.ok) BindResult("ok", x.until ?: 0L, evicted = x.evicted)
+        else BindResult(x.error ?: "network", nextAt = x.nextAt ?: 0L)
     }
 
     fun slot(position: String): Slot? {

@@ -20,6 +20,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
@@ -73,22 +74,37 @@ internal fun cachedPlans(ctx: Context): List<SponsorPlan> = runCatching {
         .filter { it.id.isNotBlank() }
 }.getOrDefault(emptyList())
 
-private data class Sponsor(val name: String, val avatar: String, val amount: Double, val remark: String, val expire: Long, val since: Long = 0, val last: Long = 0) {
+private data class Sponsor(val name: String, val avatar: String, val amount: Double, val remark: String, val expire: Long, val since: Long = 0, val last: Long = 0,
+                           val contributor: Boolean = false, val commits: Int = 0) {
     /** 旧名单没有 expire 字段时当作在期 */
     val active: Boolean get() = expire <= 0 || expire * 1000 > System.currentTimeMillis()
 }
-private data class SponsorDoc(val count: Int, val total: Double, val list: List<Sponsor>)
+private data class SponsorDoc(val count: Int, val total: Double, val list: List<Sponsor>, val contributors: List<Sponsor> = emptyList())
+
+/** 头像：avatar 优先；没有时填了 QQ 号就用 QQ 官方头像接口 */
+private fun avatarOf(o: JSONObject): String = o.optString("avatar").ifBlank {
+    o.optString("qq").filter { it.isDigit() }.takeIf { it.length in 5..12 }?.let { "https://q1.qlogo.cn/g?b=qq&nk=$it&s=100" } ?: ""
+}
 private const val KEY = "sponsors_json"
 private val avatarCache = HashMap<String, ImageBitmap?>()
 
 private fun parse(text: String): SponsorDoc? = runCatching {
     val j = JSONObject(text)
     val arr = j.optJSONArray("sponsors")
-    val list = (0 until (arr?.length() ?: 0)).map { i ->
+    val all = (0 until (arr?.length() ?: 0)).map { i ->
         val o = arr!!.getJSONObject(i)
-        Sponsor(o.optString("name", "爱发电用户"), o.optString("avatar"), o.optDouble("amount", 0.0), o.optString("remark"), o.optLong("expire", 0), o.optLong("since", 0), o.optLong("last", 0))
+        Sponsor(o.optString("name", "爱发电用户"), avatarOf(o), o.optDouble("amount", 0.0), o.optString("remark"), o.optLong("expire", 0), o.optLong("since", 0), o.optLong("last", 0),
+            contributor = o.optString("kind") == "contributor")
     }
-    SponsorDoc(j.optInt("count", list.size), j.optDouble("total", list.sumOf { it.amount }), list)
+    val list = all.filterNot { it.contributor }
+    // 贡献者：sponsors 里 kind=contributor 的（后台手动加）+ contributors 数组（后台从 GitHub 拉取并缓存），按名字去重
+    val ca = j.optJSONArray("contributors")
+    val cons = (all.filter { it.contributor } + (0 until (ca?.length() ?: 0)).map { i ->
+        val o = ca!!.getJSONObject(i)
+        Sponsor(o.optString("name").ifBlank { o.optString("login") }, avatarOf(o).ifBlank { o.optString("avatar_url") }, 0.0, o.optString("remark"), 0,
+            contributor = true, commits = o.optInt("contributions", 0))
+    }).filter { it.name.isNotBlank() }.distinctBy { it.name.lowercase() }
+    SponsorDoc(j.optInt("count", list.size), j.optDouble("total", list.sumOf { it.amount }), list, cons)
 }.getOrNull()
 
 private fun get(url: String, limit: Int = 2 shl 20): ByteArray? = runCatching {
@@ -99,17 +115,41 @@ private fun get(url: String, limit: Int = 2 shl 20): ByteArray? = runCatching {
     if (c.responseCode != 200) null else c.inputStream.use { it.readBytes() }.takeIf { it.size <= limit }
 }.getOrNull()
 
-private suspend fun loadSponsors(ctx: Context): SponsorDoc? = withContext(Dispatchers.IO) {
-    // Beacon 赞助接口优先（实时），GitHub Action 生成的 sponsors.json 兜底
-    for (u in listOfNotNull(com.taocrypt.micmask.BeaconHub.sponsorsUrl) + AboutLinks.SPONSORS) {
-        val b = get(u) ?: continue
-        val t = String(b, Charsets.UTF_8)
-        val d = parse(t) ?: continue
-        Prefs.main(ctx).edit().putString(KEY, t).apply()
-        return@withContext d
+/** Beacon SDK 的赞赏墙 → 本地缓存格式（与 GitHub sponsors.json 同构，parse 可读） */
+private fun wallJson(w: com.taocrypt.beacon.SponsorWall): String {
+    val j = JSONObject().put("count", w.count).put("total", w.total)
+    j.put("plans", org.json.JSONArray().apply { w.plans.forEach { put(JSONObject().put("id", it.id).put("title", it.title).put("price", it.price).put("desc", it.desc)) } })
+    j.put("sponsors", org.json.JSONArray().apply { w.sponsors.forEach { e ->
+        put(JSONObject().put("kind", e.kind).put("name", e.name).put("avatar", e.avatar).put("qq", e.qq ?: "").put("remark", e.remark ?: "")
+            .put("amount", e.amount ?: 0.0).put("since", e.since).put("last", e.last ?: 0L).put("expire", e.expire ?: 0L))
+    } })
+    j.put("contributors", org.json.JSONArray().apply { w.contributors.forEach { c ->
+        put(JSONObject().put("login", c.login).put("name", c.name).put("avatar_url", c.avatarUrl).put("html_url", c.htmlUrl)
+            .put("contributions", c.contributions).put("remark", c.remark ?: ""))
+    } })
+    return j.toString()
+}
+
+private suspend fun loadSponsors(ctx: Context): SponsorDoc? {
+    // Beacon SDK 优先（实时），GitHub Action 生成的 sponsors.json 兜底
+    if (com.taocrypt.micmask.BeaconHub.enabled) {
+        val w = kotlinx.coroutines.suspendCancellableCoroutine<com.taocrypt.beacon.SponsorWall?> { c -> com.taocrypt.beacon.Beacon.fetchSponsors { if (c.isActive) c.resumeWith(Result.success(it)) } }
+        if (w != null) {
+            val t = wallJson(w)
+            parse(t)?.let { Prefs.main(ctx).edit().putString(KEY, t).apply(); return it }
+        }
     }
-    L.w("赞赏墙：名单拉取失败，用缓存")
-    null
+    return withContext(Dispatchers.IO) {
+        for (u in AboutLinks.SPONSORS) {
+            val b = get(u) ?: continue
+            val t = String(b, Charsets.UTF_8)
+            val d = parse(t) ?: continue
+            Prefs.main(ctx).edit().putString(KEY, t).apply()
+            return@withContext d
+        }
+        L.w("赞赏墙：名单拉取失败，用缓存")
+        null
+    }
 }
 
 private suspend fun loadAvatar(url: String): ImageBitmap? {
@@ -141,7 +181,8 @@ private fun demoDoc(): SponsorDoc {
         Sponsor(n, "", amt, remarks[i % remarks.size], if (i < 7) now + 86400L * (30 - i) else now - 86400L * (i + 3),
             since = now - 86400L * (40 + i * 5), last = if (i < 7) now - 86400L * i else now - 86400L * (i + 33))
     }.sortedByDescending { it.amount }
-    return SponsorDoc(list.size, list.sumOf { it.amount }, list)
+    val cons = listOf("Taocrypt" to "维护者", "Kirito" to "修了一个注入 bug", "Lumi" to "英文翻译").map { (n, r) -> Sponsor(n, "", 0.0, r, 0, contributor = true) }
+    return SponsorDoc(list.size, list.sumOf { it.amount }, list, cons)
 }
 
 /** 秒级时间戳 → 日期；0 表示旧名单没有该字段 */
@@ -177,6 +218,25 @@ fun SponsorWall(header: @Composable () -> Unit = {}) {
         val d = if (demo) demoDoc() else doc
         if (demo) Text(tr("示例数据，仅预览显示效果 · 长按退出"), fontSize = 12.sp, color = MiuixTheme.colorScheme.primary,
             modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp))
+        var tab by remember { mutableStateOf(0) }   // 0 赞助者 1 贡献者
+        if (d != null && d.contributors.isNotEmpty()) Row(Modifier.padding(start = 12.dp, end = 12.dp, top = 10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf(tr("赞助者"), tr("贡献者")).forEachIndexed { i, t ->
+                val on = (if (d.contributors.isEmpty()) 0 else tab) == i
+                Text(t, fontSize = 13.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (on) MiuixTheme.colorScheme.onPrimary else summary,
+                    modifier = Modifier.clip(RoundedCornerShape(50)).background(if (on) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.secondaryContainer)
+                        .clickable { tab = i }.padding(horizontal = 14.dp, vertical = 5.dp))
+            }
+        }
+        if (d != null && tab == 1 && d.contributors.isNotEmpty()) {
+            Text(tr("{0} 位贡献者，谢谢你们！", d.contributors.size), fontSize = 13.sp, color = summary,
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp))
+            Danmaku(d.contributors)
+            Collapsible(tr("全部贡献者 {0} 位", d.contributors.size)) {
+                Column { d.contributors.forEachIndexed { i, s -> SponsorRow(99, s) }; Spacer(Modifier.size(8.dp)) }
+            }
+            return@Card
+        }
         if (d == null || d.list.isEmpty()) {
             Text(if (d == null) (if (failed) tr("名单暂时无法加载，稍后再看") else tr("名单加载中…")) else tr("还没有赞助者，成为第一位吧"),
                 fontSize = 13.sp, color = summary, modifier = Modifier.padding(16.dp))
@@ -272,7 +332,8 @@ private fun DanmakuLane(items: List<Sponsor>, speedDp: Float, lead: androidx.com
                 if (tail == null) {
                     val nb = bullets.lastOrNull()
                     if (nb == null) tail = laneW.toFloat()
-                    else if (nb.w > 0) tail = maxOf(nb.x, -1e6f) + nb.w + gapPx
+                    // 条数少时拉开间距，不要紧挨着滚：每条之间至少留出 轨道宽 / 条数 的一半
+                    else if (nb.w > 0) tail = maxOf(nb.x, -1e6f) + nb.w + maxOf(gapPx, if (items.size < 4) laneW * 0.5f / items.size else 0f)
                 } else tail = tail!! - dx
                 val tl = tail
                 if (laneW > 0 && tl != null && tl < laneW) {
@@ -316,7 +377,7 @@ private fun DanmakuChip(s: Sponsor, held: Boolean = false) {
     LaunchedEffect(s.avatar) { if (img == null) img = loadAvatar(s.avatar) }
     val cs = MiuixTheme.colorScheme
     val dark = cs.background.luminance() < 0.5f
-    val tc = tierColor(s.amount)
+    val tc = if (s.contributor) cs.primary else tierColor(s.amount)
     val bg = androidx.compose.ui.graphics.lerp(cs.surface, tc, if (dark) 0.26f else 0.16f)
     val fg = androidx.compose.ui.graphics.lerp(tc, if (dark) androidx.compose.ui.graphics.Color.White else androidx.compose.ui.graphics.Color.Black, if (dark) 0.2f else 0.2f)
     // 滞留时突出：略放大、档位色描边、底色加深
@@ -335,8 +396,8 @@ private fun DanmakuChip(s: Sponsor, held: Boolean = false) {
         }
         Spacer(Modifier.width(6.dp))
         Text(s.name, fontSize = 13.sp, maxLines = 1, fontWeight = FontWeight.Medium, color = cs.onSurface)
-        Text("  " + yuan(s.amount), fontSize = 12.sp, maxLines = 1, color = fg)
-        if (s.last > 0) Text("  " + day(s.last, "MM-dd"), fontSize = 11.sp, maxLines = 1, color = cs.onSurfaceVariantSummary)
+        if (!s.contributor) Text("  " + yuan(s.amount), fontSize = 12.sp, maxLines = 1, color = fg)
+        if (!s.contributor && s.last > 0) Text("  " + day(s.last, "MM-dd"), fontSize = 11.sp, maxLines = 1, color = cs.onSurfaceVariantSummary)
         if (s.remark.isNotBlank()) Text("  " + s.remark.take(16), fontSize = 12.sp, maxLines = 1, color = cs.onSurfaceVariantSummary)
     }
 }
@@ -357,7 +418,7 @@ private fun SponsorRow(rank: Int, s: Sponsor) {
             Text(s.name, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 fontWeight = if (rank <= 3) FontWeight.Bold else FontWeight.Normal)
             if (s.remark.isNotBlank()) Text(s.remark, fontSize = 12.sp, color = summary, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            val dates = listOfNotNull(
+            val dates = if (s.contributor) listOfNotNull(s.commits.takeIf { it > 0 }?.let { tr("提交 {0} 次", it) }) else listOfNotNull(
                 day(s.since, "yy-MM-dd").takeIf { it.isNotEmpty() }?.let { tr("首次 {0}", it) },
                 day(s.last, "yy-MM-dd").takeIf { it.isNotEmpty() && s.last != s.since }?.let { tr("最近 {0}", it) },
                 day(s.expire, "yy-MM-dd").takeIf { it.isNotEmpty() && s.active }?.let { tr("有效至 {0}", it) },
@@ -367,6 +428,6 @@ private fun SponsorRow(rank: Int, s: Sponsor) {
                 modifier = Modifier.horizontalScroll(androidx.compose.foundation.rememberScrollState()))
         }
         Spacer(Modifier.width(8.dp))
-        Text(yuan(s.amount), fontSize = 14.sp, fontWeight = FontWeight.Medium, color = if (s.active) tierColor(s.amount) else summary)
+        if (!s.contributor) Text(yuan(s.amount), fontSize = 14.sp, fontWeight = FontWeight.Medium, color = if (s.active) tierColor(s.amount) else summary)
     }
 }
