@@ -28,7 +28,19 @@ import kotlin.math.sqrt
  *
  * 模型：atri48_stream_d8.onnx，输入 phone[1,100,768] pitch[1,100] pitchf[1,100]，输出 [1,1,16800]@48k。
  */
-class LiveRvc(private val open: (String) -> Any?) {
+class LiveRvc(private val open0: (String) -> Any?) {
+    /** 相位锁定（重载生效）：合成器换成 PhaseLock 改写版 */
+    @Volatile var phaseLock = false
+    /** 响度跟随 0..1（RVC rms_mix_rate 取 1-x）：输出音量包络向原声靠 */
+    @Volatile var rmsFollow = 0f
+    /** 共振峰偏移（半音，-6..6）：音高不变，只移音色的共振峰 */
+    @Volatile var formant = 0f
+    @Volatile private var ph0Now = 0f
+    private fun open(n: String): Any? {
+        val f = open0(n)
+        if (!phaseLock || f !is File || n == ModelStore.HUBERT || n == ModelStore.RMVPE) return f
+        return PhaseLock.prepare(f) ?: f
+    }
 
     /** 音频进出：shell 进程里直接读写环形缓冲 */
     interface Io { fun pull(max: Int): ShortArray; fun push(pcm: ShortArray) }
@@ -63,6 +75,16 @@ class LiveRvc(private val open: (String) -> Any?) {
         const val XF_FR = 5               // 交叉淡化帧数（50 ms），LEN = BLOCK + XF_FR
         const val WIN48 = (T * UPP) + 960 // 1.02 s @48k（让 HuBERT 正好出 50 帧）
         const val GATE_DB = -50f
+        /** 相位锁定模型多一个输入 ph0[1,1,1]；没有就原样。调用方负责 run 完关闭（这里的小张量随 GC 释放） */
+        private val phBuf: FloatBuffer = java.nio.ByteBuffer.allocateDirect(4).order(java.nio.ByteOrder.nativeOrder()).asFloatBuffer()
+        @Volatile private var phT: OnnxTensor? = null
+        /** 共用一个直接内存张量（推理在单线程里串行），改 buffer 即改值，不每块新建 */
+        fun withPh0(env: OrtEnvironment, s: OrtSession, m: Map<String, OnnxTensor>, ph: Float): Map<String, OnnxTensor> {
+            if (PhaseLock.INPUT !in s.inputNames) return m
+            val t = phT ?: synchronized(phBuf) { phT ?: OnnxTensor.createTensor(env, phBuf, longArrayOf(1, 1, 1)).also { phT = it } }
+            phBuf.put(0, ph)
+            return m + (PhaseLock.INPUT to t)
+        }
 
         fun modelPresent(ctx: Context) = ModelStore.voices(ctx).isNotEmpty()
     }
@@ -642,7 +664,10 @@ class LiveRvc(private val open: (String) -> Any?) {
                     try {
                         val t1 = System.nanoTime()
                         val usedVoc = voc?.takeIf { it.owner === netG } != null
+                        val pl = phaseLock; if (pl) ph0Now = phAcc
                         val y = runNetG(phone, pitch, pitchf)
+                        if (pl) { var a = phAcc.toDouble(); val o = T - LEN; for (j in 0 until BLOCK) { val r = pitchf[o + j] / 100.0 + 0.5; a += r - Math.floor(r) - 0.5 }; phAcc = (a - Math.floor(a)).toFloat() }
+                        post(y, win48, pitchf)
                         lastSynMs = (System.nanoTime() - t1) / 1_000_000
                         val vocTag = if (usedVoc && voc != null) "(前半${lastPreMs}+NEON声码器${lastDecMs})" else ""
                         val t2 = System.nanoTime()
@@ -669,6 +694,50 @@ class LiveRvc(private val open: (String) -> Any?) {
             } catch (t: Throwable) {
                 L.e("live feat", t)
                 inflight.decrementAndGet()
+            }
+        }
+    }
+
+    @Volatile private var phAcc = 0f
+
+    /** 合成后处理：共振峰偏移（按 f0 的基音同步重叠相加，PSOLA）→ 响度跟随。y 与 win48 末端对齐 */
+    private fun post(y: FloatArray, win48: FloatArray, pitchf: FloatArray) {
+        val fm = formant; val rf = rmsFollow
+        val n = y.size; val fr = n / UPP; val o = T - fr
+        if (kotlin.math.abs(fm) >= 0.05f && o >= 0) {
+            val r = Math.pow(2.0, fm / 12.0)
+            val src = y.copyOf(); val acc = FloatArray(n); val ws = FloatArray(n)
+            var m = 0.0
+            while (m < n) {
+                val f = pitchf[o + minOf(fr - 1, (m / UPP).toInt())]
+                if (f < 50f) { m += UPP / 2; continue }
+                val p = SR / f; val c = m.toInt(); val h = (p / r).toInt().coerceAtLeast(2)
+                for (k in -h..h) {
+                    val t = c + k; if (t < 0 || t >= n) continue
+                    val sp = c + k * r; val i0 = Math.floor(sp).toInt(); val fr2 = (sp - i0).toFloat()
+                    val a = src.getOrElse(i0) { 0f }; val b = src.getOrElse(i0 + 1) { 0f }
+                    val w = (0.5 + 0.5 * cos(PI * k / (h + 1))).toFloat()
+                    acc[t] += (a + (b - a) * fr2) * w; ws[t] += w
+                }
+                m += p
+            }
+            for (i in 0 until n) {
+                val f = pitchf[o + minOf(fr - 1, i / UPP)]
+                if (f >= 50f && ws[i] > 0.3f) y[i] = acc[i] / ws[i]
+            }
+        }
+        if (rf > 0.01f && win48.size >= n) {
+            val off = win48.size - n
+            fun env(x: FloatArray, base: Int, len: Int): FloatArray = FloatArray(fr + 1) { j ->
+                val c = j * UPP; val a = maxOf(0, c - 2 * UPP); val b = minOf(len, c + 2 * UPP)
+                var e = 0.0; for (i in a until b) { val v = x[base + i]; e += v * v }
+                sqrt(e / maxOf(1, b - a)).toFloat()
+            }
+            val e1 = env(win48, off, n); val e2 = env(y, 0, n)
+            for (i in 0 until n) {
+                val j = i / UPP; val t = (i % UPP).toFloat() / UPP; val jn = minOf(fr, j + 1)
+                val r1 = e1[j] + (e1[jn] - e1[j]) * t; val r2 = e2[j] + (e2[jn] - e2[j]) * t
+                y[i] *= Math.pow((r1 / maxOf(r2, 1e-3f)).toDouble(), rf.toDouble()).toFloat().coerceAtMost(8f)
             }
         }
     }
@@ -764,7 +833,7 @@ class LiveRvc(private val open: (String) -> Any?) {
         OnnxTensor.createTensor(env, FloatBuffer.wrap(phone), longArrayOf(1, T.toLong(), (phone.size / T).toLong())).use { a ->
             OnnxTensor.createTensor(env, LongBuffer.wrap(pitch), longArrayOf(1, T.toLong())).use { b ->
                 OnnxTensor.createTensor(env, FloatBuffer.wrap(pitchf), longArrayOf(1, T.toLong())).use { c ->
-                    s.run(mapOf("phone" to a, "pitch" to b, "pitchf" to c)).use { res ->
+                    s.run(withPh0(env, s, mapOf("phone" to a, "pitch" to b, "pitchf" to c), ph0Now)).use { res ->
                         val o = res.get(0) as OnnxTensor
                         val fb = o.floatBuffer; val y = FloatArray(fb.remaining()); fb.get(y)
                         return y
@@ -780,7 +849,7 @@ class LiveRvc(private val open: (String) -> Any?) {
         OnnxTensor.createTensor(env, FloatBuffer.wrap(phone), longArrayOf(1, T.toLong(), (phone.size / T).toLong())).use { a ->
             OnnxTensor.createTensor(env, LongBuffer.wrap(pitch), longArrayOf(1, T.toLong())).use { b ->
                 OnnxTensor.createTensor(env, FloatBuffer.wrap(pitchf), longArrayOf(1, T.toLong())).use { c ->
-                    v.pre.run(mapOf("phone" to a, "pitch" to b, "pitchf" to c)).use { res ->
+                    v.pre.run(withPh0(env, v.pre, mapOf("phone" to a, "pitch" to b, "pitchf" to c), ph0Now)).use { res ->
                         fun get(n: String): OnnxTensor = res.get(n).orElseThrow { IllegalStateException("前半图缺输出 $n") } as OnnxTensor
                         val zt = get(v.split.z); val zl = (zt.info as TensorInfo).shape[2].toInt()
                         val z = FloatArray(zt.floatBuffer.remaining()).also { zt.floatBuffer.get(it) }

@@ -158,6 +158,8 @@ data class UiState(
     val packsOff: Set<String> = emptySet(),
     val liveVoice: String = "",
     val liveBenching: Boolean = false,
+    /** 性能测试结束弹窗内容（null = 不弹） */
+    val benchDialog: String? = null,
     val logMsg: String = "",
     val liveMsg: String = "",
     /** 状态行性能摘要与展开明细（实时 AI 变声中） */
@@ -801,6 +803,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                                 .also { it.pickCache = File(ctx.filesDir, "pick_clip_$voice.txt"); it.tune(tu.aiTier, tu.aiGate, tu.aiFeatTh, tu.aiSynTh); it.setVocoder(aiTuneVoc()); clipEngine = it; clipEngineVoice = voice }
                         }
                         e.indexRate = aiIndex()
+                        e.rmsFollow = aiRms(); e.formant = aiFormant()
+                        if (e.phaseLock != aiPhaseLock()) { e.phaseLock = aiPhaseLock(); e.release() }
                         e.semis = prefs.getFloat("ai_semis", 0f).toInt()
                         _state.value = _state.value.copy(clipStage = tr("加载模型"))
                         e.load({ m -> _state.value = _state.value.copy(clipStage = m) })
@@ -1093,7 +1097,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         inj.tunePin = prefs.getBoolean("ai_pin", true)
         inj.tuneIdx = aiIndex()
         inj.tuneVoc = aiTuneVoc()
+        inj.tuneRms = aiRms(); inj.tuneFormant = aiFormant(); inj.tunePl = aiPhaseLock()
     }
+    fun aiRms(): Float = prefs.getFloat("ai_rms", 0f)
+    fun aiFormant(): Float = prefs.getFloat("ai_formant", 0f)
+    fun aiPhaseLock(): Boolean = prefs.getBoolean("ai_phase_lock", false)
+    /** 响度跟随 / 共振峰：不重载，松手后 commitAiTune 推给运行中的引擎；相位锁定会重载合成器 */
+    fun setAiRms(v: Float) { prefs.edit().putFloat("ai_rms", v).apply(); com.taocrypt.micmask.inject.MicInjector.tuneRms = v; clipEngine?.rmsFollow = v }
+    fun setAiFormant(v: Float) { prefs.edit().putFloat("ai_formant", v).apply(); com.taocrypt.micmask.inject.MicInjector.tuneFormant = v; clipEngine?.formant = v }
+    fun setAiPhaseLock(v: Boolean) { prefs.edit().putBoolean("ai_phase_lock", v).apply(); com.taocrypt.micmask.inject.MicInjector.tunePl = v; commitAiTune() }
     /** 声码器（pref ai_vocoder = auto / ort / neon16 / npu）→ 0 自动 1 ORT 整图 2 NEON fp16 3 骁龙 NPU */
     fun aiVocoder(): Int = when (prefs.getString("ai_vocoder", "auto")) { "ort" -> 1; "neon16" -> 2; "npu" -> 3; else -> 0 }
     /** HuBERT（内容特征）也交给骁龙 NPU；默认关 */
@@ -1475,10 +1487,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** 性能测试：在本机实测各档合成器，选能稳定跑的最低延迟档，结果记住 */
+    fun dismissBenchDialog() { _state.value = _state.value.copy(benchDialog = null) }
     fun runLiveBench() {
         if (com.taocrypt.micmask.inject.MicInjector.liveOn || _state.value.liveBenching) return
         if (!LiveRvc.modelPresent(ctx)) { _state.value = _state.value.copy(liveBench = tr("缺实时变声模型，先在模型页导入")); return }
-        _state.value = _state.value.copy(liveBenching = true, liveMsg = tr("性能测试中，约 20 秒…"))
+        _state.value = _state.value.copy(liveBenching = true, liveMsg = tr("性能测试中，约 1–2 分钟…"))
         Thread {
             // 用「全自动」测：档位自动、声码器各方式都测，装了 NPU 组件就连 HuBERT 也试 NPU；测完把最快的配置存下来
             val inj = com.taocrypt.micmask.inject.MicInjector
@@ -1493,11 +1506,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 prefs.edit().putString("ai_vocoder", when (v) { 2 -> "neon16"; 3 -> "npu"; else -> "ort" }).putBoolean("ai_hubert_npu", hub == "1").apply()
                 setAiTune(tier = 0)
                 inj.tuneVoc = aiTuneVoc(); commitAiTune()
-                applied = tr("已自动采用：档位自动 · 声码器 {0} · HuBERT {1}", kind, if (hub == "1") "NPU" else "CPU")
+                // 线程寻优：在已选声码器下试几组「特征/合成」线程，取两段较慢者最小、其次总和最小的一组
+                val cores = Runtime.getRuntime().availableProcessors()
+                fun ms(x: String, k: String) = Regex("$k (\\d+)ms").find(x)?.groupValues?.get(1)?.toIntOrNull()
+                var best = Triple(_state.value.aiFeatTh, _state.value.aiSynTh, (ms(r, "特征") ?: 9999) to (ms(r, "合成") ?: 9999))
+                for ((f, s) in listOf(2 to 3, 3 to 3, 3 to 4, 4 to 4, 2 to 4, 4 to 3)) {
+                    if (f + s > cores || (f == best.first && s == best.second)) continue
+                    _state.value = _state.value.copy(liveMsg = tr("性能测试：试线程 {0}/{1}…", f, s))
+                    inj.tuneFeat = f; inj.tuneSyn = s
+                    val x = runCatching { inj.liveBench(ctx, ModelStore.liveNames(ctx)) }.getOrDefault("失败").substringBefore('§')
+                    val a = ms(x, "特征") ?: continue; val b = ms(x, "合成") ?: continue
+                    L.i("UI 线程 $f/$s：特征 ${a}ms 合成 ${b}ms")
+                    val (pa, pb) = best.third
+                    if (maxOf(a, b) < maxOf(pa, pb) - 5 || (maxOf(a, b) <= maxOf(pa, pb) + 5 && a + b < pa + pb - 5)) best = Triple(f, s, a to b)
+                }
+                setAiTune(feat = best.first, syn = best.second)
+                prefs.edit().putInt("ai_feat_th", best.first).putInt("ai_syn_th", best.second).apply()
+                syncTune(); commitAiTune()
+                applied = tr("已自动采用：档位自动 · 声码器 {0} · HuBERT {1} · 线程 {2}/{3}", kind, if (hub == "1") "NPU" else "CPU", best.first, best.second)
                 L.i("UI 性能测试：$applied")
             }
             if (!r.startsWith("失败")) ctx.getSharedPreferences("live", 0).edit().putString("bench_" + _state.value.liveVoice, r).apply()
-            _state.value = _state.value.copy(liveBenching = false, liveBench = r, liveMsg = if (r.startsWith("失败")) r else applied.ifEmpty { tr("性能测试完成") })
+            _state.value = _state.value.copy(liveBenching = false, liveBench = r, liveMsg = if (r.startsWith("失败")) r else applied.ifEmpty { tr("性能测试完成") },
+                benchDialog = if (r.startsWith("失败")) r else listOf(applied.ifEmpty { tr("性能测试完成") }, r).joinToString("\n\n"))
         }.start()
     }
 

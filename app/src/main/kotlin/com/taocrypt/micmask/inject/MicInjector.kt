@@ -527,7 +527,10 @@ object MicInjector {
     @Volatile var tuneIdx = 0.3f
     /** 声码器 0=自动 1=ORT 整图 2=NEON fp16 */
     @Volatile var tuneVoc = 0
-    private fun writeTune(d: android.os.Parcel) { d.writeInt(tuneTier); d.writeFloat(tuneGate); d.writeInt(tuneFeat); d.writeInt(tuneSyn); d.writeInt(if (tunePin) 1 else 0); d.writeFloat(tuneIdx); d.writeInt(tuneVoc) }
+    @Volatile var tuneRms = 0f
+    @Volatile var tuneFormant = 0f
+    @Volatile var tunePl = false
+    private fun writeTune(d: android.os.Parcel) { d.writeInt(tuneTier); d.writeFloat(tuneGate); d.writeInt(tuneFeat); d.writeInt(tuneSyn); d.writeInt(if (tunePin) 1 else 0); d.writeFloat(tuneIdx); d.writeInt(tuneVoc); d.writeFloat(tuneRms); d.writeFloat(tuneFormant); d.writeInt(if (tunePl) 1 else 0) }
     fun pushTune() {
         if (!liveOn) return
         runCatching { call(InjectorService.TX_LIVE_TUNE, { d -> writeTune(d) }) { } }

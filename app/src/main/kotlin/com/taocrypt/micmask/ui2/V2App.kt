@@ -711,6 +711,22 @@ private fun AiAdvanced(vm: MainViewModel, st: UiState) {
     Text(if (hasIdx) tr("越高越像原音色、口音和原声漏出越少，但咬字可能变糊；默认 0.3") else tr("当前音色没有检索索引：导入模型时把 .index 和 .pth 一起选上即可"),
         fontSize = 12.sp, color = Summary)
 
+    var rms by remember { mutableStateOf(vm.aiRms()) }
+    Row(Modifier.padding(top = 14.dp)) { Text(tr("响度跟随"), Modifier.weight(1f), fontSize = 14.sp)
+        Text(if (rms <= 0.01f) tr("关") else "%.2f".format(rms), color = Summary) }
+    Slider(value = rms, onValueChange = { rms = (it * 20).roundToInt() / 20f; vm.setAiRms(rms) }, valueRange = 0f..1f, steps = 19,
+        onValueChangeFinished = { vm.commitAiTune() })
+    Text(tr("让变声后的音量起伏跟着原声走，轻声说话也轻；越高越贴原声。默认关"), fontSize = 12.sp, color = Summary)
+    var fmt by remember { mutableStateOf(vm.aiFormant()) }
+    Row(Modifier.padding(top = 14.dp)) { Text(tr("共振峰"), Modifier.weight(1f), fontSize = 14.sp)
+        Text(if (kotlin.math.abs(fmt) < 0.05f) tr("关") else "%+.1f".format(fmt), color = Summary) }
+    Slider(value = fmt, onValueChange = { fmt = (it * 2).roundToInt() / 2f; vm.setAiFormant(fmt) }, valueRange = -6f..6f, steps = 23,
+        onValueChangeFinished = { vm.commitAiTune() })
+    Text(tr("音高不变，只改声音的厚薄：往右更细更亮，往左更厚更沉。实验功能，默认 0"), fontSize = 12.sp, color = Summary)
+    var pl by remember { mutableStateOf(vm.aiPhaseLock()) }
+    SwitchPreference(checked = pl, onCheckedChange = { pl = it; vm.setAiPhaseLock(it) }, title = tr("相位锁定"),
+        summary = tr("让每段合成的声音首尾相位接上，减轻块与块之间的轻微「嗒嗒」声。实验功能，切换会重新加载模型"))
+
     val cores = Runtime.getRuntime().availableProcessors()
     Row(Modifier.padding(top = 14.dp)) { Text(tr("特征线程"), Modifier.weight(1f), fontSize = 14.sp); Text("${st.aiFeatTh}", color = Summary) }
     Slider(value = st.aiFeatTh.toFloat(), onValueChange = { vm.setAiTune(feat = it.roundToInt()) }, valueRange = 1f..8f, steps = 6,
@@ -951,6 +967,13 @@ private fun ImportRow(vm: MainViewModel, st: UiState) {
     }
     Row(Modifier.fillMaxWidth().padding(PagePad).padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         TextButton(tr("导入模型"), onClick = { picker.launch(arrayOf("*/*")) }, modifier = Modifier.weight(1f))
+        st.benchDialog?.let { msg ->
+            top.yukonga.miuix.kmp.window.WindowDialog(show = true, title = tr("性能测试结果"), onDismissRequest = { vm.dismissBenchDialog() }) {
+                Text(msg, fontSize = 14.sp)
+                top.yukonga.miuix.kmp.basic.TextButton(tr("知道了"), onClick = { vm.dismissBenchDialog() }, modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                    colors = top.yukonga.miuix.kmp.basic.ButtonDefaults.textButtonColorsPrimary())
+            }
+        }
         TextButton(if (st.liveBenching) tr("测试中…") else tr("性能测试"), onClick = { vm.runLiveBench() },
             enabled = !st.liveBenching && !st.liveOn, modifier = Modifier.weight(1f))
     }

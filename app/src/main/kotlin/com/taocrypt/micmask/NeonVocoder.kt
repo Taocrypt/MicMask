@@ -162,7 +162,7 @@ object NeonVocoder {
         OnnxTensor.createTensor(env, FloatBuffer.wrap(ph), longArrayOf(1, t.toLong(), (ph.size / t).toLong())).use { a ->
             OnnxTensor.createTensor(env, LongBuffer.wrap(pc), longArrayOf(1, t.toLong())).use { b ->
                 OnnxTensor.createTensor(env, FloatBuffer.wrap(pf), longArrayOf(1, t.toLong())).use { c ->
-                    s.run(mapOf("phone" to a, "pitch" to b, "pitchf" to c)).use { res ->
+                    s.run(LiveRvc.withPh0(env, s, mapOf("phone" to a, "pitch" to b, "pitchf" to c), 0f)).use { res ->
                         val m = HashMap<String, Pair<FloatArray, LongArray>>()
                         for ((k, v) in res) {
                             val tv = v as OnnxTensor; val fb = tv.floatBuffer; val y = FloatArray(fb.remaining()); fb.get(y)

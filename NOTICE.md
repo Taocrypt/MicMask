@@ -48,6 +48,7 @@ mobile-rvc 的解码器结构又移植自 RVC（mobile-rvc 的 THIRD_PARTY_NOTIC
 | Shizuku API / Provider | Apache-2.0 |
 | ONNX Runtime | MIT |
 | mobile-rvc：原生 NEON fp16 声码器内核（app/src/main/cpp/vocoder） | MIT（见上文） |
+| mobile-rvc：AI 实时「响度跟随」「共振峰」「相位锁定」的思路与默认值（LiveRvc.kt、PhaseLock.kt，Kotlin 重写，共振峰改为 PSOLA） | MIT（见上文） |
 | RVC WebUI：合成器 / 声码器结构（经 mobile-rvc） | MIT（见 notices/RVC-MIT.txt） |
 | TTS 前端数据表（GPT-SoVITS / pypinyin / g2pW / chinese-roberta 词表） | MIT / MIT / Apache-2.0 / Apache-2.0 |
 | 内置音效 app/src/main/assets/sfx | CC0 1.0 / 公有领域（见 sfx/LICENSES.md） |

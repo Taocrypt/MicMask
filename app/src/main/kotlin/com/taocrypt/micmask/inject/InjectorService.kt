@@ -278,7 +278,7 @@ class InjectorService : Binder {
                     return true
                 }
                 TX_LIVE_BENCH -> {
-                    if (data.dataAvail() >= 16) readTune(data)
+                    if (data.dataAvail() >= 16 && readTune(data)) engine?.let { it.release(); engine = null }   // 线程/档位变了：连特征模型一起按新线程数重建
                     val r = runCatching {
                         val e = ensureEngine()
                         synthDirty = false
@@ -753,16 +753,25 @@ class InjectorService : Binder {
     @Volatile private var tuneIdx = 0.3f
     /** 声码器 0=自动 1=ORT 整图 2=NEON fp16（旧版 App 不传 → 自动） */
     @Volatile private var tuneVoc = 0
+    @Volatile private var tuneRms = 0f
+    @Volatile private var tuneFormant = 0f
+    @Volatile private var tunePl = false
     /** 读高级参数并套到现有引擎；返回是否需要重载 */
     private fun readTune(d: android.os.Parcel): Boolean {
         tuneTier = d.readInt(); tuneGate = d.readFloat(); tuneFeat = d.readInt(); tuneSyn = d.readInt()
         if (d.dataAvail() >= 4) tunePin = d.readInt() != 0
         if (d.dataAvail() >= 4) tuneIdx = d.readFloat()
         if (d.dataAvail() >= 4) tuneVoc = d.readInt()
+        if (d.dataAvail() >= 4) tuneRms = d.readFloat()
+        if (d.dataAvail() >= 4) tuneFormant = d.readFloat()
+        if (d.dataAvail() >= 4) tunePl = d.readInt() != 0
+        val plChanged = engine?.let { it.phaseLock != tunePl } ?: false
+        engine?.let { it.rmsFollow = tuneRms; it.formant = tuneFormant; it.phaseLock = tunePl }
+        slog('I', "音色参数：响度跟随=$tuneRms 共振峰=$tuneFormant 相位锁定=$tunePl")
         engine?.pinBig = tunePin; engine?.indexRate = tuneIdx
         slog('I', "高级参数：档位=${listOf("自动", "标准", "省电").getOrElse(tuneTier) { "?" }} 静音门限=${tuneGate}dB 线程=$tuneFeat/$tuneSyn 绑大核=$tunePin 检索=$tuneIdx 声码器=${listOf("自动", "ORT", "NEON fp16", "NPU").getOrElse(tuneVoc) { "?" }}")
         val vocChanged = engine?.setVocoder(tuneVoc) ?: false
-        return (engine?.tune(tuneTier, tuneGate, tuneFeat, tuneSyn) ?: false) || vocChanged
+        return (engine?.tune(tuneTier, tuneGate, tuneFeat, tuneSyn) ?: false) || vocChanged || plChanged
     }
 
     @Synchronized private fun ensureEngine(): com.taocrypt.micmask.LiveRvc {
@@ -771,6 +780,7 @@ class InjectorService : Binder {
             it.pickCache = java.io.File(MODEL_DIR, "pick.txt")
             it.tune(tuneTier, tuneGate, tuneFeat, tuneSyn)
             it.pinBig = tunePin; it.indexRate = tuneIdx; it.setVocoder(tuneVoc)
+            it.rmsFollow = tuneRms; it.formant = tuneFormant; it.phaseLock = tunePl
             it.qnnDirProvider = { com.taocrypt.micmask.QnnPack.shellDir(ctx?.packageName) }
             it.onConfig = { blockMs -> tierPrimeMs = blockMs + 80; livePrimeMs = tierPrimeMs; slog('I', "预缓冲跟随档位 → ${livePrimeMs}ms") }
             engine = it
