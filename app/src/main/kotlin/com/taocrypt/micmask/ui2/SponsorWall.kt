@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -344,7 +345,7 @@ private fun DanmakuLane(items: List<Sponsor>, speedDp: Float, lead: androidx.com
             }
         }
     }
-    Box(Modifier.fillMaxWidth().height(33.dp).clipToBounds()
+    Box(Modifier.fillMaxWidth().height(if (items.any { twoLine(it) }) 50.dp else 33.dp).clipToBounds()
         .onSizeChanged { laneW = it.width }
         .pointerInput(Unit) {
             detectTapGestures(
@@ -371,6 +372,9 @@ private fun DanmakuLane(items: List<Sponsor>, speedDp: Float, lead: androidx.com
     }
 }
 
+/** 留言超过 12 字时弹幕改双行 */
+private fun twoLine(s: Sponsor) = s.remark.trim().length > 12
+
 @Composable
 private fun DanmakuChip(s: Sponsor, held: Boolean = false) {
     var img by remember(s.avatar) { mutableStateOf(synchronized(avatarCache) { avatarCache[s.avatar] }) }
@@ -382,23 +386,36 @@ private fun DanmakuChip(s: Sponsor, held: Boolean = false) {
     val fg = androidx.compose.ui.graphics.lerp(tc, if (dark) androidx.compose.ui.graphics.Color.White else androidx.compose.ui.graphics.Color.Black, if (dark) 0.2f else 0.2f)
     // 滞留时突出：略放大、档位色描边、底色加深
     val k by androidx.compose.animation.core.animateFloatAsState(if (held) 1f else 0f, label = "held")
+    val two = twoLine(s)
+    val shape = RoundedCornerShape(if (two) 22.dp else 50.dp)
+    val av = if (two) 34.dp else 24.dp
     Row(Modifier
         .graphicsLayer { val sc = 1f + 0.06f * k; scaleX = sc; scaleY = sc }
-        .clip(RoundedCornerShape(50))
+        .clip(shape)
         .background(androidx.compose.ui.graphics.lerp(bg, androidx.compose.ui.graphics.lerp(cs.surface, tc, if (dark) 0.42f else 0.30f), k))
-        .border((1.5f * k).dp, tc.copy(alpha = k), RoundedCornerShape(50))
+        .border((1.5f * k).dp, tc.copy(alpha = k), shape)
         .padding(start = 3.dp, end = 12.dp, top = 3.dp, bottom = 3.dp),
         verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(24.dp).clip(CircleShape).background(cs.secondaryContainer), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(av).clip(CircleShape).background(cs.secondaryContainer), contentAlignment = Alignment.Center) {
             val b = img
-            if (b != null) Image(b, null, Modifier.size(24.dp), contentScale = ContentScale.Crop)
+            if (b != null) Image(b, null, Modifier.size(av), contentScale = ContentScale.Crop)
             else Text(s.name.take(1), fontSize = 11.sp, fontWeight = FontWeight.Bold)
         }
         Spacer(Modifier.width(6.dp))
-        Text(s.name, fontSize = 13.sp, maxLines = 1, fontWeight = FontWeight.Medium, color = cs.onSurface)
-        if (!s.contributor) Text("  " + yuan(s.amount), fontSize = 12.sp, maxLines = 1, color = fg)
-        if (!s.contributor && s.last > 0) Text("  " + day(s.last, "MM-dd"), fontSize = 11.sp, maxLines = 1, color = cs.onSurfaceVariantSummary)
-        if (s.remark.isNotBlank()) Text("  " + s.remark.take(16), fontSize = 12.sp, maxLines = 1, color = cs.onSurfaceVariantSummary)
+        @Composable fun head() {
+            Text(s.name, fontSize = 13.sp, maxLines = 1, fontWeight = FontWeight.Medium, color = cs.onSurface)
+            if (!s.contributor) Text("  " + yuan(s.amount), fontSize = 12.sp, maxLines = 1, color = fg)
+            if (!s.contributor && s.last > 0) Text("  " + day(s.last, "MM-dd"), fontSize = 11.sp, maxLines = 1, color = cs.onSurfaceVariantSummary)
+        }
+        if (two) Column {
+            Row(verticalAlignment = Alignment.CenterVertically) { head() }
+            // 长留言换到第二行，最多 30 字，宽度不超过 260dp
+            Text(s.remark.take(30), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                color = cs.onSurfaceVariantSummary, modifier = Modifier.widthIn(max = 260.dp))
+        } else {
+            head()
+            if (s.remark.isNotBlank()) Text("  " + s.remark, fontSize = 12.sp, maxLines = 1, color = cs.onSurfaceVariantSummary)
+        }
     }
 }
 
