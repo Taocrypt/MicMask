@@ -21,8 +21,8 @@ android {
         applicationId = "com.taocrypt.micmask.qnntest"
         minSdk = 26
         targetSdk = 34
-        versionCode = 9
-        versionName = "qnntest-7c" + (if (qnntestWebgpu) "-webgpu" else "") + (if (qnntestOrt != "1.29.0") "-ort$qnntestOrt" else "") + (if (qnntestBundled) "-bundled" else "")
+        versionCode = 10
+        versionName = "qnntest-8" + (if (qnntestWebgpu) "-webgpu" else "") + (if (qnntestOrt != "1.29.0") "-ort$qnntestOrt" else "") + (if (qnntestBundled) "-bundled" else "")
         ndk { abiFilters += listOf("arm64-v8a") }
     }
     val signingProps = (project.findProperty("signingProps") as String?)?.let { path ->

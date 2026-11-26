@@ -12,6 +12,7 @@ object ShellProbe {
         val out: (String) -> Unit = { println(it); System.out.flush() }
         try {
             if (args.getOrNull(0) == "header") Probe.header(out, "shell 进程")
+            else if (args.getOrNull(0) == "stress") TierStress.run(File(args[1]), File(args[2]), args.getOrNull(3)?.toIntOrNull() ?: 60, args.getOrNull(4)?.toIntOrNull() ?: 4, args.getOrNull(5)?.toIntOrNull() ?: 3, out)
             else if (args.getOrNull(2) == "q6") Probe.runOne6(File(args[0]), args[1], System.getenv("MICMASK_QNN_DIR"), System.getenv("MICMASK_QNN_NOPREP"), out)
             else Probe.runOne(File(args[0]), args[1], out)
         } catch (t: Throwable) {

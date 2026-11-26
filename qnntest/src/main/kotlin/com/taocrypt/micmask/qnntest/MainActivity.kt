@@ -55,6 +55,7 @@ class MainActivity : Activity() {
         btn("7. qnntest-6：外置 QNN（shell 进程，需 Shizuku）") { shellTest6() }
         btn("8. qnntest-7：NNAPI + GPU（App 进程）") { appTest(tasks7(), 600_000L, true) }
         btn("9. qnntest-7：NNAPI + GPU（shell 进程，需 Shizuku）") { shellTest(tasks7(), true) }
+        btn("10. qnntest-8：档位压测 0.3 / 0.25 / 0.2 s（shell 进程，需 Shizuku，约 4 分钟）") { tierStress() }
         btn("复制日志") {
             (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("qnn", sb.toString()))
             Toast.makeText(this, "已复制", Toast.LENGTH_SHORT).show()
@@ -248,6 +249,29 @@ class MainActivity : Activity() {
                 if (rc != 0 && m != null) { out("  shell 进程异常退出 rc=$rc"); out("RESULT|${m.name}|$tier|CRASH") }
             }
             (if (q4) Probe.summary4(all.drop(start)) else Probe.summary(all.drop(start))).forEach(::out)
+        }
+    }
+
+    /** qnntest-8：解出 assets/tier 的随机权重合成器，缺特征模型就先从 MicMask 复制，然后在 shell 进程里按实时节拍压测三档 */
+    private fun tierStress() {
+        if (!shizukuOk()) return
+        bg {
+            val tierDir = File(getExternalFilesDir(null), "tier").also { it.mkdirs() }
+            for (n in assets.list("tier").orEmpty()) {
+                val dst = File(tierDir, n)
+                if (!dst.isFile) assets.open("tier/$n").use { i -> dst.outputStream().use { i.copyTo(it) } }
+            }
+            if (!File(modelDir, "hubert_dyn8.onnx").isFile || !File(modelDir, "rmvpe_q8.onnx").isFile) {
+                out("先从 ${Probe.MM_DIR} 复制特征模型…")
+                sh("for f in hubert_dyn8.onnx rmvpe_q8.onnx; do [ -f '${Probe.MM_DIR}'/\$f ] && cp '${Probe.MM_DIR}'/\$f '$modelDir/' && echo 已复制 \$f; done") { out(it) }
+            }
+            out("开始压测：保持亮屏；中途可以切到别的 App 看后台表现，结束前别关 Shizuku。")
+            val apk = applicationInfo.sourceDir
+            val cmd = "export LD_LIBRARY_PATH='$libDir'; CLASSPATH='$apk' app_process -Djava.class.path='$apk' -Djava.library.path='$libDir' /system/bin " +
+                "com.taocrypt.micmask.qnntest.ShellProbe stress '$modelDir' '$tierDir' 60 4 3"
+            val rc = sh(cmd) { out(it) }
+            if (rc != 0) out("shell 进程异常退出 rc=$rc")
+            out("压测结束，点「复制日志」发给开发者。")
         }
     }
 }

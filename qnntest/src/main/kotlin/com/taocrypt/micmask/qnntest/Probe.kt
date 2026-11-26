@@ -19,7 +19,7 @@ import java.nio.LongBuffer
  * 新档位 htp_ctx（整图 + QNN 上下文缓存）。
  */
 object Probe {
-    const val VERSION = "qnntest-7c"
+    const val VERSION = "qnntest-8"
     private val env by lazy { OrtEnvironment.getEnvironment() }
 
     fun header(out: (String) -> Unit, where: String) {
