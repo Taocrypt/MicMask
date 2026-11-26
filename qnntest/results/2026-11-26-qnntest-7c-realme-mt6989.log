@@ -1,0 +1,202 @@
+qnntest-7c · 模型目录：/storage/emulated/0/Android/data/com.taocrypt.micmask.qnntest/files/models（现有 hubert_dyn8.onnx, rmvpe_q8.onnx）
+提示：测试时保持亮屏、App 在前台；整个过程约 1–3 分钟。
+从 /data/local/tmp/micmask-models 复制模型…
+已复制 hubert_dyn8.onnx
+已复制 rmvpe_q8.onnx
+total 216864
+-rw-r----- 1 root ext_data_rw 123262434 2026-11-26 13:09 hubert_dyn8.onnx
+-rw-r----- 1 root ext_data_rw  98579742 2026-11-26 13:09 rmvpe_q8.onnx
+就绪：hubert_dyn8.onnx, rmvpe_q8.onnx
+== MicMask QNN 测试 qnntest-7c · shell 进程 ==
+设备 realme RMX5060 · Android 15 (SDK 35)
+SoC Mediatek MT6989
+hardware mt6989 · board k6989v1_64
+uid 0 · ORT 1.32.0 · 可用 EP [CPU, NNAPI, XNNPACK, WEBGPU]
+ADSP_LIBRARY_PATH=/data/app/~~9wJY0S-7F8OZYNvuTayTrw==/com.taocrypt.micmask.qnntest-a6v3XDnLew3ISPzT2SbGpA==/lib/arm64;/vendor/dsp/cdsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/dsp
+HTP 架构推测 未知（qnntest-6 的包只含 V75）
+  /dev/fastrpc-cdsp 存在=false 可读写=false
+  /dev/fastrpc-cdsp-secure 存在=false 可读写=false
+  /dev/fastrpc-adsp 存在=false 可读写=false
+  /dev/adsprpc-smd 存在=false 可读写=false
+  /dev/kgsl-3d0 存在=false 可读写=false
+-- hubert_dyn8.onnx · CPU 4线程（shell）
+  [CPU 4线程] 加载 760ms · 首跑 127ms · 平均 122.4ms
+RESULT|hubert_dyn8.onnx|cpu|122.4
+-- hubert_dyn8.onnx · NNAPI(APU/NPU)（shell）
+  [NNAPI(APU/NPU)] 加载 31340ms · 首跑 2574ms · 平均 806.0ms
+    log: I/onnxruntime:  [I:onnxruntime:, graph_transformer.cc:15 Apply] GraphTransformer FuseFp16InitializerToFp32NodeTransformer modified: 0 with status: OK
+    log: I/onnxruntime:  [I:onnxruntime:, allocation_planner.cc:2818 CreateGraphPartitioner] Use DeviceBasedPartition as default
+  [NNAPI(APU/NPU)] 与 CPU 输出误差 NaN
+RESULT|hubert_dyn8.onnx|nnapi|806.0
+-- hubert_dyn8.onnx · GPU(WebGPU/Vulkan)（shell）
+  [GPU(WebGPU/Vulkan)] 加载 623ms · 首跑 695ms · 平均 135.0ms
+    log: D/nativeloader: Configuring clns-1 for other apk . target_sdk_version=0, uses_libraries=ALL, library_path=/data/app/~~9wJY0S-7F8OZYNvuTayTrw==/com.taocrypt.micmask.qnntest-a6v3XDnLew3ISPzT2SbGpA==/lib/arm64, permitted_path=/data:/mnt/expand
+    log: D/nativeloader: Load /data/app/~~9wJY0S-7F8OZYNvuTayTrw==/com.taocrypt.micmask.qnntest-a6v3XDnLew3ISPzT2SbGpA==/lib/arm64/libonnxruntime4j_jni.so using isolated ns clns-1 (caller=/data/app/~~9wJY0S-7F8OZYNvuTayTrw==/com.taocrypt.micmask.qnntest-a6v3XDnLew3ISPz
+    log: I/onnxruntime:  [I:onnxruntime:, inference_session.cc:1009 RegisterExecutionProvider] Having memory pattern enabled is not supported while using WebGpuExecutionProvider. So disabling it for this session since it uses WebGpuExecutionProvider.
+    log: I/onnxruntime:  [I:onnxruntime:, graph_partitioner.cc:2398 InlineFunctionsAOT] This model does not have any local functions defined. AOT Inlining is not performed
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Transpose[0-2-1]:64,1,1:1:0;3:" (255, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Transpose[2-3-1-0]:32,8,1:1:0;2:" (16, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Conv2dMM[ActivationKind: 0;|1|1,0,0,1,0,32,32,8,1,]:8,8,1:1|1|1|4|2|2|1|1|1||:0;4|0;4:0;4" (16, 102, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Transpose[0-2-1]:32,8,1:1:0;2:" (102, 16, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "ComputeChannelScaleShift[1|512|0.000010]:256,1,1::0;3|0;1|0;1:1;3" (512, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "InstanceNorm:1:0;3|1;3:0;3" (26104, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Mul[B]:1|1:0;1|0;1:2;:3|3|2" (6526, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Add[B]:1|1:0;1|0;1:2;:3|3|2" (6526, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Gelu[none]:1|:2;:" (6526, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Transpose[0-2-1]:32,8,1:1:0;2:" (16, 102, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Transpose[2-3-1-0]:64,1,1:1:0;4:" (12288, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Conv2dMM[ActivationKind: 10;|1|4,1,0,1,1,32,32,32,4,]:8,8,1:1|1|1|4|2|2|1|1|1||:2;4|2;4:2;4" (16, 51, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Transpose[2-3-1-0]:64,1,1:1:0;4:" (12288, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Conv2dMM[ActivationKind: 10;|1|4,1,0,1,1,32,32,32,4,]:8,8,1:1|1|1|4|2|2|1|1|1||:2;4|2;4:2;4" (16, 26, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Transpose[2-3-1-0]:64,1,1:1:0;4:" (12288, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Conv2dMM[ActivationKind: 10;|1|4,1,0,1,1,32,32,32,4,]:8,8,1:1|1|1|4|2|2|1|1|1||:2;4|2;4:2;4" (16, 13, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Transpose[2-3-1-0]:64,1,1:1:0;4:" (12288, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Conv2dMM[ActivationKind: 10;|1|4,1,0,1,1,32,32,32,4,]:8,8,1:1|1|1|4|2|2|1|1|1||:2;4|2;4:2;4" (16, 7, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Transpose[2-3-1-0]:64,1,1:1:0;4:" (8192, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Conv2dMM[ActivationKind: 10;|1|4,1,0,1,1,32,32,32,4,]:8,8,1:1|1|1|4|2|2|1|1|1||:2;4|2;4:2;4" (16, 4, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Transpose[2-3-1-0]:64,1,1:1:0;4:" (8192, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Conv2dMM[ActivationKind: 10;|1|4,1,0,1,1,32,32,32,4,]:8,8,1:1|1|1|4|2|2|1|1|1||:2;4|2;4:2;4" (16, 2, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "LayerNorm[4|0|0|0|0]:1|1|1|1|1:2;|2;|2;:2;" (50, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Cast[1]:1|1:8;:" (150, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Mul[E10]:1|1:2;|2;:2;" (3, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Mul[V|0|0]:1|1:2;|2;:2;:3|3|1" (150, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Add[V|0|0]:1|1:2;|2;:2;:3|1|3" (150, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Transpose[2-3-1-0]:64,1,1:1:0;4:" (272, 272, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "GroupedConv[ActivationKind: 0;|4|1|0]:1|2|2|2|1|1||:0;4|2;4|2;1:2;4" (153, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Slice:1|3|3|3:2;3:2;3" (150, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Gelu[none]:1|:2;:" (150, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "SkipLayerNorm[0|1|0|0|0]:1|1|1|1:2;|2;|2;|2;:" (50, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Transpose[1-0-2]:64,1,1:1:2;3:" (150, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Cast[1]:1|1:8;:" (150, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Mul[E10]:1|1:2;|2;:2;" (3, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Mul[V|0|0]:1|1:2;|2;:2;:3|3|1" (150, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Add[V|0|0]:1|1:2;|2;:2;:3|1|3" (150, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Transpose[1-2-0-3]:64,1,1:1:2;4:" (150, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Cast[1]:1|1:8;:" (150, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Mul[E10]:1|1:2;|2;:2;" (3, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Mul[V|0|0]:1|1:2;|2;:2;:3|3|1" (150, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Add[V|0|0]:1|1:2;|2;:2;:3|1|3" (150, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Transpose[1-2-3-0]:64,1,1:1:0;4:" (600, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Mul[E01]:1|1:2;|2;:2;" (150, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Cast[1]:1|1:8;:" (150, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Mul[E10]:1|1:2;|2;:2;" (3, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Mul[V|0|0]:1|1:2;|2;:2;:3|3|1" (150, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Add[V|0|0]:1|1:2;|2;:2;:3|1|3" (150, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Transpose[1-2-0-3]:64,1,1:1:2;4:" (150, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Mul[E01]:1|1:2;|2;:2;" (150, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "MatMul[ActivationKind: 0;|4-4-1|8-8-1|0|1|1|1|32|0]:8,8,1:1|1|1|1|1|1|1||:0;4|0;4:0;3:2" (2, 2, 12)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Softmax[2|64]:64,1,1:1:1;4:1;4" (600, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "MatMul[ActivationKind: 0;|4-4-1|8-8-1|0|1|1|1|32|0]:8,8,1:1|1|1|1|1|1|1||:0;4|0;4:0;3:2" (2, 2, 12)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Transpose[2-0-1-3]:64,1,1:1:2;4:" (150, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Cast[1]:1|1:8;:" (150, 1, 1)
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_context.cc:795 Run] Starting program "Mul[E10]:1|1:2;|2;:2;" (3, 1, 1)
+  [GPU(WebGPU/Vulkan)] 与 CPU 输出误差 0.179
+RESULT|hubert_dyn8.onnx|webgpu|135.0
+-- rmvpe_q8.onnx · CPU 4线程（shell）
+  [CPU 4线程] 加载 469ms · 首跑 56ms · 平均 49.8ms
+RESULT|rmvpe_q8.onnx|cpu|49.8
+-- rmvpe_q8.onnx · NNAPI(APU/NPU)（shell）
+  [NNAPI(APU/NPU)] 加载 14547ms · 首跑 848ms · 平均 346.9ms
+    log: D/nativeloader: Configuring clns-1 for other apk . target_sdk_version=0, uses_libraries=ALL, library_path=/data/app/~~9wJY0S-7F8OZYNvuTayTrw==/com.taocrypt.micmask.qnntest-a6v3XDnLew3ISPzT2SbGpA==/lib/arm64, permitted_path=/data:/mnt/expand
+    log: D/nativeloader: Load /data/app/~~9wJY0S-7F8OZYNvuTayTrw==/com.taocrypt.micmask.qnntest-a6v3XDnLew3ISPzT2SbGpA==/lib/arm64/libonnxruntime4j_jni.so using isolated ns clns-1 (caller=/data/app/~~9wJY0S-7F8OZYNvuTayTrw==/com.taocrypt.micmask.qnntest-a6v3XDnLew3ISPz
+    log: I/onnxruntime:  [I:onnxruntime:, graph_partitioner.cc:2398 InlineFunctionsAOT] This model does not have any local functions defined. AOT Inlining is not performed
+    log: W/onnxruntime:  [W:onnxruntime:, nnapi_execution_provider.cc:230 GetCapability] NnapiExecutionProvider::GetCapability, number of partitions supported by NNAPI: 69 number of nodes in the graph: 576 number of nodes supported by NNAPI: 396
+    log: W/onnxruntime:  [W:onnxruntime:, nnapi_execution_provider.cc:230 GetCapability] NnapiExecutionProvider::GetCapability, number of partitions supported by NNAPI: 69 number of nodes in the graph: 596 number of nodes supported by NNAPI: 416
+    log: E/PackageInfo: package_native::getLocationFlags failed: 
+    log: E/AppInfoFetcher: Failed to get app information from package_manager_native
+    log: I/TypeManager: Failed to read /vendor/etc/nnapi_extensions_app_allowlist ; No app allowlisted for vendor extensions use.
+  [NNAPI(APU/NPU)] 与 CPU 输出误差 0.094
+RESULT|rmvpe_q8.onnx|nnapi|346.9
+-- rmvpe_q8.onnx · GPU(WebGPU/Vulkan)（shell）
+  [GPU(WebGPU/Vulkan)] 加载 468ms · 首跑 523ms · 平均 348.2ms
+    log: D/nativeloader: Configuring clns-1 for other apk . target_sdk_version=0, uses_libraries=ALL, library_path=/data/app/~~9wJY0S-7F8OZYNvuTayTrw==/com.taocrypt.micmask.qnntest-a6v3XDnLew3ISPzT2SbGpA==/lib/arm64, permitted_path=/data:/mnt/expand
+    log: D/nativeloader: Load /data/app/~~9wJY0S-7F8OZYNvuTayTrw==/com.taocrypt.micmask.qnntest-a6v3XDnLew3ISPzT2SbGpA==/lib/arm64/libonnxruntime4j_jni.so using isolated ns clns-1 (caller=/data/app/~~9wJY0S-7F8OZYNvuTayTrw==/com.taocrypt.micmask.qnntest-a6v3XDnLew3ISPz
+    log: I/onnxruntime:  [I:onnxruntime:, inference_session.cc:1009 RegisterExecutionProvider] Having memory pattern enabled is not supported while using WebGpuExecutionProvider. So disabling it for this session since it uses WebGpuExecutionProvider.
+    log: I/onnxruntime:  [I:onnxruntime:, graph_partitioner.cc:2398 InlineFunctionsAOT] This model does not have any local functions defined. AOT Inlining is not performed
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.0/conv.0/conv/conv.0/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.0/conv.0/conv/conv.3/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.0/conv.0/shortcut/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.0/conv.1/conv/conv.0/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.0/conv.1/conv/conv.3/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.0/conv.2/conv/conv.0/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.0/conv.2/conv/conv.3/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.0/conv.3/conv/conv.0/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.0/conv.3/conv/conv.3/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.1/conv.0/conv/conv.0/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.1/conv.0/conv/conv.3/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.1/conv.0/shortcut/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.1/conv.1/conv/conv.0/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.1/conv.1/conv/conv.3/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.1/conv.2/conv/conv.0/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.1/conv.2/conv/conv.3/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.1/conv.3/conv/conv.0/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.1/conv.3/conv/conv.3/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.2/conv.0/conv/conv.0/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.2/conv.0/conv/conv.3/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.2/conv.0/shortcut/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.2/conv.1/conv/conv.0/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.2/conv.1/conv/conv.3/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.2/conv.2/conv/conv.0/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.2/conv.2/conv/conv.3/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.2/conv.3/conv/conv.0/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.2/conv.3/conv/conv.3/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.3/conv.0/conv/conv.0/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.3/conv.0/conv/conv.3/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.3/conv.0/shortcut/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.3/conv.1/conv/conv.0/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.3/conv.1/conv/conv.3/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.3/conv.2/conv/conv.0/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.3/conv.2/conv/conv.3/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.3/conv.3/conv/conv.0/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.3/conv.3/conv/conv.3/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.4/conv.0/conv/conv.0/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.4/conv.0/conv/conv.3/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.4/conv.0/shortcut/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.4/conv.1/conv/conv.0/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.4/conv.1/conv/conv.3/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.4/conv.2/conv/conv.0/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.4/conv.2/conv/conv.3/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.4/conv.3/conv/conv.0/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/encoder/layers.4/conv.3/conv/conv.3/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/intermediate/layers.0/conv.0/conv/conv.0/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/intermediate/layers.0/conv.0/conv/conv.3/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/intermediate/layers.0/conv.0/shortcut/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/intermediate/layers.0/conv.1/conv/conv.0/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/intermediate/layers.0/conv.1/conv/conv.3/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/intermediate/layers.0/conv.2/conv/conv.0/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/intermediate/layers.0/conv.2/conv/conv.3/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/intermediate/layers.0/conv.3/conv/conv.0/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/intermediate/layers.0/conv.3/conv/conv.3/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/intermediate/layers.1/conv.0/conv/conv.0/Conv_quant
+    log: I/onnxruntime:  [I:onnxruntime:, webgpu_execution_provider.cc:776 GetCapability] webgpu kernel not found in registries for Op type: QLinearConv node name: /unet/intermediate/layers.1/conv.0/conv/conv.3/Conv_quant
+  [GPU(WebGPU/Vulkan)] 与 CPU 输出误差 0.136
+RESULT|rmvpe_q8.onnx|webgpu|348.2
+== qnntest-7c 汇总（建会话ms|首轮ms|p50|p95|与CPU SNR|输入）==
+== MicMask QNN 测试 qnntest-7c · App 进程 ==
+设备 realme RMX5060 · Android 15 (SDK 35)
+SoC Mediatek MT6989
+hardware mt6989 · board k6989v1_64
+uid 10327 · ORT 1.32.0 · 可用 EP [CPU, NNAPI, XNNPACK, WEBGPU]
+ADSP_LIBRARY_PATH=/data/app/~~9wJY0S-7F8OZYNvuTayTrw==/com.taocrypt.micmask.qnntest-a6v3XDnLew3ISPzT2SbGpA==/lib/arm64;/vendor/dsp/cdsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/dsp
+HTP 架构推测 未知（qnntest-6 的包只含 V75）
+  /dev/fastrpc-cdsp 存在=false 可读写=false
+  /dev/fastrpc-cdsp-secure 存在=false 可读写=false
+  /dev/fastrpc-adsp 存在=false 可读写=false
+  /dev/adsprpc-smd 存在=false 可读写=false
+  /dev/kgsl-3d0 存在=false 可读写=false
+-- hubert_dyn8.onnx · CPU 4线程
+  进程崩溃（无输出）
+RESULT|hubert_dyn8.onnx|cpu|CRASH
+-- hubert_dyn8.onnx · NNAPI(APU/NPU)
+  进程崩溃（无输出）
+RESULT|hubert_dyn8.onnx|nnapi|CRASH
+-- hubert_dyn8.onnx · GPU(WebGPU/Vulkan)
+  进程崩溃（无输出）
+RESULT|hubert_dyn8.onnx|webgpu|CRASH
+-- rmvpe_q8.onnx · CPU 4线程
+  进程崩溃（无输出）
+RESULT|rmvpe_q8.onnx|cpu|CRASH
+-- rmvpe_q8.onnx · NNAPI(APU/NPU)
+  进程崩溃（无输出）
+RESULT|rmvpe_q8.onnx|nnapi|CRASH
+-- rmvpe_q8.onnx · GPU(WebGPU/Vulkan)

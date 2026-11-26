@@ -96,3 +96,13 @@ APK 不带 libQnn*.so，QNN 包 zip 导入；App 从 files/qnn 加载，shell �
 - p50（App/shell，ms）：dingzhen_notail CPU 236/257、HTP 39.0/38.6、缓存 36.1/36.1、仅缓存 36.0/35.9；atri48 CPU 309/343、HTP 45.0/44.5、缓存 43.7/43.2、仅缓存 43.9/43.9；dingzhen_dec_rw CPU 264/287、HTP 38.7/38.9、缓存 36.8/36.4、仅缓存 36.8/36.7。
 - 缓存生成 5.7–8.8 s；首次整图建会话 3.4–5.5 s。
 结论：按需下载可行；生成缓存后可删编译器，运行只需约 6.4 MB 库。
+
+## qnntest-7b / 7c（2026-11-26，ORT 1.32 通用包：CPU / NNAPI / WebGPU，shell 进程，单位 ms）
+| 设备 | 模型 | CPU 4 线程 | NNAPI | WebGPU |
+|---|---|---|---|---|
+| vivo V2329A · SM8650（7b） | hubert_dyn8 | 约 60–70 | — | 段错误（rc=139） |
+| vivo V2329A · SM8650（7b） | rmvpe_q8 | 38 | — | 521（最大相对误差 6.574） |
+| realme RMX5060 · MT6989 · Android 15（7c） | hubert_dyn8 | 122.4 | 806.0（建会话 31340，输出 NaN） | 135.0（误差 0.179） |
+| realme RMX5060 · MT6989 · Android 15（7c） | rmvpe_q8 | 49.8 | 346.9（建会话 14547，误差 0.094） | 348.2（误差 0.136） |
+
+结论：GPU（WebGPU）与联发科 NNAPI 均慢于 CPU 且有误差/崩溃，不接入；联发科继续走 CPU。7c 的 App 进程组全部 CRASH（含 CPU），原因未查。日志见 `2026-11-26-qnntest-7c-realme-mt6989.log`。
