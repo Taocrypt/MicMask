@@ -195,6 +195,17 @@ class LiveRvc(private val open0: (String) -> Any?) {
     @Volatile var gateDb = GATE_DB
     @Volatile var featThreads = FEAT_THREADS
     @Volatile var synThreads = SYN_THREADS
+    /** 实际用的线程数：默认 3/4 时，若绑大核且大核只有 ≤5 个，特征+合成两边同时跑会抢核（MT6896 4 大核实测：合成单测 170ms，并发时均 501ms），按大核数收到合计 = 大核数；手动改过线程就照用户设的 */
+    @Volatile private var effF = FEAT_THREADS
+    @Volatile private var effS = SYN_THREADS
+    private fun effThreads() {
+        effF = featThreads; effS = synThreads
+        if (!pinBig || featThreads != FEAT_THREADS || synThreads != SYN_THREADS) return
+        val n = CpuPin.bigCores().size
+        if (n < 2 || featThreads + synThreads <= n + 1) return
+        effF = (n / 2).coerceAtLeast(1); effS = (n - effF).coerceAtLeast(1)
+        L.i("线程 $featThreads/$synThreads 超过大核数 $n → 实际用 $effF/$effS（避免特征与合成抢核）")
+    }
     /** 检索混合比例（RVC index_rate）；0 = 不用。音色带 <音色>_stream_index.bin 才生效 */
     @Volatile var indexRate = 0.3f
     @Volatile private var index: micmask.core.FaissIvfIndex? = null
@@ -294,14 +305,15 @@ class LiveRvc(private val open0: (String) -> Any?) {
         if (netG != null && !force) return
         if (force) { runCatching { voc?.close() }; voc = null; runCatching { netG?.close() }; netG = null; runCatching { pickCache?.delete() } }
         if (pinBig) CpuPin.pinSelf("加载前")
+        effThreads()
         fun need(n: String): Any = open(n) ?: throw IllegalStateException("缺模型 $n，请先导入")
         fun opts(th: Int) = OrtSession.SessionOptions().apply {
             setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
             setIntraOpNumThreads(th)
             setInterOpNumThreads(1)
         }
-        var o = opts(featThreads)
-        var curTh = featThreads
+        var o = opts(effF)
+        var curTh = effF
         fun load(label: String, n: String): OrtSession {
             onLog("加载 $label …")
             val f = need(n); val t = System.nanoTime()
@@ -314,7 +326,7 @@ class LiveRvc(private val open0: (String) -> Any?) {
             L.i("live 加载 $n ${mb}MB 用时 ${(System.nanoTime() - t) / 1_000_000}ms 输入=${sess.inputInfo.map { (k, v) -> k + (v.info as? TensorInfo)?.shape?.contentToString() }}")
             return sess
         }
-        L.i("live 配置：T=$T LEN=$LEN BLOCK=${BLOCK * 10}ms XF=${XF * 1000 / SR}ms WIN=${WIN48 * 1000 / SR}ms featThreads=$featThreads synThreads=$synThreads gate=${gateDb}dB tier=$tier")
+        L.i("live 配置：T=$T LEN=$LEN BLOCK=${BLOCK * 10}ms XF=${XF * 1000 / SR}ms WIN=${WIN48 * 1000 / SR}ms featThreads=$effF synThreads=$effS gate=${gateDb}dB tier=$tier")
         val featWarm = hubert != null && rmvpe != null && benchFeatMs > 0 && !force
         if (hubert == null) hubert = load("HuBERT", ModelStore.HUBERT)
         if (rmvpe == null) rmvpe = load("RMVPE", ModelStore.RMVPE)
@@ -336,7 +348,7 @@ class LiveRvc(private val open0: (String) -> Any?) {
             L.i("live 测速 hubert=${th / 3_000_000}ms rmvpe=${tr / 3_000_000}ms 抽取=${td / 1_000_000}ms 特征合计≈${featMs}ms")
         }.onFailure { L.e("live 特征预热失败", it) }
         // 流式合成器：有几个版本就都测一遍，用最快的
-        o = opts(synThreads); curTh = synThreads
+        o = opts(effS); curTh = effS
         fun phFor(s: OrtSession) = FloatArray(T * embOf(s)) { (Math.random().toFloat() - 0.5f) }
         val pi = LongArray(T) { 120 }; val pf = FloatArray(T) { 300f }
         // 每个候选：测合成耗时 + 读出它的块长；选「特征和合成都在块长 80% 以内」里延迟最低的，都不行就选最从容的
@@ -344,7 +356,7 @@ class LiveRvc(private val open0: (String) -> Any?) {
             val blockMs get() = (len - XF_FR) * 10
         }
         fun ratio(c: Cand) = maxOf(c.ms, featMs).toDouble() / c.blockMs
-        val key = NETG_FILES.joinToString(",") { n -> "$n:" + ((open(n) as? File)?.let { "${it.parentFile?.name}/${it.length()}@${it.lastModified()}" } ?: -1) } + "|t$tier f$featThreads s$synThreads"
+        val key = NETG_FILES.joinToString(",") { n -> "$n:" + ((open(n) as? File)?.let { "${it.parentFile?.name}/${it.length()}@${it.lastModified()}" } ?: -1) } + "|t$tier f$effF s$effS"
         var chosen: Cand? = null
         runCatching {
             // 每个音色一条（4 行一组），换来换去不用重测
@@ -391,7 +403,7 @@ class LiveRvc(private val open0: (String) -> Any?) {
         L.i("live 特征维度 $emb（${if (emb == 256) "RVC v1" else "RVC v2"}）${if (compatOf(netG!!) != null) " 兼容模式" else ""}")
         if (emb == 256 && hubert?.outputNames?.contains("feat9") == false) {   // 基础模型可能刚更新过：重载一次再判断
             runCatching { hubert?.close() }; hubert = null
-            o = opts(featThreads); curTh = featThreads; hubert = load("HuBERT", ModelStore.HUBERT); o = opts(synThreads); curTh = synThreads
+            o = opts(effF); curTh = effF; hubert = load("HuBERT", ModelStore.HUBERT); o = opts(effS); curTh = effS
         }
         checkHubert()
         if (hubWant && !hubertNpu) runCatching { featMs = tryNpuHubert(featMs) }.onFailure { L.e("live NPU HuBERT 失败，留在 CPU", it) }
@@ -497,13 +509,13 @@ class LiveRvc(private val open0: (String) -> Any?) {
             try {
                 val o = OrtSession.SessionOptions().apply {
                     setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
-                    setIntraOpNumThreads(synThreads); setInterOpNumThreads(1)
+                    setIntraOpNumThreads(effS); setInterOpNumThreads(1)
                 }
                 var best: Pair<String, OrtSession>? = null; var bestLen = Int.MAX_VALUE
                 for (n in others) {
                     val f = open(n) ?: continue
                     val t = System.nanoTime()
-                    val sess = runCatching { when (f) { is File -> OrtLoad.create(env, f) { OrtSession.SessionOptions().apply { setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT); setIntraOpNumThreads(synThreads); setInterOpNumThreads(1) } }; else -> env.createSession(f.toString(), o) } }
+                    val sess = runCatching { when (f) { is File -> OrtLoad.create(env, f) { OrtSession.SessionOptions().apply { setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT); setIntraOpNumThreads(effS); setInterOpNumThreads(1) } }; else -> env.createSession(f.toString(), o) } }
                         .getOrElse { L.e("live 加载 $n 失败", it); continue }
                     val len = runCatching { synExec.submit(java.util.concurrent.Callable { lenOf(sess) }).get() }.getOrElse { L.e("live 读 $n 块长失败", it); -1 }
                     L.i("live 候选 $n 块长 ${(len - XF_FR) * 10}ms（加载 ${(System.nanoTime() - t) / 1_000_000}ms）")
@@ -947,11 +959,11 @@ class LiveRvc(private val open0: (String) -> Any?) {
         if (f !is File) return null
         if (compatOf(owner) != null) return null
         if (!NeonVocoder.available()) { L.w("live 声码器：原生库不可用（${NeonVocoder.loadError}）"); return null }
-        val sp = NeonVocoder.prepare(env, f, synThreads) ?: return null
+        val sp = NeonVocoder.prepare(env, f, effS) ?: return null
         val pre = OrtLoad.create(env, sp.pre) {
             OrtSession.SessionOptions().apply {
                 setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
-                setIntraOpNumThreads(synThreads); setInterOpNumThreads(1)
+                setIntraOpNumThreads(effS); setInterOpNumThreads(1)
                 // 前半图跑完马上轮到声码器，ORT 线程别空转抢核
                 addConfigEntry("session.intra_op.allow_spinning", "0")
             }
@@ -965,7 +977,7 @@ class LiveRvc(private val open0: (String) -> Any?) {
         if (!NeonVocoder.fp16Supported()) { L.w("live 声码器：CPU 不支持 ARMv8.2 fp16（asimdhp），不用 NEON"); return null }
         val t = System.nanoTime()
         val (sp, pre) = splitFor(f, owner) ?: return null
-        val dec = try { NeonVocoder.open(sp.blob, synThreads, true) } catch (e: Throwable) { pre.close(); throw e }
+        val dec = try { NeonVocoder.open(sp.blob, effS, true) } catch (e: Throwable) { pre.close(); throw e }
         L.i("live NEON 声码器就绪 ${f.name}：${dec.desc}，用时 ${(System.nanoTime() - t) / 1_000_000}ms")
         return VocPath(owner, pre, sp, dec.desc, "NEON", { z, zl, h, c -> dec.run(z, zl, h, c) }, { dec.close() })
     }
@@ -984,7 +996,7 @@ class LiveRvc(private val open0: (String) -> Any?) {
             var ref: NeonVocoder.Dec? = null
             val dec = try {
                 QnnVocoder.open(env, dir, sp, zl, Triple(z, har, cond)) { a, b, c, d ->
-                    (ref ?: NeonVocoder.open(sp.blob, synThreads, false).also { ref = it }).run(a, b, c, d)
+                    (ref ?: NeonVocoder.open(sp.blob, effS, false).also { ref = it }).run(a, b, c, d)
                 }
             } finally { runCatching { ref?.close() } }
             if (dec == null) { pre.close(); return null }

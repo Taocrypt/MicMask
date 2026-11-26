@@ -65,6 +65,11 @@ object ModelRepo {
             val br = m.groupValues[3].ifEmpty { "main" }
             return "https://${m.groupValues[1]}/${m.groupValues[2]}/-/git/raw/$br/models.json"
         }
+        // https://modelscope.cn/models/owner/repo[/files|/summary|/tree/branch] → resolve（魔搭国内站/国际站）
+        Regex("^(?:https?://)?(?:www\\.)?(modelscope\\.(?:cn|ai))/models/([^/]+)/([^/]+?)(?:/(?:files|summary|feedback))?(?:/tree/([^/]+))?$").matchEntire(s)?.let { m ->
+            val br = m.groupValues[4].ifEmpty { "master" }
+            return "https://${m.groupValues[1]}/models/${m.groupValues[2]}/${m.groupValues[3]}/resolve/$br/models.json"
+        }
         // https://github.com/owner/repo[/tree/branch] → raw
         Regex("^https?://github\\.com/([^/]+)/([^/]+?)(?:\\.git)?(?:/tree/([^/]+))?$").matchEntire(s)?.let { m ->
             val br = m.groupValues[3].ifEmpty { "main" }

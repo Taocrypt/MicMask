@@ -611,7 +611,9 @@ object MicInjector {
     @Volatile var tunePl = false
     @Volatile var tuneDnIn = false
     @Volatile var tuneDnOut = false
-    private fun writeTune(d: android.os.Parcel) { d.writeInt(tuneTier); d.writeFloat(tuneGate); d.writeInt(tuneFeat); d.writeInt(tuneSyn); d.writeInt(if (tunePin) 1 else 0); d.writeFloat(tuneIdx); d.writeInt(tuneVoc); d.writeFloat(tuneRms); d.writeFloat(tuneFormant); d.writeInt(if (tunePl) 1 else 0); d.writeInt(if (tuneDnIn) 1 else 0); d.writeInt(if (tuneDnOut) 1 else 0) }
+    /** 输入麦克风 0=自动（有耳机麦用耳机麦）1=机身麦 2=耳机麦（USB/有线） */
+    @Volatile var tuneMic = 0
+    private fun writeTune(d: android.os.Parcel) { d.writeInt(tuneTier); d.writeFloat(tuneGate); d.writeInt(tuneFeat); d.writeInt(tuneSyn); d.writeInt(if (tunePin) 1 else 0); d.writeFloat(tuneIdx); d.writeInt(tuneVoc); d.writeFloat(tuneRms); d.writeFloat(tuneFormant); d.writeInt(if (tunePl) 1 else 0); d.writeInt(if (tuneDnIn) 1 else 0); d.writeInt(if (tuneDnOut) 1 else 0); d.writeInt(tuneMic) }
     fun pushTune() {
         if (!liveOn) return
         runCatching { call(InjectorService.TX_LIVE_TUNE, { d -> writeTune(d) }) { } }

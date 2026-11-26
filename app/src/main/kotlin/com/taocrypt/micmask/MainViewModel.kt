@@ -498,6 +498,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (uris.isEmpty() || _state.value.importing) return
         val known0 = (ModelStore.required + ModelStore.optional).toSet()
         val known = object : AbstractSet<String>() { override val size get() = known0.size; override fun iterator() = known0.iterator(); override fun contains(element: String) = element in known0 || ModelStore.VOICE_RE.matches(element) }
+        // 浏览器/网盘重复下载会把文件改名成「hubert_dyn8 (1).onnx」「rmvpe_q8-1.onnx」等，按基础文件名认回来
+        val dupSuffix = Regex("""(?:\s*[（(]\d{1,3}[)）]|[-_ ]\d{1,3}|\s+copy)$""", RegexOption.IGNORE_CASE)
+        fun canon(name: String): String {
+            if (name in known) return name
+            val ext = name.substringAfterLast('.', "")
+            val stem = name.substringBeforeLast('.')
+            val cand = (stem.replace(dupSuffix, "") + if (ext.isEmpty()) "" else ".$ext").trim()
+            return known0.firstOrNull { it.equals(cand, ignoreCase = true) || it.equals(name, ignoreCase = true) }
+                ?.also { if (it != name) L.i("导入：$name 按 $it 识别") } ?: name
+        }
         viewModelScope.launch {
             _state.value = _state.value.copy(importing = true, importDone = 0,
                 importTotal = known.size, importName = tr("正在读取…"))
@@ -520,13 +530,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     for (u in uris) {
                         val disp = queryName(u) ?: u.lastPathSegment.orEmpty()
-                        val base = disp.substringAfterLast('/')
+                        val base = canon(disp.substringAfterLast('/'))
                         if (base.lowercase().endsWith(".zip")) {
                             ctx.contentResolver.openInputStream(u)!!.use { raw ->
                                 java.util.zip.ZipInputStream(raw.buffered(1 shl 20)).use { z ->
                                     while (true) {
                                         val e = z.nextEntry ?: break
-                                        val en = e.name.substringAfterLast('/')
+                                        val en = canon(e.name.substringAfterLast('/'))
                                         if (!e.isDirectory && en in known) save(en, z)
                                     }
                                 }
@@ -1124,6 +1134,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         inj.tuneIdx = aiIndex()
         inj.tuneVoc = aiTuneVoc()
         inj.tuneRms = aiRms(); inj.tuneFormant = aiFormant(); inj.tunePl = aiPhaseLock(); inj.tuneDnIn = aiDnIn(); inj.tuneDnOut = aiDnOut()
+        inj.tuneMic = aiMic()
     }
     fun aiRms(): Float = prefs.getFloat("ai_rms", 0f)
     fun aiFormant(): Float = prefs.getFloat("ai_formant", 0f)
@@ -1202,6 +1213,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun commitAiTune() {
         if (_state.value.liveOn && _state.value.liveMode == 0) Thread { com.taocrypt.micmask.inject.MicInjector.pushTune() }.start()
     }
+    /** 输入麦克风 0=自动 1=机身麦 2=耳机麦；下次开始变声生效 */
+    fun aiMic(): Int = prefs.getInt("ai_mic", 0)
+    fun setAiMic(v: Int) {
+        val n = v.coerceIn(0, 2)
+        prefs.edit().putInt("ai_mic", n).apply()
+        com.taocrypt.micmask.inject.MicInjector.tuneMic = n
+        L.i("输入麦克风 → ${listOf("自动", "机身麦", "耳机麦")[n]}")
+    }
     fun aiPin(): Boolean = prefs.getBoolean("ai_pin", true)
     fun setAiPin(on: Boolean) {
         prefs.edit().putBoolean("ai_pin", on).apply()
@@ -1212,7 +1231,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val aiResetGen = androidx.compose.runtime.mutableIntStateOf(0)
     fun resetAiTune() {
         setAiTune(0, LiveRvc.GATE_DB, 3, 4); setAiIndex(0.3f); setAiVocoder(0); setAiHubNpu(false)
-        setAiRms(0f); setAiFormant(0f); setAiPin(true)
+        setAiRms(0f); setAiFormant(0f); setAiPin(true); setAiMic(0)
         prefs.edit().putBoolean("ai_phase_lock", false).putBoolean("ai_dn_in", false).putBoolean("ai_dn_out", false).apply()
         com.taocrypt.micmask.inject.MicInjector.tunePl = false; com.taocrypt.micmask.inject.MicInjector.tuneDnIn = false; com.taocrypt.micmask.inject.MicInjector.tuneDnOut = false
         commitAiTune(); aiResetGen.intValue++

@@ -726,17 +726,13 @@ private fun AiAdvanced(vm: MainViewModel, st: UiState) {
         onValueChangeFinished = { vm.commitAiTune() })
     Text(tr("让变声后的音量起伏跟着原声走，轻声说话也轻；越高越贴原声。默认关"), fontSize = 12.sp, color = Summary)
     var fmt by remember(vm.aiResetGen.intValue) { mutableStateOf(vm.aiFormant()) }
-    // 精细调节：滑块按 0.1 取整，右侧 −/+ 每次微调 0.1
+    // 滑块按 0.1 取整
     fun setFmt(v: Float) { fmt = ((v * 10).roundToInt() / 10f).coerceIn(-6f, 6f); vm.setAiFormant(fmt) }
-    Row(Modifier.padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically) { Text(tr("共振峰"), Modifier.weight(1f), fontSize = 14.sp)
-        val nudge = Modifier.size(30.dp).clip(RoundedCornerShape(8.dp)).background(MiuixTheme.colorScheme.secondaryContainer)
-        Box(nudge.clickable { setFmt(fmt - 0.1f); vm.commitAiTune() }, contentAlignment = Alignment.Center) { Text("−", color = MiuixTheme.colorScheme.onSecondaryContainer) }
-        Text(if (kotlin.math.abs(fmt) < 0.05f) tr("关") else "%+.1f".format(fmt), Modifier.width(52.dp), color = Summary, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-        Box(nudge.clickable { setFmt(fmt + 0.1f); vm.commitAiTune() }, contentAlignment = Alignment.Center) { Text("+", color = MiuixTheme.colorScheme.onSecondaryContainer) }
-    }
+    Row(Modifier.padding(top = 14.dp)) { Text(tr("共振峰"), Modifier.weight(1f), fontSize = 14.sp)
+        Text(if (kotlin.math.abs(fmt) < 0.05f) tr("关") else "%+.1f".format(fmt), color = Summary) }
     Slider(value = fmt, onValueChange = { setFmt(it) }, valueRange = -6f..6f,
         onValueChangeFinished = { vm.commitAiTune() })
-    Text(tr("音高不变，只改声音的厚薄：往右更细更亮，往左更厚更沉。按 −/+ 每次微调 0.1。实验功能，默认 0"), fontSize = 12.sp, color = Summary)
+    Text(tr("音高不变，只改声音的厚薄：往右更细更亮，往左更厚更沉。实验功能，默认 0"), fontSize = 12.sp, color = Summary)
     var pl by remember(vm.aiResetGen.intValue) { mutableStateOf(vm.aiPhaseLock()) }
     SwitchPreference(checked = pl, onCheckedChange = { pl = it; vm.setAiPhaseLock(it) }, title = tr("相位锁定"),
         summary = tr("让每段合成的声音首尾相位接上，减轻块与块之间的轻微「嗒嗒」声。实验功能，切换会重新加载模型"))
@@ -1542,6 +1538,10 @@ private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (St
                 enabled = !st.liveOn, onSelectedIndexChange = { auto = it == 0; vm.setScopeAuto(auto) })
             if (!auto) ArrowPreference(title = tr("目标应用"), summary = if (st.liveOn) tr("变声中不可修改，先关闭变声") else if (n == 0) tr("未选择，只做本机试听") else tr("已选 {0} 个应用", n),
                 enabled = !st.liveOn, onClick = { if (st.liveOn) vm.toast(tr("请先关闭变声，再修改目标应用")) else open("whitelist") })
+            var mic by remember(vm.aiResetGen.intValue) { mutableIntStateOf(vm.aiMic()) }
+            WindowDropdownPreference(items = listOf(tr("自动"), tr("机身麦"), tr("耳机麦")), selectedIndex = mic, title = tr("输入通道"),
+                summary = when (mic) { 1 -> tr("始终使用机身麦克风"); 2 -> tr("使用耳机麦克风，未连接时用机身"); else -> tr("连接耳机时自动使用耳机麦克风") },
+                onSelectedIndexChange = { mic = it; vm.setAiMic(it) })
             SwitchPreference(checked = st.liveAec, onCheckedChange = { if (it != st.liveAec) vm.toggleLiveAecAnywhere() }, title = tr("降噪模式"),
                 summary = (if (st.liveAec) tr("已开：回声消除 + 降噪") else tr("已关：原始麦克风，音质优先")) + if (st.liveOn) tr("（切换会重启变声）") else "")
             SwitchPreference(checked = st.liveMonitor, onCheckedChange = { vm.setLiveMonitor(it) }, title = tr("实时耳返"),

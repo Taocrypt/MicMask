@@ -766,6 +766,18 @@ class InjectorService : Binder {
     @Volatile private var tunePl = false
     @Volatile private var tuneDnIn = false
     @Volatile private var tuneDnOut = false
+    /** 输入麦克风 0=自动 1=机身麦 2=耳机麦（旧版 App 不传 → 自动）；开始变声时生效 */
+    @Volatile private var tuneMic = 0
+    /** 当前录音指定的输入设备 id（-1 = 没指定） */
+    @Volatile private var curMicId = -1
+    /** 按「输入麦克风」设置选设备：1=机身麦 2=耳机麦（没插就退回机身麦）0=自动，有 USB/有线耳机麦优先 */
+    private fun pickMic(warn: Boolean): android.media.AudioDeviceInfo? {
+        val mics = am?.getDevices(android.media.AudioManager.GET_DEVICES_INPUTS) ?: return null
+        val head = mics.firstOrNull { it.type == android.media.AudioDeviceInfo.TYPE_USB_HEADSET || it.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET }
+        val builtin = mics.firstOrNull { it.type == android.media.AudioDeviceInfo.TYPE_BUILTIN_MIC }
+        if (warn && tuneMic == 2 && head == null) slog('W', "输入麦克风选了耳机麦，但没找到 USB/有线耳机麦 → 用机身麦")
+        return when (tuneMic) { 1 -> builtin ?: head; else -> head ?: builtin }
+    }
     /** 读高级参数并套到现有引擎；返回是否需要重载 */
     private fun readTune(d: android.os.Parcel): Boolean {
         tuneTier = d.readInt(); tuneGate = d.readFloat(); tuneFeat = d.readInt(); tuneSyn = d.readInt()
@@ -777,6 +789,7 @@ class InjectorService : Binder {
         if (d.dataAvail() >= 4) tunePl = d.readInt() != 0
         if (d.dataAvail() >= 4) tuneDnIn = d.readInt() != 0
         if (d.dataAvail() >= 4) tuneDnOut = d.readInt() != 0
+        if (d.dataAvail() >= 4) tuneMic = d.readInt().coerceIn(0, 2)
         val plChanged = engine?.let { it.phaseLock != tunePl } ?: false
         engine?.let { it.rmsFollow = tuneRms; it.formant = tuneFormant; it.phaseLock = tunePl; it.denoiseIn = tuneDnIn; it.denoiseOut = tuneDnOut }
         slog('I', "音色参数：响度跟随=$tuneRms 共振峰=$tuneFormant 相位锁定=$tunePl 输入降噪=$tuneDnIn 输出降噪=$tuneDnOut")
@@ -984,9 +997,9 @@ class InjectorService : Binder {
                 slog('I', "LIVE 回声消除 可用=${android.media.audiofx.AcousticEchoCanceler.isAvailable()} 已开=${aec?.enabled} 系统降噪效果 已开=${ns?.enabled}（录音源=$liveSource）")
                 // 指定真麦：小米 A13 实测自己的录音被路由到注入通道（设备 25 remote submix），录到的是静音，还和目标应用抢通道
                 runCatching {
-                    val mics = (am ?: return@runCatching).getDevices(android.media.AudioManager.GET_DEVICES_INPUTS)
-                    val want = mics.firstOrNull { it.type == android.media.AudioDeviceInfo.TYPE_USB_HEADSET || it.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET }
-                        ?: mics.firstOrNull { it.type == android.media.AudioDeviceInfo.TYPE_BUILTIN_MIC }
+                    slog('I', "输入麦克风选择=${listOf("自动", "机身麦", "耳机麦").getOrElse(tuneMic) { "?" }}")
+                    val want = pickMic(true)
+                    curMicId = want?.id ?: -1
                     if (want != null) slog('I', "LIVE 指定输入设备 ${want.type}/${want.productName} → ${r.setPreferredDevice(want)}")
                 }
                 r.startRecording()
@@ -1035,9 +1048,22 @@ class InjectorService : Binder {
             micHint = ""; recRebuilds = 0
             // 看门狗：0.6 s 读不到麦克风数据（流失效、切路由、音频服务重启）就停掉当前录音，让主循环重建
             watchdog = Thread({
+                var micChk = 0
                 while (running) {
                     runCatching { Thread.sleep(200) }
                     val r = curRec ?: continue
+                    // 中途插拔耳机：每 1 s 按「输入麦克风」设置重选一次，变了就改录音的首选设备（不重建录音）
+                    if (++micChk >= 5) {
+                        micChk = 0
+                        runCatching {
+                            val want = pickMic(false)
+                            val id = want?.id ?: -1
+                            if (id != curMicId && want != null) {
+                                curMicId = id
+                                slog('I', "输入设备变化 → ${want.type}/${want.productName} ${r.setPreferredDevice(want)}")
+                            }
+                        }
+                    }
                     if (System.nanoTime() - lastReadNs > 600_000_000L) {
                         micHint = "没有收到麦克风数据，正在重建录音"
                         slog('W', "0.6 s 没有麦克风数据，停止当前录音以重建")
