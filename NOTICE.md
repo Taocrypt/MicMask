@@ -40,6 +40,19 @@ mobile-rvc 的解码器结构又移植自 RVC（mobile-rvc 的 THIRD_PARTY_NOTIC
 >
 > （许可条款与上文 MIT 相同）
 
+### TorchGate / noisereduce（MIT）
+
+输入/输出降噪（`app/src/main/kotlin/com/taocrypt/micmask/TorchGate.kt`，Kotlin 重写并改为噪声谱持续跟踪）参考了 RVC WebUI 中的
+[TorchGate](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI/tree/main/tools/torchgate)（作者 Asaf Zorea，随 RVC 以 MIT 许可发布，声明见上文 `notices/RVC-MIT.txt`），其谱门限算法源自
+[timsainb/noisereduce](https://github.com/timsainb/noisereduce)。全文见 `notices/noisereduce-MIT.txt`：
+
+> noisereduce — https://github.com/timsainb/noisereduce
+> MIT License, Copyright (c) 2019, Tim Sainburg
+>
+> （许可条款与上文 MIT 相同）
+
+感谢以上作者。
+
 | 组件 | 许可 |
 |---|---|
 | AndroidX / Jetpack Compose | Apache-2.0 |
@@ -47,6 +60,7 @@ mobile-rvc 的解码器结构又移植自 RVC（mobile-rvc 的 THIRD_PARTY_NOTIC
 | Kyant0/AndroidLiquidGlass（miuix 示例中液态玻璃效果的来源） | Apache-2.0 |
 | Shizuku API / Provider | Apache-2.0 |
 | ONNX Runtime | MIT |
+| TorchGate（RVC WebUI，Asaf Zorea）/ noisereduce：输入/输出谱门限降噪思路（TorchGate.kt，Kotlin 重写） | MIT（见上文） |
 | mobile-rvc：原生 NEON fp16 声码器内核（app/src/main/cpp/vocoder） | MIT（见上文） |
 | mobile-rvc：AI 实时「响度跟随」「共振峰」「相位锁定」的思路与默认值（LiveRvc.kt、PhaseLock.kt，Kotlin 重写，共振峰改为 PSOLA） | MIT（见上文） |
 | RVC WebUI：合成器 / 声码器结构（经 mobile-rvc） | MIT（见 notices/RVC-MIT.txt） |
