@@ -997,12 +997,34 @@ class InjectorService : Binder {
             a11yFailed = false; a11yPrevSrc = -1; a11yIdle = 0
             // alpha.6：非 vivo 机型一开始就登记无障碍 uid + 录音源 6。等目标应用被静音再切要 0.2–1.3 s，
             // 微信短语音根本来不及（M332BF 日志）；realme test9、小米 2604FRK1EC 上源 6 实测可用。vivo 上一开始就登记会录到静音，仍走延迟切换
+            // alpha.7：按场景选——外放且正在通话（mode=IN_COMMUNICATION/IN_CALL、没有耳机）时源 6 没有回声消除，容易啸叫，
+            // 这时保留原录音源（多为带 AEC 的通话源 7），被静音了再走原来的延迟切换；通话结束或插上耳机后再换回源 6
             val isVivo = Build.MANUFACTURER.equals("vivo", true) || Build.BRAND.equals("vivo", true) || Build.BRAND.equals("iqoo", true)
-            if (!isVivo && Build.VERSION.SDK_INT >= 29 && liveSource != 10 && !(scopeAll && autoNoExclude) && a11yBoost(true)) {
+            val preOk = !isVivo && Build.VERSION.SDK_INT >= 29 && liveSource != 10 && !(scopeAll && autoNoExclude)
+            fun headsetOut(): Boolean = runCatching {
+                val t = setOf(android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET, android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+                    android.media.AudioDeviceInfo.TYPE_USB_HEADSET, android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+                    android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, 26 /* TYPE_BLE_HEADSET（API 31） */)
+                (am ?: return@runCatching false).getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS).any { it.type in t }
+            }.getOrDefault(false)
+            fun echoRisk(): Boolean = runCatching {
+                val m = am?.mode
+                (m == android.media.AudioManager.MODE_IN_COMMUNICATION || m == android.media.AudioManager.MODE_IN_CALL) && !headsetOut()
+            }.getOrDefault(false)
+            var preOn = false; var preRevoked = false; var riskSec = 0; var safeSec = 0
+            /** 开局（或通话结束后）改无障碍录音 + 源 6，不重建录音（调用方负责） */
+            fun preEnable(why: String): Boolean {
+                if (!a11yBoost(true)) return false
                 a11yPrevSrc = liveSource
-                slog('I', "开始即用无障碍录音（非 vivo）：录音源 $liveSource → 6")
-                liveSource = 6; a11yChkSec = -1
+                slog('I', "$why：录音源 $liveSource → 6（无障碍录音）")
+                liveSource = 6; a11yChkSec = -1; preOn = true; preRevoked = false
+                a11yThread?.interrupt()
                 a11yThread = Thread({ try { while (true) { Thread.sleep(3000); a11yBoost(true, quiet = true) } } catch (_: InterruptedException) {} }, "a11y-keep").apply { isDaemon = true; start() }
+                return true
+            }
+            if (preOk) {
+                if (echoRisk()) { preRevoked = true; slog('I', "外放且正在通话，保留录音源 $liveSource（回声消除），被静音时再改无障碍录音") }
+                else preEnable("开始即用无障碍录音（非 vivo，${if (headsetOut()) "戴耳机" else "未在通话"}）")
             }
             rec = openRec() ?: return
             curRec = rec
@@ -1120,6 +1142,22 @@ class InjectorService : Binder {
                     }.getOrDefault(false)
                     // 我们没被静音、目标应用却被静音 2 s → 改无障碍录音；改完 3 s 输入比改前底噪低 15 dB 以上 → 判定无效，退回
                     lvlHist.addLast(liveLevelDb); while (lvlHist.size > 3) lvlHist.removeFirst()
+                    if (preOk && (preOn || preRevoked)) {
+                        val risk = echoRisk()
+                        if (risk) { riskSec++; safeSec = 0 } else { safeSec++; riskSec = 0 }
+                        if (preOn && a11yOn && riskSec >= 2 && a11yPrevSrc >= 0) {
+                            slog('W', "外放通话开始，退回录音源 $a11yPrevSrc（回声消除），被静音时再改无障碍录音")
+                            a11yThread?.interrupt(); a11yThread = null; a11yBoost(false)
+                            liveSource = a11yPrevSrc; preOn = false; preRevoked = true; a11yFailed = false; a11yChkSec = -1; riskSec = 0
+                            if (!rebuildRec("外放通话退回回声消除")) return
+                            continue
+                        }
+                        if (preRevoked && !a11yOn && safeSec >= 3) {
+                            safeSec = 0
+                            if (preEnable(if (headsetOut()) "已戴耳机" else "通话已结束")) { if (!rebuildRec("改回无障碍录音")) return; continue }
+                            else preRevoked = false
+                        }
+                    }
                     // alpha.6：目标应用的静音状态一变就记一行（以前只在录音数变化时打印，看不出切换后微信是否解除静音）
                     val ts = targetSilenced()
                     if (lastTgtSil != null && ts != lastTgtSil) slog('I', "目标应用静音 ${lastTgtSil} → $ts ${recDetail()}")

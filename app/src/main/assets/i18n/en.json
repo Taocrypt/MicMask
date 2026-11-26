@@ -1110,5 +1110,7 @@
   "提交 {0} 次": "{0} commits",
   "低于它的声音不送进模型（省电、去底噪）。越高越容易把说话当成静音：字被吞就调低，环境吵、有杂音才调高。默认 -60": "Sound below this isn't sent to the model (saves power, removes hiss). Higher values treat more speech as silence: lower it if words get cut off; raise it only in noisy places. Default −60",
   "麦克风只录到静音，正在换录音方式": "The mic is only picking up silence; switching recording method",
-  "麦克风只录到静音：请检查系统的麦克风权限/隐私开关，或在设置里换录音方式": "The mic is only picking up silence: check the system mic permission/privacy toggle, or change the recording method in Settings"
+  "麦克风只录到静音：请检查系统的麦克风权限/隐私开关，或在设置里换录音方式": "The mic is only picking up silence: check the system mic permission/privacy toggle, or change the recording method in Settings",
+  "TTS 模型": "TTS models",
+  "模型下载": "Model downloads"
 }

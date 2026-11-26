@@ -1639,10 +1639,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val man = repoManifest ?: return
         if (_state.value.dlId != null || com.taocrypt.micmask.inject.MicInjector.liveOn) return
         _state.value = _state.value.copy(dlId = m.id, dlProgress = 0f, dlName = "")
+        com.taocrypt.micmask.repo.DownloadService.start(ctx, m.name.ifBlank { m.id })
         viewModelScope.launch {
-            val r = kotlinx.coroutines.withContext(Dispatchers.IO) {
-                runCatching { com.taocrypt.micmask.repo.ModelRepo.download(ctx, man, m) { p, n -> _state.value = _state.value.copy(dlProgress = p, dlName = n) } }
-            }
+            val r = try { kotlinx.coroutines.withContext(Dispatchers.IO) {
+                runCatching { com.taocrypt.micmask.repo.ModelRepo.download(ctx, man, m) { p, n -> _state.value = _state.value.copy(dlProgress = p, dlName = n); com.taocrypt.micmask.repo.DownloadService.progress(ctx, p, n) } }
+            } } finally { com.taocrypt.micmask.repo.DownloadService.stop(ctx) }
             _state.value = _state.value.copy(dlId = null, dlName = "",
                 toast = r.fold({ tr("已下载：{0}", m.name) }, { L.e("模型下载失败", it); tr("下载失败：{0}", it.message) }))
             if (r.isSuccess && m.name.isNotBlank()) ModelStore.voices(ctx).firstOrNull { it == m.id }?.let { ModelStore.setVoiceAlias(ctx, it, m.name) }
@@ -1656,10 +1657,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val man = repoManifest
         if (man == null) { refreshRepo(); _state.value = _state.value.copy(toast = tr("正在获取仓库清单，稍后再点一次")); return }
         _state.value = _state.value.copy(dlId = "file", dlProgress = 0f, dlName = "")
+        com.taocrypt.micmask.repo.DownloadService.start(ctx, tr("句级模型"))
         viewModelScope.launch {
-            val r = kotlinx.coroutines.withContext(Dispatchers.IO) {
-                runCatching { com.taocrypt.micmask.repo.ModelRepo.downloadFileModel(ctx, man) { p, n -> _state.value = _state.value.copy(dlProgress = p, dlName = n) } }
-            }
+            val r = try { kotlinx.coroutines.withContext(Dispatchers.IO) {
+                runCatching { com.taocrypt.micmask.repo.ModelRepo.downloadFileModel(ctx, man) { p, n -> _state.value = _state.value.copy(dlProgress = p, dlName = n); com.taocrypt.micmask.repo.DownloadService.progress(ctx, p, n) } }
+            } } finally { com.taocrypt.micmask.repo.DownloadService.stop(ctx) }
             _state.value = _state.value.copy(dlId = null, dlName = "",
                 toast = r.fold({ tr("句级模型已就绪") }, { L.e("句级模型下载失败", it); tr("下载失败：{0}", it.message) }))
             refreshModels()
@@ -1672,10 +1674,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val man = repoManifest
         if (man == null) { refreshRepo(); _state.value = _state.value.copy(toast = tr("正在获取仓库清单，稍后再点一次")); return }
         _state.value = _state.value.copy(dlId = "tts", dlProgress = 0f, dlName = "")
+        com.taocrypt.micmask.repo.DownloadService.start(ctx, tr("TTS 模型"))
         viewModelScope.launch {
-            val r = kotlinx.coroutines.withContext(Dispatchers.IO) {
-                runCatching { com.taocrypt.micmask.repo.ModelRepo.downloadTts(man, TtsAssetStore.dir(ctx)) { p, n -> _state.value = _state.value.copy(dlProgress = p, dlName = n) } }
-            }
+            val r = try { kotlinx.coroutines.withContext(Dispatchers.IO) {
+                runCatching { com.taocrypt.micmask.repo.ModelRepo.downloadTts(man, TtsAssetStore.dir(ctx)) { p, n -> _state.value = _state.value.copy(dlProgress = p, dlName = n); com.taocrypt.micmask.repo.DownloadService.progress(ctx, p, n) } }
+            } } finally { com.taocrypt.micmask.repo.DownloadService.stop(ctx) }
             _state.value = _state.value.copy(dlId = null, dlName = "",
                 toast = r.fold({ tr("TTS 模型已就绪") }, { L.e("TTS 下载失败", it); tr("TTS 下载失败：{0}", it.message) }))
             refreshTtsModels()

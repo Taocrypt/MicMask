@@ -11,6 +11,7 @@
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING" />
     <!-- 悬浮小窗：让「一键播放待发语音」浮在 QQ 上面，不用来回切界面 -->
@@ -79,6 +80,11 @@
             android:foregroundServiceType="dataSync" />
         <service
             android:name=".update.UpdateService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        <!-- 模型/TTS 下载：前台服务保证切后台不断（alpha.7） -->
+        <service
+            android:name=".repo.DownloadService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
