@@ -517,7 +517,7 @@ a.qq:hover { text-decoration: underline; }
 .dm-ct .dm-wrap { display: flex; flex-wrap: wrap; gap: 10px; }
 /* sponsor danmaku */
 .dm { display: grid; gap: 10px; padding: 4px 0; }
-.dm-lane { position: relative; height: 52px; overflow: hidden; -webkit-mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent); mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent); }
+.dm-lane { position: relative; height: 64px; overflow: hidden; -webkit-mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent); mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent); }
 .dm-track { position: absolute; left: 0; top: 0; height: 100%; display: flex; align-items: center; gap: 12px; width: max-content; animation: dm-run var(--dur, 30s) linear infinite; will-change: transform; }
 .dm-lane:hover .dm-track, .dm-lane.is-held .dm-track { animation-play-state: paused; }
 .dm-lane.is-fast .dm-track { animation-duration: calc(var(--dur, 30s) / 5); }
@@ -529,6 +529,18 @@ a.qq:hover { text-decoration: underline; }
   box-shadow: inset 0 1px 0 rgba(255,255,255,.65), inset 0 -1px 0 rgba(255,255,255,.18), inset 0 0 0 1px rgba(255,255,255,.28), 0 4px 14px rgba(0,0,0,.08);
   border: 1.5px solid transparent; cursor: default; transition: transform .2s, border-color .2s; }
 .dm-chip:hover { transform: scale(1.03); border-color: var(--tc); }
+/* 贡献者：圆角方形 + 品牌渐变描边 + 「贡献者」标签，和按档位着色的赞助者胶囊区分开 */
+.dm-chip.is-ct { --tc: var(--text-2); border-radius: 12px;
+  background: linear-gradient(180deg, rgba(255,255,255,.5), rgba(255,255,255,.2)) padding-box, linear-gradient(color-mix(in srgb, var(--surface) 82%, transparent), color-mix(in srgb, var(--surface) 82%, transparent)) padding-box,
+    conic-gradient(from 200deg, var(--g1), var(--g2), var(--g3), var(--g4), var(--g5), var(--g6), var(--g1)) border-box;
+  border: 1.5px solid transparent; }
+.dm-chip.is-ct:hover { border-color: transparent; }
+@media (prefers-color-scheme: dark) {
+  .dm-chip.is-ct { background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.04)) padding-box, linear-gradient(color-mix(in srgb, var(--surface) 88%, transparent), color-mix(in srgb, var(--surface) 88%, transparent)) padding-box,
+    conic-gradient(from 200deg, var(--g1), var(--g2), var(--g3), var(--g4), var(--g5), var(--g6), var(--g1)) border-box; }
+}
+.dm-chip.is-ct .av { border-radius: 9px; }
+.dm-chip .ct-tag { font-style: normal; font-size: 11px; font-weight: 600; line-height: 1; padding: 3px 6px; border-radius: 6px; background: var(--ink); color: var(--on-ink); }
 @media (prefers-color-scheme: dark) {
   .dm-chip { background: linear-gradient(180deg, rgba(255,255,255,.14), rgba(255,255,255,.03) 55%, rgba(255,255,255,.07)), color-mix(in srgb, var(--tc) 22%, transparent);
     box-shadow: inset 0 1px 0 rgba(255,255,255,.22), inset 0 0 0 1px rgba(255,255,255,.1), 0 4px 14px rgba(0,0,0,.3); }
@@ -549,7 +561,9 @@ a.qq:hover { text-decoration: underline; }
 /* 双行：第一行名字、金额、日期；第二行留言（有留言才显示），过长省略 */
 .dm-chip .tx { display: flex; flex-direction: column; justify-content: center; gap: 1px; line-height: 1.25; min-width: 0; }
 .dm-chip .l1 { display: flex; align-items: baseline; gap: 6px; }
-.dm-chip .l2 { max-width: 20em; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); font-size: 12px; }
+/* 留言最多两行，超出才省略 */
+.dm-chip .l2 { max-width: 15em; white-space: normal; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; color: var(--text-2); font-size: 12px; }
+.dm-chip { padding-top: 4px; padding-bottom: 4px; }
 .dm-sum { color: var(--text-2); font-size: 14px; margin: 0 0 12px; }
 .dm-all { margin-top: 14px; }
 .dm-all summary { cursor: pointer; color: var(--text-2); font-size: 14px; }
@@ -1137,13 +1151,13 @@ footer .brand .mark svg { width: 13px; height: 13px; }
           toc: "目录", tocAria: "手册目录", more: "展开全文", less: "收起", shotAlt: "MicMask 截图 {0}",
           noSpon: "还没有赞助者。", first: "成为第一位赞助者", sponFail: "赞助名单暂时无法加载，请稍后再试。",
           anon: "匿名赞助者", expired: "已过期", langAria: "语言 / Language",
-          relFail: "更新日志暂时无法加载，可以到 GitHub 查看。", pre: "测试版", chStable: "正式版", chPre: "测试版", spSum: "{0} 位赞助者 · 累计 {1}，谢谢你们！", spAll: "全部赞助者（当前 {0} 位 · 历史 {1} 位）", noCur: "暂时没有在期的赞助", commits: "提交 {0} 次", ctSum: "{0} 位贡献者，谢谢你们！",
+          relFail: "更新日志暂时无法加载，可以到 GitHub 查看。", pre: "测试版", chStable: "正式版", chPre: "测试版", spSum: "{0} 位赞助者 · 累计 {1}，谢谢你们！", spAll: "全部赞助者（当前 {0} 位 · 历史 {1} 位）", noCur: "暂时没有在期的赞助", commits: "提交 {0} 次", ctTag: "贡献者", ctSum: "{0} 位贡献者，谢谢你们！",
           dlProbe: "正在测速，挑最快的下载线路…", dlGo: "开始下载 {0}", dlFail: "直链暂时连不上，已打开 GitHub 发布页。" },
     en: { manualFail: 'Couldn’t load the manual. You can <a class="link" href="{0}" target="_blank" rel="noopener">read it on GitHub</a> instead.',
           toc: "Contents", tocAria: "Manual contents", more: "Show full manual", less: "Show less", shotAlt: "MicMask screenshot {0}",
           noSpon: "No sponsors yet.", first: "Be the first sponsor", sponFail: "Couldn’t load the sponsor list. Please try again later.",
           anon: "Anonymous sponsor", expired: "Expired", langAria: "Language / 语言",
-          relFail: "Couldn’t load the changelog. You can read it on GitHub.", pre: "Pre-release", chStable: "stable", chPre: "pre-release", spSum: "{0} sponsors · {1} in total. Thank you!", spAll: "All sponsors ({0} current · {1} past)", noCur: "No active sponsorships right now", commits: "{0} commits", ctSum: "{0} contributors, thank you!",
+          relFail: "Couldn’t load the changelog. You can read it on GitHub.", pre: "Pre-release", chStable: "stable", chPre: "pre-release", spSum: "{0} sponsors · {1} in total. Thank you!", spAll: "All sponsors ({0} current · {1} past)", noCur: "No active sponsorships right now", commits: "{0} commits", ctTag: "Contributor", ctSum: "{0} contributors, thank you!",
           dlProbe: "Testing mirrors to pick the fastest download…", dlGo: "Downloading via {0}", dlFail: "Direct download is unreachable right now, so we opened the GitHub release page." }
   };
   var ZH = {}, listeners = [], cur = "zh";
@@ -1544,7 +1558,7 @@ footer .brand .mark svg { width: 13px; height: 13px; }
           if (dup) c.setAttribute("aria-hidden", "true");
           var av = document.createElement("span");
           av.className = "av";
-          av.textContent = s.name.slice(0, 1);
+          av.textContent = Array.from(s.name.replace(/[\s\u3164\u115F\u1160\uFFA0\u200B-\u200D\u2060\uFEFF]+/g, "")).slice(0, 1).join("");
           if (s.avatar && /^https:\/\//.test(s.avatar)) {
             var img = new Image();
             img.alt = ""; img.referrerPolicy = "no-referrer";
@@ -1555,12 +1569,13 @@ footer .brand .mark svg { width: 13px; height: 13px; }
           var tx = document.createElement("span"); tx.className = "tx";
           var l1 = document.createElement("span"); l1.className = "l1";
           var n = document.createElement("b"); n.textContent = s.name; l1.appendChild(n);
-          if (s.contributor) { if (s.commits) { var k = document.createElement("small"); k.textContent = T("commits", s.commits); l1.appendChild(k); } }
+          if (s.contributor) { c.classList.add("is-ct"); var tg = document.createElement("i"); tg.className = "ct-tag"; tg.textContent = T("ctTag"); l1.appendChild(tg);
+            if (s.commits) { var k = document.createElement("small"); k.textContent = T("commits", s.commits); l1.appendChild(k); } }
           else { var m = document.createElement("em"); m.textContent = money(s.amount); l1.appendChild(m); }
           if (s.last && !s.contributor) { var t = document.createElement("small"); t.textContent = mmdd(s.last); l1.appendChild(t); }
           tx.appendChild(l1);
           var rm = String(s.remark || "").trim();
-          if (rm) { var r = document.createElement("span"); r.className = "l2"; r.textContent = rm.length > 40 ? rm.slice(0, 40) + "…" : rm; r.title = rm; tx.appendChild(r); }
+          if (rm) { var r = document.createElement("span"); r.className = "l2"; r.textContent = rm.length > 80 ? rm.slice(0, 80) + "…" : rm; r.title = rm; tx.appendChild(r); }
           c.appendChild(tx);
           return c;
         }
@@ -1709,7 +1724,7 @@ footer .brand .mark svg { width: 13px; height: 13px; }
           ctBox.className = "dm-ct";
           var p = document.createElement("p"); p.className = "dm-sum"; p.textContent = T("ctSum", cs.length); ctBox.appendChild(p);
           var w = document.createElement("div"); w.className = "dm-wrap";
-          cs.forEach(function (c) { var el = chip(c); el.style.setProperty("--tc", "#4C8DF0"); w.appendChild(el); });
+          cs.forEach(function (c) { w.appendChild(chip(c)); });
           ctBox.appendChild(w);
           listHost.appendChild(ctBox);
         }
@@ -1721,10 +1736,9 @@ footer .brand .mark svg { width: 13px; height: 13px; }
           if (!items.length) return;
           var box = document.createElement("div");
           box.className = "dm-fly"; box.setAttribute("aria-hidden", "true");
-          var h = window.innerHeight, rows = Math.max(3, Math.floor((h - 80) / 58)), end = 0;
+          var h = window.innerHeight, rows = Math.max(3, Math.floor((h - 80) / 68)), end = 0;
           items.forEach(function (s, i) {
             var c = chip(s, true);
-            if (s.contributor) c.style.setProperty("--tc", "#4C8DF0");
             var dur = 8 + Math.random() * 4, delay = (i % rows) * 0.25 + Math.floor(i / rows) * 2.2 + Math.random() * 0.4;
             c.style.top = (40 + (i * 7 % rows) * ((h - 80) / rows)) + "px";
             c.style.setProperty("--dur", dur.toFixed(2) + "s");
