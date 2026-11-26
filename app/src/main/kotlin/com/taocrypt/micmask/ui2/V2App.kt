@@ -702,7 +702,7 @@ private fun AiAdvanced(vm: MainViewModel, st: UiState) {
         onValueChangeFinished = { vm.commitAiTune() })
     Text(tr("低于它的声音不送进模型（省电、去底噪）。开头字被吞就调低，环境吵、有杂音就调高。默认 -50"), fontSize = 12.sp, color = Summary)
 
-    var idx by remember { mutableStateOf(vm.aiIndex()) }
+    var idx by remember(vm.aiResetGen.intValue) { mutableStateOf(vm.aiIndex()) }
     val hasIdx = remember(st.liveVoice, st.liveVoices) { vm.voiceHasIndex() }
     Row(Modifier.padding(top = 14.dp)) { Text(tr("检索比例（index）"), Modifier.weight(1f), fontSize = 14.sp)
         Text(if (idx <= 0.01f) tr("关") else "%.2f".format(idx), color = Summary) }
@@ -711,19 +711,19 @@ private fun AiAdvanced(vm: MainViewModel, st: UiState) {
     Text(if (hasIdx) tr("越高越像原音色、口音和原声漏出越少，但咬字可能变糊；默认 0.3") else tr("当前音色没有检索索引：导入模型时把 .index 和 .pth 一起选上即可"),
         fontSize = 12.sp, color = Summary)
 
-    var rms by remember { mutableStateOf(vm.aiRms()) }
+    var rms by remember(vm.aiResetGen.intValue) { mutableStateOf(vm.aiRms()) }
     Row(Modifier.padding(top = 14.dp)) { Text(tr("响度跟随"), Modifier.weight(1f), fontSize = 14.sp)
         Text(if (rms <= 0.01f) tr("关") else "%.2f".format(rms), color = Summary) }
     Slider(value = rms, onValueChange = { rms = (it * 20).roundToInt() / 20f; vm.setAiRms(rms) }, valueRange = 0f..1f, steps = 19,
         onValueChangeFinished = { vm.commitAiTune() })
     Text(tr("让变声后的音量起伏跟着原声走，轻声说话也轻；越高越贴原声。默认关"), fontSize = 12.sp, color = Summary)
-    var fmt by remember { mutableStateOf(vm.aiFormant()) }
+    var fmt by remember(vm.aiResetGen.intValue) { mutableStateOf(vm.aiFormant()) }
     Row(Modifier.padding(top = 14.dp)) { Text(tr("共振峰"), Modifier.weight(1f), fontSize = 14.sp)
         Text(if (kotlin.math.abs(fmt) < 0.05f) tr("关") else "%+.1f".format(fmt), color = Summary) }
     Slider(value = fmt, onValueChange = { fmt = (it * 2).roundToInt() / 2f; vm.setAiFormant(fmt) }, valueRange = -6f..6f, steps = 23,
         onValueChangeFinished = { vm.commitAiTune() })
     Text(tr("音高不变，只改声音的厚薄：往右更细更亮，往左更厚更沉。实验功能，默认 0"), fontSize = 12.sp, color = Summary)
-    var pl by remember { mutableStateOf(vm.aiPhaseLock()) }
+    var pl by remember(vm.aiResetGen.intValue) { mutableStateOf(vm.aiPhaseLock()) }
     SwitchPreference(checked = pl, onCheckedChange = { pl = it; vm.setAiPhaseLock(it) }, title = tr("相位锁定"),
         summary = tr("让每段合成的声音首尾相位接上，减轻块与块之间的轻微「嗒嗒」声。实验功能，切换会重新加载模型"))
 
@@ -736,11 +736,11 @@ private fun AiAdvanced(vm: MainViewModel, st: UiState) {
         onValueChangeFinished = { vm.commitAiTune() })
     Text(tr("本机 {0} 核。两者同时在跑，加起来别超过大核数；默认 3 / 4。改档位或线程会重新测速加载，变声中会停顿几秒", cores),
         fontSize = 12.sp, color = Summary)
-    var pin by remember { mutableStateOf(vm.aiPin()) }
+    var pin by remember(vm.aiResetGen.intValue) { mutableStateOf(vm.aiPin()) }
     SwitchPreference(checked = pin, onCheckedChange = { pin = it; vm.setAiPin(it) }, title = tr("推理绑大核"),
         summary = tr("把推理线程固定在大核上，减少被调度到小核导致的卡顿；下次开始变声生效"))
-    var voc by remember(st.liveBench) { mutableIntStateOf(vm.aiVocoder()) }
-    var hubNpu by remember(st.liveBench) { mutableStateOf(vm.aiHubNpu()) }
+    var voc by remember(st.liveBench, vm.aiResetGen.intValue) { mutableIntStateOf(vm.aiVocoder()) }
+    var hubNpu by remember(st.liveBench, vm.aiResetGen.intValue) { mutableStateOf(vm.aiHubNpu()) }
     val neonOk = remember { vm.neonVocoderSupported() }
     val npuArch = remember { vm.npuArch() }
     var npuHave by remember { mutableStateOf(vm.npuInstalled()) }

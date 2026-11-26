@@ -1177,7 +1177,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         com.taocrypt.micmask.inject.MicInjector.tunePin = on
         L.i("AI 推理绑大核 → $on")
     }
-    fun resetAiTune() { setAiTune(0, -50f, 3, 4); setAiIndex(0.3f); setAiVocoder(0); setAiHubNpu(false); commitAiTune() }
+    /** 高级页「恢复默认」后自增，界面据此刷新本地开关状态 */
+    val aiResetGen = androidx.compose.runtime.mutableIntStateOf(0)
+    fun resetAiTune() {
+        setAiTune(0, -50f, 3, 4); setAiIndex(0.3f); setAiVocoder(0); setAiHubNpu(false)
+        setAiRms(0f); setAiFormant(0f); setAiPin(true)
+        prefs.edit().putBoolean("ai_phase_lock", false).apply(); com.taocrypt.micmask.inject.MicInjector.tunePl = false
+        commitAiTune(); aiResetGen.intValue++
+    }
     /** 按模式开始/停止；运行中切到别的模式会先停再按新模式重启 */
     fun startMode(mode: Int) {
         if (mode == 2 && !com.taocrypt.micmask.inject.MicInjector.liveOn && speakerMode()) { _state.value = _state.value.copy(toast = tr("外放模式下声卡不可用（需要 Shizuku）")); return }
