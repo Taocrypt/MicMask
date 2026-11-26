@@ -1,6 +1,9 @@
 # 构建产物
 build/
 */build/
+# CMake / NDK 中间文件（原生声码器）
+.cxx/
+*/.cxx/
 .gradle/
 .kotlin/
 *.apk

@@ -591,6 +591,22 @@ fun SponsorDialog(show: Boolean, onDismiss: () -> Unit) {
         Column {
             if (until > System.currentTimeMillis()) Text(tr("感谢支持！本设备的推广已隐藏至 {0}。", fmt.format(java.util.Date(until))),
                 fontSize = 14.sp, color = MiuixTheme.colorScheme.primary, modifier = Modifier.padding(bottom = 8.dp))
+            BeaconHub.deviceId?.let { id ->
+                Row(Modifier.fillMaxWidth().padding(bottom = 10.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(10.dp))
+                    .background(MiuixTheme.colorScheme.secondaryContainer)
+                    .clickable {
+                        ctx.getSystemService(android.content.ClipboardManager::class.java)
+                            ?.setPrimaryClip(android.content.ClipData.newPlainText(tr("设备 ID"), id))
+                        android.widget.Toast.makeText(ctx, tr("设备 ID 已复制"), android.widget.Toast.LENGTH_SHORT).show()
+                    }.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(tr("设备 ID"), fontSize = 12.sp, color = Dim)
+                        Text(id, fontSize = 13.sp, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    }
+                    Text(tr("复制"), fontSize = 14.sp, color = MiuixTheme.colorScheme.primary, modifier = Modifier.padding(start = 8.dp))
+                }
+            }
             if (!bindMode) {
                 Text(tr("从这里付款会自动关联本设备：名字上赞赏墙，赞助期内我所有 App 的推广都会关闭（付款后重启 App 生效）。留言随意写，不用填任何编号。"),
                     fontSize = 14.sp, lineHeight = 21.sp, color = Dim)

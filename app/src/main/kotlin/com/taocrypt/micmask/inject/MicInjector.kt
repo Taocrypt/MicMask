@@ -125,10 +125,30 @@ object MicInjector {
         Shizuku.requestPermission(REQ_CODE)
     }
 
-    private val conn = object : ServiceConnection {
+    private val conn: ServiceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             binder = service
-            L.i("MicInjector 注入服务已连接：${ping()}")
+            val pg = runCatching { ping() }.getOrDefault("")
+            // root 的 Shizuku 用户服务是 uid 0：改用 su 2000 自启（只试一次，失败由快速自启看门狗回退）
+            if (pg.startsWith("uid=0 ") && rootAsShell && !selfLaunched && appCtx != null) {
+                L.i("MicInjector 注入服务是 root（$pg），改用 shell 身份自启")
+                binder = null
+                val app = appCtx!!
+                selfLaunched = true
+                Thread {
+                    runCatching { Shizuku.unbindUserService(args(app), conn, true) }
+                    selfLaunch(app)
+                    Thread.sleep(8000)
+                    if (binder?.pingBinder() != true) {
+                        L.w("MicInjector su 2000 自启没交回 binder：" + shell("tail -n 20 /data/local/tmp/micmask-models/shellmain.log"))
+                        rootAsShell = false; selfLaunched = false
+                        main.post { doBind(app) }
+                    }
+                }.start()
+                return
+            }
+            binder = service
+            L.i("MicInjector 注入服务已连接：$pg")
             startShellLogPump()
             bindAttempt = 0
             val todo = synchronized(pendingAfterBind) { pendingAfterBind.toList().also { pendingAfterBind.clear() } }
@@ -213,12 +233,24 @@ object MicInjector {
     private fun selfLaunch(app: Context) {
         val apk = app.applicationInfo.sourceDir
         val pkg = app.packageName
-        val logF = "/data/local/tmp/micmask-models/shellmain.log"
-        val cmd = "rm -rf /data/local/tmp/andrvc-models; mkdir -p /data/local/tmp/micmask-models; " +
-            "setsid nohup sh -c \"CLASSPATH='$apk' exec app_process -Djava.class.path='$apk' /system/bin --nice-name=$pkg:injector com.taocrypt.micmask.inject.ShellMain $pkg\" >$logF 2>&1 </dev/null &"
-        L.i("MicInjector 改用自启注入进程（绕过 Shizuku 用户服务）")
+        val dir = "/data/local/tmp/micmask-models"
+        val logF = "$dir/shellmain.log"
+        val run = "CLASSPATH='$apk' exec app_process -Djava.class.path='$apk' /system/bin --nice-name=$pkg:injector com.taocrypt.micmask.inject.ShellMain $pkg"
+        // root 启动的 Shizuku：注入进程用 su 2000 降成真正的 shell 身份。
+        // uid 0 的录音会让目标应用（TT 语音 realme/小米 实测）一直被系统静音；adb 启动（uid 2000）的机器正常。
+        val root = rootAsShell && shell("id -u") == "0"
+        val cmd = if (root)
+            "rm -rf /data/local/tmp/andrvc-models; mkdir -p $dir; chown -R 2000:2000 $dir; " +
+            "printf '%s\\n' \"$run\" > $dir/start.sh; chown 2000:2000 $dir/start.sh; " +
+            "setsid nohup su 2000 -c 'sh $dir/start.sh' >$logF 2>&1 </dev/null &"
+        else "rm -rf /data/local/tmp/andrvc-models; mkdir -p $dir; " +
+            "setsid nohup sh -c \"$run\" >$logF 2>&1 </dev/null &"
+        L.i("MicInjector 改用自启注入进程（绕过 Shizuku 用户服务）${if (root) "，root → su 2000 降为 shell" else ""}")
         L.i("MicInjector 自启结果：${shell(cmd).ifEmpty { "已发出" }}")
     }
+
+    /** 调试开关：root 下把注入进程降为 shell(2000)。降权失败（8 s 没交回 binder）会自动关掉并回退 root 用户服务 */
+    @Volatile var rootAsShell = true
 
     /** 通过 Shizuku 以 shell 身份跑命令（newProcess 在 API 13 是私有的，反射调用） */
     private fun shell(cmd: String): String = runCatching {
@@ -368,7 +400,7 @@ object MicInjector {
                     kv["bench"]?.takeIf { it.isNotEmpty() && it != lastBench }?.let { b -> lastBench = b; onBench?.invoke(b) }
                     perfOf(kv)
                     main.post { status((modeLabel ?: if (external) tr("AI 变声") else tr("普通变声")) + tr(" · 麦电平 {0} · 目标在录={1} · 缓冲 {2} ms · 断流 {3}", kv["live"], kv["recs"], (kv["outBuf"]?.toIntOrNull() ?: 0) / 48, kv["under"]) + (kv["eng"]?.takeIf { it.isNotEmpty() }?.let { " · $it" } ?: statusExtra?.invoke()?.let { " · $it" } ?: "") +
-                        // shell 侧 micHint 原文（供 i18n_check）：tr("没有收到麦克风数据，正在重建录音") tr("采集到的是纯静音（麦克风可能被系统静音或被占用）") tr("麦克风被系统静音（其他应用可能占用了录音）")
+                        // shell 侧 micHint 原文（供 i18n_check）：tr("没有收到麦克风数据，正在重建录音") tr("采集到的是纯静音（麦克风可能被系统静音或被占用）") tr("麦克风被系统静音（其他应用可能占用了录音）") tr("通话占用了降噪录音，已自动改用原始麦克风")
                         (kv["mic"]?.takeIf { it.isNotEmpty() }?.let { "\n⚠ " + tr(it) } ?: "")) }
                     Thread.sleep(300)
                 }
@@ -493,7 +525,9 @@ object MicInjector {
     @Volatile var tuneSyn = 4
     @Volatile var tunePin = true
     @Volatile var tuneIdx = 0.3f
-    private fun writeTune(d: android.os.Parcel) { d.writeInt(tuneTier); d.writeFloat(tuneGate); d.writeInt(tuneFeat); d.writeInt(tuneSyn); d.writeInt(if (tunePin) 1 else 0); d.writeFloat(tuneIdx) }
+    /** 声码器 0=自动 1=ORT 整图 2=NEON fp16 */
+    @Volatile var tuneVoc = 0
+    private fun writeTune(d: android.os.Parcel) { d.writeInt(tuneTier); d.writeFloat(tuneGate); d.writeInt(tuneFeat); d.writeInt(tuneSyn); d.writeInt(if (tunePin) 1 else 0); d.writeFloat(tuneIdx); d.writeInt(tuneVoc) }
     fun pushTune() {
         if (!liveOn) return
         runCatching { call(InjectorService.TX_LIVE_TUNE, { d -> writeTune(d) }) { } }

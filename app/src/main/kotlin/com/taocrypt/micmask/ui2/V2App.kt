@@ -1,5 +1,6 @@
 package com.taocrypt.micmask.ui2
 
+import com.taocrypt.micmask.QnnPack
 import com.taocrypt.micmask.tr
 
 import com.taocrypt.micmask.Prefs
@@ -676,7 +677,7 @@ private fun AiAdvanced(vm: MainViewModel, st: UiState) {
     Row(Modifier.fillMaxWidth().padding(top = 14.dp).clip(RoundedCornerShape(8.dp)).clickable { open = !open }.padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Text(tr("高级"), Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
-        val custom = st.aiTier != 0 || st.aiGate != -50f || st.aiFeatTh != 3 || st.aiSynTh != 4
+        val custom = st.aiTier != 0 || st.aiGate != -50f || st.aiFeatTh != 3 || st.aiSynTh != 4 || vm.aiVocoder() != 0 || vm.aiHubNpu()
         if (!open && custom) Text(tr("已自定义  "), fontSize = 13.sp, color = MiuixTheme.colorScheme.primary)
         Text(if (open) tr("收起 ▴") else tr("展开 ▾"), fontSize = 13.sp, color = Summary)
     }
@@ -722,8 +723,82 @@ private fun AiAdvanced(vm: MainViewModel, st: UiState) {
     var pin by remember { mutableStateOf(vm.aiPin()) }
     SwitchPreference(checked = pin, onCheckedChange = { pin = it; vm.setAiPin(it) }, title = tr("推理绑大核"),
         summary = tr("把推理线程固定在大核上，减少被调度到小核导致的卡顿；下次开始变声生效"))
+    var voc by remember(st.liveBench) { mutableIntStateOf(vm.aiVocoder()) }
+    var hubNpu by remember(st.liveBench) { mutableStateOf(vm.aiHubNpu()) }
+    val neonOk = remember { vm.neonVocoderSupported() }
+    val npuArch = remember { vm.npuArch() }
+    var npuHave by remember { mutableStateOf(vm.npuInstalled()) }
+    Text(tr("声码器"), Modifier.padding(top = 12.dp), fontSize = 14.sp)
+    Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        (listOf(tr("自动"), "ORT", "NEON") + if (npuArch != null) listOf("NPU") else emptyList()).forEachIndexed { i, t ->
+            val on = voc == i
+            Box(Modifier.weight(1f).height(34.dp).clip(RoundedCornerShape(10.dp))
+                .background(if (on) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.secondaryContainer)
+                .clickable { voc = i; vm.setAiVocoder(i); vm.commitAiTune() }, contentAlignment = Alignment.Center) {
+                Text(t, fontSize = 13.sp, maxLines = 1,
+                    color = if (on) MiuixTheme.colorScheme.onPrimary else MiuixTheme.colorScheme.onSecondaryContainer)
+            }
+        }
+    }
+    Text(when (voc) {
+        1 -> tr("ONNX Runtime 整图推理（原来的方式）")
+        2 -> if (!neonOk) tr("本机 CPU 不支持 fp16 运算，会改用 ORT") else tr("合成器最后一段改用原生 fp16 计算，音质更接近原模型；首次使用要处理模型几秒")
+        3 -> if (npuHave) tr("合成器最后一段交给骁龙 NPU；每个音色首次使用要编译约 10 秒，出错自动改用 CPU") else tr("还没下载 NPU 组件，先用 CPU")
+        else -> tr("加载时各方式都测一次，选最快的")
+    }, fontSize = 12.sp, color = Summary, modifier = Modifier.padding(top = 6.dp))
+    if (npuArch != null) {
+        SwitchPreference(checked = hubNpu, onCheckedChange = { hubNpu = it; vm.setAiHubNpu(it); vm.commitAiTune() }, title = tr("HuBERT 用 NPU"),
+            summary = if (!npuHave) tr("还没下载 NPU 组件，先用 CPU")
+                else tr("内容特征提取（HuBERT）交给骁龙 NPU；首次使用要改写并编译模型，约 10–20 秒；不比 CPU 快或校验不通过会自动留在 CPU"))
+        NpuPack(vm, npuArch, npuHave) { npuHave = it }
+    }
     Text(tr("恢复默认"), Modifier.padding(top = 12.dp).clip(RoundedCornerShape(8.dp)).clickable { vm.resetAiTune() }.padding(vertical = 4.dp),
         fontSize = 14.sp, color = MiuixTheme.colorScheme.primary)
+}
+
+/** 骁龙 NPU 组件：同意高通许可后从官方 Maven 仓库下载，本项目不托管 */
+@Composable
+private fun NpuPack(vm: MainViewModel, arch: String, have: Boolean, setHave: (Boolean) -> Unit) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val prog by vm.npuProgress.collectAsStateWithLifecycle()
+    var busy by remember { mutableStateOf(false) }
+    var ask by remember { mutableStateOf(false) }
+    val mb = remember(arch) { QnnPack.downloadBytes(arch) shr 20 }
+    Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(tr("NPU 组件"), fontSize = 14.sp)
+            Text(when {
+                busy -> prog ?: tr("准备下载…")
+                have -> tr("已安装（高通 QNN {0}，{1}）", QnnPack.VERSION, arch)
+                prog != null -> prog!!
+                else -> tr("约 {0} MB，从官方 Maven 仓库下载{1}", mb, if (QnnPack.verified(arch)) "" else tr("；本机芯片未经实测"))
+            }, fontSize = 12.sp, color = Summary)
+        }
+        val label = when { busy -> tr("取消"); have -> tr("删除"); else -> tr("下载") }
+        Text(label, Modifier.clip(RoundedCornerShape(8.dp)).clickable {
+            when {
+                busy -> vm.npuCancel()
+                have -> { vm.npuDelete(); setHave(false) }
+                else -> ask = true
+            }
+        }.padding(horizontal = 10.dp, vertical = 6.dp), fontSize = 14.sp, color = MiuixTheme.colorScheme.primary)
+    }
+    if (ask) {
+        top.yukonga.miuix.kmp.window.WindowDialog(show = true, title = tr("下载 NPU 组件"), onDismissRequest = { ask = false }) {
+            Text(tr("NPU 加速需要高通 QNN 运行库（{0} MB）。它由高通按自己的许可发布，不属于 MicMask 的开源部分；App 会直接从 Maven Central 或其国内镜像下载官方包，逐个校验后只存在本机。", mb),
+                fontSize = 14.sp)
+            Text(tr("继续即表示你同意高通的许可条款（禁止逆向等）。"), fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp))
+            Text(tr("查看许可"), Modifier.padding(top = 8.dp).clip(RoundedCornerShape(6.dp)).clickable { openUrl(ctx, QnnPack.LICENSE_URL) }.padding(vertical = 4.dp),
+                fontSize = 14.sp, color = MiuixTheme.colorScheme.primary)
+            Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                top.yukonga.miuix.kmp.basic.TextButton(tr("取消"), onClick = { ask = false }, modifier = Modifier.weight(1f))
+                top.yukonga.miuix.kmp.basic.TextButton(tr("同意并下载"), onClick = {
+                    ask = false; busy = true
+                    vm.npuDownload { ok -> busy = false; setHave(ok) }
+                }, modifier = Modifier.weight(1f), colors = top.yukonga.miuix.kmp.basic.ButtonDefaults.textButtonColorsPrimary())
+            }
+        }
+    }
 }
 
 // ------------------------------------------------------------------ AI 变声

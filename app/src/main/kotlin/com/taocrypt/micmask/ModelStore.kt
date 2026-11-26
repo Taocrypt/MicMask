@@ -102,7 +102,7 @@ object ModelStore {
     /** 删除音色：删文件 + 测速缓存 + 别名 */
     fun deleteVoice(ctx: Context, v: String): Int {
         val fs = voiceFiles(ctx, v)
-        fs.forEach { OrtLoad.dropCache(it); it.delete() }
+        fs.forEach { OrtLoad.dropCache(it); NeonVocoder.dropCache(it); it.delete() }
         ctx.getSharedPreferences("live", 0).edit().remove("bench_$v").remove("alias_$v").apply()
         return fs.size
     }
@@ -114,7 +114,7 @@ object ModelStore {
         var b = 0L
         for (d in candidateDirs(ctx)) for (n in FILE_ONLY) {
             val f = File(d, n)
-            if (f.isFile) { b += f.length(); OrtLoad.dropCache(f); f.delete() }
+            if (f.isFile) { b += f.length(); OrtLoad.dropCache(f); NeonVocoder.dropCache(f); f.delete() }
         }
         return b
     }

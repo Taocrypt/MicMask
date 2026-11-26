@@ -31,6 +31,11 @@ import android.os.Parcel
 import java.lang.ref.WeakReference
 
 object ShellAudioRecord {
+    /** 录音身份 uid：root（uid 0）下默认伪装成 shell(2000)。uid 0 的录音会被系统当系统级优先，
+     *  realme/天玑 实测目标应用（TT）因此一直被静音。设 MICMASK_ROOT_ID=root 可保留 uid 0 对比。 */
+    @JvmField val REC_UID: Int = android.os.Process.myUid().let { u ->
+        if (u == 0 && System.getenv("MICMASK_ROOT_ID") != "root") 2000 else u
+    }
 
     /** 最近一次创建走的路径：builder / builder-mic / native_setup/apiNN/Np / 失败 */
     @Volatile var lastPath: String = ""
@@ -52,6 +57,9 @@ object ShellAudioRecord {
                     .setEncoding(AudioFormat.ENCODING_PCM_16BIT).build()
                 val b = AudioRecord.Builder().setAudioSource(source).setAudioFormat(fmt).setBufferSizeInBytes(bufBytes)
                 if (Build.VERSION.SDK_INT >= 31 && ctx != null) runCatching { b.setContext(ctx) }
+                // VOICE_COMMUNICATION / CAMCORDER 默认是「隐私敏感」录音：两路隐私敏感录音并存时系统只给最新启动的一方，
+                // 微信/QQ 通话一开就把我们静音（2.0.0 小米 Android 16 用户日志 observed）。声明非隐私敏感以允许并发录音。
+                if (Build.VERSION.SDK_INT >= 30) runCatching { b.setPrivacySensitive(false) }
                 b.build()
             }
             val rec = r.getOrNull()
@@ -162,7 +170,7 @@ object ShellAudioRecord {
     @android.annotation.SuppressLint("NewApi")
     /** AttributionSource(uid=2000, com.android.shell).asScopedParcelState()，调用方负责 close */
     private fun attributionParcelState(): AutoCloseable {
-        val src = android.content.AttributionSource.Builder(android.os.Process.myUid()).setPackageName(SHELL_PKG).build()
+        val src = android.content.AttributionSource.Builder(REC_UID).setPackageName(SHELL_PKG).build()
         return android.content.AttributionSource::class.java.getDeclaredMethod("asScopedParcelState")
             .apply { isAccessible = true }.invoke(src) as AutoCloseable
     }

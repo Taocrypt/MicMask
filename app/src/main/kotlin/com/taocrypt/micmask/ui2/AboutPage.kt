@@ -95,7 +95,7 @@ object AboutLinks {
     val REFS get() = listOf(
         Triple("atri-vc", tr("本项目的起点，实时 RVC 安卓实现"), "https://github.com/spider996/atri-vc"),
         Triple("RVC-Android", tr("安卓端 RVC 推理方案参考（性能优化思路）"), "https://github.com/ouor/RVC-Android"),
-        Triple("mobile-rvc", tr("手机端实时变声参考（状态行、分享导入、文件变声分段等思路）"), "https://github.com/nasuiyile/mobile-rvc"),
+        Triple("mobile-rvc", tr("手机端实时变声参考（状态行、分享导入、文件变声分段等思路）；原生 NEON fp16 声码器内核移植自此项目（MIT）"), "https://github.com/nasuiyile/mobile-rvc"),
         Triple("RVC WebUI", tr("Retrieval-based Voice Conversion 音色转换"), "https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI"),
         Triple("GPT-SoVITS", tr("文本转语音与语气参考"), "https://github.com/RVC-Boss/GPT-SoVITS"),
         Triple("ONNX Runtime", tr("端侧推理引擎"), "https://github.com/microsoft/onnxruntime"),

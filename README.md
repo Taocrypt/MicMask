@@ -121,7 +121,7 @@ MicMask 的 AI 变声目前只用 CPU 推理，暂不引入高通 QNN（NPU/GPU�
 
 - [atri-vc](https://github.com/spider996/atri-vc)：本项目的起点，实时 RVC 安卓实现
 - [RVC-Android](https://github.com/ouor/RVC-Android)：安卓端 RVC 推理方案参考
-- [mobile-rvc](https://github.com/nasuiyile/mobile-rvc)：手机端实时变声参考
+- [mobile-rvc](https://github.com/nasuiyile/mobile-rvc)：手机端实时变声参考；原生 NEON fp16 声码器内核移植自该项目（MIT，声明见 NOTICE.md）
 - [RVC WebUI](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI)：Retrieval-based Voice Conversion 音色转换
 - [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS)：文本转语音
 - [ONNX Runtime](https://github.com/microsoft/onnxruntime)：端侧推理引擎

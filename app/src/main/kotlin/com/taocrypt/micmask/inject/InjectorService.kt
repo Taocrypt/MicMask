@@ -98,6 +98,8 @@ class InjectorService : Binder {
         const val REC_COMPAT_FLAG = 0x10000
         const val TX_DESTROY = 16777115
 
+        /** AudioAttributes.USAGE_VIRTUAL_SOURCE（隐藏常量） */
+        const val USAGE_VIRTUAL_SOURCE = 15
         const val SR = 48000
         const val FRAME_BYTES = 4 // 立体声 16bit
         /** 每次写 10ms */
@@ -157,6 +159,7 @@ class InjectorService : Binder {
                     System.exit(0)
                 }
                 TX_PING -> {
+                    if (Process.myUid() == 0 && !rootProbed) { rootProbed = true; Thread { rootProbe { slog('I', it) } }.start() }
                     reply?.writeNoException()
                     reply?.writeInt(Process.myUid())
                     reply?.writeInt(if (hasRoutingPermission()) 1 else 0)
@@ -281,7 +284,7 @@ class InjectorService : Binder {
                         synthDirty = false
                         e.load({ msg -> engineState = msg }, force = true)
                         engineState = ""
-                        e.benchSummary
+                        e.benchSummary + (if (e.benchCfg.isNotEmpty()) "§" + e.benchCfg else "")
                     }.getOrElse { slog('E', "性能测试失败", it); "失败：" + describe(it) }
                     reply?.writeNoException()
                     reply?.writeString(r)
@@ -455,7 +458,8 @@ class InjectorService : Binder {
                 // 自动识别：按录音源接管（MIC / CAMCORDER / VOICE_RECOGNITION / VOICE_COMMUNICATION / UNPROCESSED）
                 val rulePreset = ruleCls.getField("RULE_MATCH_ATTRIBUTE_CAPTURE_PRESET").getInt(null)
                 val aab = Class.forName("android.media.AudioAttributes\$Builder")
-                for (p in intArrayOf(1, 5, 6, 7, 9)) {
+                // 0 DEFAULT、10 VOICE_PERFORMANCE 也接管（SRVR 同款）；自己的录音靠下面的 uid 排除
+                for (p in intArrayOf(0, 1, 5, 6, 7, 9, 10)) {
                     val b = aab.getConstructor().newInstance()
                     aab.getMethod("setCapturePreset", I).invoke(b, p)
                     val attr = aab.getMethod("build").invoke(b)
@@ -463,13 +467,13 @@ class InjectorService : Binder {
                 }
                 // 排除 shell（我们自己的真麦录音）和 MicMask App，否则会把注入的声音又录回来
                 val ex = runCatching {
-                    for (u in listOf(Process.myUid(), callerUid).filter { it >= 0 }.distinct())
+                    for (u in listOf(Process.myUid(), ShellAudioRecord.REC_UID, callerUid).filter { it >= 0 }.distinct())
                         ruleB.getMethod("excludeMixRule", I, Any::class.java).invoke(rb, ruleUid, Integer.valueOf(u))
                 }
                 val built = if (ex.isSuccess) runCatching { ruleB.getMethod("build").invoke(rb) }.getOrNull() else null
                 if (built == null) autoNoExclude = true
                 rule = built ?: buildPresetRuleNoExclude(ruleB, ruleCls, mixCls)
-                slog('I', "自动识别范围：排除规则=${if (autoNoExclude) "不支持（shell 改用 VOICE_PERFORMANCE 录音）" else "已排除 uid ${Process.myUid()},$callerUid"}")
+                slog('I', "自动识别范围：排除规则=${if (autoNoExclude) "不支持（shell 改用 VOICE_PERFORMANCE 录音）" else "已排除 uid ${Process.myUid()},${ShellAudioRecord.REC_UID},$callerUid"}")
             }
 
             val fmt = AudioFormat.Builder()
@@ -492,10 +496,11 @@ class InjectorService : Binder {
             policy = pol
             mixObj = mix
 
-            val t = polCls.getMethod("createAudioTrackSource", mixCls).invoke(pol, mix) as AudioTrack?
+            val t = newInjectTrack(pol, mix)
             if (t == null || t.state != AudioTrack.STATE_INITIALIZED) {
+                runCatching { t?.release() }
                 unregister()
-                return "注入通道没有初始化（state=${t?.state}）"
+                return lastTrackErr.ifEmpty { "注入通道没有初始化（state=${t?.state}）" }
             }
             t.play()
             track = t
@@ -503,6 +508,7 @@ class InjectorService : Binder {
             unregister()
             lastError = describe(t)
             slog('E', "arm failed", t)
+            dumpAudioDiag()
             return lastError
         }
 
@@ -530,7 +536,7 @@ class InjectorService : Binder {
         if (!roleOk) ruleB.getMethod("setTargetMixType", I).invoke(rb, mixCls.getField("MIX_TYPE_RECORDERS").getInt(null))
         val rulePreset = ruleCls.getField("RULE_MATCH_ATTRIBUTE_CAPTURE_PRESET").getInt(null)
         val aab = Class.forName("android.media.AudioAttributes\$Builder")
-        for (p in intArrayOf(1, 5, 6, 7, 9)) {
+        for (p in intArrayOf(0, 1, 5, 6, 7, 9)) {
             val b = aab.getConstructor().newInstance()
             aab.getMethod("setCapturePreset", I).invoke(b, p)
             ruleB.getMethod("addMixRule", I, Any::class.java).invoke(rb, rulePreset, aab.getMethod("build").invoke(b))
@@ -625,6 +631,70 @@ class InjectorService : Binder {
     private var logSeq = 0L
     private val logFmt = java.text.SimpleDateFormat("MM-dd HH:mm:ss.SSS", java.util.Locale.US)
 
+    private var a11yFailed = false
+    private var a11yPrevSrc = -1
+    private var a11yFloor = -60f
+    private var a11yPeak = -200f
+    private var a11yChkSec = -1
+    private var tgtSilSec = 0
+    private val lvlHist = ArrayDeque<Float>()
+
+    /** 别的应用（非我们自己）有录音被系统静音 */
+    private fun targetSilenced(): Boolean = runCatching {
+        val list = am?.activeRecordingConfigurations ?: return false
+        val c = android.media.AudioRecordingConfiguration::class.java
+        val gu = c.getMethod("getClientUid"); val gs = c.getMethod("isClientSilenced")
+        list.any { val u = gu.invoke(it) as Int; u >= 10000 && u != callerUid && u != Process.myUid() && u != ShellAudioRecord.REC_UID && gs.invoke(it) == true }
+    }.getOrDefault(false)
+
+    @Volatile private var a11yThread: Thread? = null
+    @Volatile private var a11yOn = false
+    private var a11yLast = ""
+
+    /** 系统已启用的无障碍服务 uid（AccessibilityManagerService 也只登记这些） */
+    private fun sysA11yUids(): List<Int> = runCatching {
+        val c = shellCtx ?: return emptyList()
+        val v = android.provider.Settings.Secure.getString(c.contentResolver, "enabled_accessibility_services") ?: ""
+        v.split(':').mapNotNull { it.substringBefore('/').takeIf { p -> p.isNotBlank() } }.distinct()
+            .mapNotNull { p -> runCatching { c.packageManager.getPackageUid(p, 0) }.getOrNull() ?: runCatching { c.packageManager.getApplicationInfo(p, 0).uid }.getOrNull() }
+    }.getOrDefault(emptyList())
+
+    /** 调 AudioSystem.setA11yServicesUids（隐藏 API）把自己加进/移出无障碍 uid 列表；系统改无障碍设置时会覆盖，所以定时重登 */
+    private fun a11yBoost(on: Boolean, quiet: Boolean = false): Boolean = runCatching {
+        if (Build.VERSION.SDK_INT < 29) return false
+        val mine = listOf(Process.myUid(), ShellAudioRecord.REC_UID).distinct()
+        val uids = (sysA11yUids() + if (on) mine else emptyList()).distinct()
+        val key = uids.joinToString(",")
+        if (quiet && key == a11yLast) {
+            // 列表没变也要重登：系统可能刚覆盖过
+        }
+        val m = Class.forName("android.media.AudioSystem").getDeclaredMethod("setA11yServicesUids", IntArray::class.java)
+        m.isAccessible = true
+        val r = m.invoke(null, uids.toIntArray())
+        a11yOn = on
+        if (!quiet || key != a11yLast) slog('I', "无障碍 uid ${if (on) "登记" else "还原"} [$key] → $r")
+        a11yLast = key
+        (r as? Int ?: 0) == 0
+    }.getOrElse { if (!quiet) slog('W', "无障碍 uid 登记失败：${describe(it)}"); false }
+
+    @Volatile private var rootProbed = false
+    /** root 调试：打印身份与可用的 root 方案，为以后直接支持 root 模式（不经 Shizuku）摸底 */
+    private fun rootProbe(out: (String) -> Unit) {
+        fun sh(c: String) = runCatching {
+            val p = ProcessBuilder("timeout", "4", "sh", "-c", c).redirectErrorStream(true).start()
+            p.inputStream.bufferedReader().readText().trim().take(300).also { p.waitFor() }
+        }.getOrElse { "ERR ${it.message}" }
+        fun f(path: String) = java.io.File(path).exists()
+        out("ROOT 录音身份 uid=${ShellAudioRecord.REC_UID}（MICMASK_ROOT_ID=${System.getenv("MICMASK_ROOT_ID")}）")
+        out("ROOT id: ${sh("id")}")
+        out("ROOT selinux: ${sh("cat /proc/self/attr/current; echo; getenforce")}")
+        out("ROOT 方案: magisk=${f("/data/adb/magisk")} ksu=${f("/data/adb/ksu")} apatch=${f("/data/adb/ap")} su=${sh("command -v su")}")
+        out("ROOT su 版本: ${sh("su -v 2>&1; su -V 2>&1")}")
+        out("ROOT su 切 shell: ${sh("su 2000 -c id 2>&1 || su shell -c id 2>&1")}")
+        out("ROOT shizuku 进程: ${sh("ps -A -o USER,PID,NAME 2>/dev/null | grep -i shizuku")}")
+        out("ROOT audio 策略: ${sh("dumpsys media.audio_policy 2>/dev/null | grep -iE 'silenc|Capture|uid 10' | head -15")}")
+    }
+
     private fun slog(level: Char, msg: String, t: Throwable? = null) {
         when (level) { 'E' -> Log.e(TAG, msg, t); 'W' -> Log.w(TAG, msg, t); else -> Log.i(TAG, msg) }
         val line = synchronized(logFmt) { logFmt.format(java.util.Date()) } + " $level [shell/${Thread.currentThread().name}] " + msg +
@@ -681,14 +751,18 @@ class InjectorService : Binder {
     @Volatile private var tuneSyn = com.taocrypt.micmask.LiveRvc.SYN_THREADS
     @Volatile private var tunePin = true
     @Volatile private var tuneIdx = 0.3f
+    /** 声码器 0=自动 1=ORT 整图 2=NEON fp16（旧版 App 不传 → 自动） */
+    @Volatile private var tuneVoc = 0
     /** 读高级参数并套到现有引擎；返回是否需要重载 */
     private fun readTune(d: android.os.Parcel): Boolean {
         tuneTier = d.readInt(); tuneGate = d.readFloat(); tuneFeat = d.readInt(); tuneSyn = d.readInt()
         if (d.dataAvail() >= 4) tunePin = d.readInt() != 0
         if (d.dataAvail() >= 4) tuneIdx = d.readFloat()
+        if (d.dataAvail() >= 4) tuneVoc = d.readInt()
         engine?.pinBig = tunePin; engine?.indexRate = tuneIdx
-        slog('I', "高级参数：档位=${listOf("自动", "标准", "省电").getOrElse(tuneTier) { "?" }} 静音门限=${tuneGate}dB 线程=$tuneFeat/$tuneSyn 绑大核=$tunePin 检索=$tuneIdx")
-        return engine?.tune(tuneTier, tuneGate, tuneFeat, tuneSyn) ?: false
+        slog('I', "高级参数：档位=${listOf("自动", "标准", "省电").getOrElse(tuneTier) { "?" }} 静音门限=${tuneGate}dB 线程=$tuneFeat/$tuneSyn 绑大核=$tunePin 检索=$tuneIdx 声码器=${listOf("自动", "ORT", "NEON fp16", "NPU").getOrElse(tuneVoc) { "?" }}")
+        val vocChanged = engine?.setVocoder(tuneVoc) ?: false
+        return (engine?.tune(tuneTier, tuneGate, tuneFeat, tuneSyn) ?: false) || vocChanged
     }
 
     @Synchronized private fun ensureEngine(): com.taocrypt.micmask.LiveRvc {
@@ -696,7 +770,8 @@ class InjectorService : Binder {
         return engine ?: com.taocrypt.micmask.LiveRvc { n -> models[n]?.takeIf { it.exists() }?.also { synchronized(loadedNames) { loadedNames += n } } }.also {
             it.pickCache = java.io.File(MODEL_DIR, "pick.txt")
             it.tune(tuneTier, tuneGate, tuneFeat, tuneSyn)
-            it.pinBig = tunePin; it.indexRate = tuneIdx
+            it.pinBig = tunePin; it.indexRate = tuneIdx; it.setVocoder(tuneVoc)
+            it.qnnDirProvider = { com.taocrypt.micmask.QnnPack.shellDir(ctx?.packageName) }
             it.onConfig = { blockMs -> tierPrimeMs = blockMs + 80; livePrimeMs = tierPrimeMs; slog('I', "预缓冲跟随档位 → ${livePrimeMs}ms") }
             engine = it
         }
@@ -789,6 +864,10 @@ class InjectorService : Binder {
         val b = AudioTrack.Builder().setAudioAttributes(attrs).setAudioFormat(fmt)
             .setBufferSizeInBytes(maxOf(min, SR * bufMs / 1000 * 2))
         if (Build.VERSION.SDK_INT >= 26) b.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+        // Android 17：shell 进程建 AudioTrack 不带 Context 会抛 Cannot create AudioTrack（Redmi 24117RK2CC 实测），带上 shellCtx
+        if (Build.VERSION.SDK_INT >= 34) shellCtx?.let { c ->
+            runCatching { AudioTrack.Builder::class.java.getMethod("setContext", Context::class.java).invoke(b, c) }
+        }
         return b.build()
     }
 
@@ -880,12 +959,24 @@ class InjectorService : Binder {
                     runCatching { android.media.audiofx.AcousticEchoCanceler.create(sid)?.apply { enabled = true } }.getOrNull() else null
                 ns = if (android.media.audiofx.NoiseSuppressor.isAvailable())
                     runCatching { android.media.audiofx.NoiseSuppressor.create(sid)?.apply { enabled = true } }.getOrNull() else null
-                slog('I', "LIVE 回声消除 可用=${android.media.audiofx.AcousticEchoCanceler.isAvailable()} 已开=${aec?.enabled} 降噪 已开=${ns?.enabled}")
+                slog('I', "LIVE 回声消除 可用=${android.media.audiofx.AcousticEchoCanceler.isAvailable()} 已开=${aec?.enabled} 系统降噪效果 已开=${ns?.enabled}（录音源=$liveSource）")
+                // 指定真麦：小米 A13 实测自己的录音被路由到注入通道（设备 25 remote submix），录到的是静音，还和目标应用抢通道
+                runCatching {
+                    val mics = (am ?: return@runCatching).getDevices(android.media.AudioManager.GET_DEVICES_INPUTS)
+                    val want = mics.firstOrNull { it.type == android.media.AudioDeviceInfo.TYPE_USB_HEADSET || it.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET }
+                        ?: mics.firstOrNull { it.type == android.media.AudioDeviceInfo.TYPE_BUILTIN_MIC }
+                    if (want != null) slog('I', "LIVE 指定输入设备 ${want.type}/${want.productName} → ${r.setPreferredDevice(want)}")
+                }
                 r.startRecording()
                 lastReadNs = System.nanoTime()
-                slog('I', "LIVE 开始：src=$liveSource semis=$liveSemis dev=${runCatching { r.routedDevice?.productName }.getOrNull()}")
+                val rd = runCatching { r.routedDevice }.getOrNull()
+                slog(if (rd?.type == android.media.AudioDeviceInfo.TYPE_REMOTE_SUBMIX) 'W' else 'I', "LIVE 开始：src=$liveSource semis=$liveSemis dev=${rd?.type}/${rd?.productName}" +
+                    (if (rd?.type == android.media.AudioDeviceInfo.TYPE_REMOTE_SUBMIX) "（录到了注入通道！）" else ""))
                 return r
             }
+            // 并发录音仲裁：系统只放行「最上层/最近开始」的一路，我们和前台 TT 谁后开谁赢（realme uid 2000 实测）。
+            // 只在目标应用被静音时才把自己登记为无障碍 uid（不参与仲裁）+ VOICE_RECOGNITION；vivo 上一开始就登记会录到静音（test9 实测）
+            a11yFailed = false; a11yPrevSrc = -1
             rec = openRec() ?: return
             curRec = rec
             micHint = ""; recRebuilds = 0
@@ -907,7 +998,7 @@ class InjectorService : Binder {
             fun rebuildRec(why: String): Boolean {
                 val now = System.currentTimeMillis()
                 if (now - rebuildWindow > 60_000L) { rebuildWindow = now; recRebuilds = 0 }
-                if (++recRebuilds > 5) { lastError = "麦克风反复失效（$why），已停止"; return false }
+                if (++recRebuilds > 9) { lastError = "麦克风反复失效（$why），已停止"; return false }
                 slog('W', "重建录音（$why）第 $recRebuilds 次")
                 curRec = null
                 runCatching { rec?.stop() }; runCatching { rec?.release() }
@@ -919,6 +1010,14 @@ class InjectorService : Binder {
                 return true
             }
             var zeroFrames = 0
+            // 被系统静音检测（AI / 普通两种模式都查）：连续 2 s 被静音且当前不是原始麦克风 → 改用原始麦克风重建一次
+            var silChkT = System.nanoTime(); var silSec = 0
+            // 0 DEFAULT、1 MIC、5 CAMCORDER、6 VOICE_RECOGNITION、9 UNPROCESSED、10 VOICE_PERFORMANCE
+            val silOrder = intArrayOf(1, 6, 5, 9, 10, 0); var silTry = 0; val silTried = LinkedHashSet<Int>(); var silGood = true
+            fun silWho(): String = runCatching {
+                am?.activeRecordingConfigurations?.filter { it.clientAudioSessionId != (rec?.audioSessionId ?: -1) }
+                    ?.joinToString(" ") { "src=${it.clientAudioSource}" + (runCatching { " uid=" + it.javaClass.getMethod("getClientUid").invoke(it) }.getOrDefault("")) }
+            }.getOrNull().orEmpty().ifEmpty { "未知应用" }
             val shifter = PitchShifter(SR)
             val hop = SR / 100            // 10 ms
             val inBuf = ShortArray(hop)
@@ -952,6 +1051,65 @@ class InjectorService : Binder {
                 if (allZero) for (i in 0 until hop) if (inBuf[i].toInt() != 0) { allZero = false; break }
                 if (allZero) { if (++zeroFrames == 300) { micHint = "采集到的是纯静音（麦克风可能被系统静音或被占用）"; slog('W', micHint) } }
                 else { if (zeroFrames >= 300 || micHint.startsWith("没有收到")) micHint = ""; zeroFrames = 0 }
+                if (Build.VERSION.SDK_INT >= 29 && System.nanoTime() - silChkT >= 1_000_000_000L) {
+                    silChkT = System.nanoTime()
+                    val sil = runCatching {
+                        val sid = rec?.audioSessionId ?: -1
+                        am?.activeRecordingConfigurations?.firstOrNull { it.clientAudioSessionId == sid }?.isClientSilenced == true
+                    }.getOrDefault(false)
+                    // 我们没被静音、目标应用却被静音 2 s → 改无障碍录音；改完 3 s 输入比改前底噪低 15 dB 以上 → 判定无效，退回
+                    lvlHist.addLast(liveLevelDb); while (lvlHist.size > 3) lvlHist.removeFirst()
+                    if (!sil && !a11yOn && !a11yFailed && targetSilenced()) {
+                        if (++tgtSilSec >= 2) {
+                            tgtSilSec = 0
+                            a11yFloor = lvlHist.maxOrNull() ?: -60f
+                            if (a11yBoost(true)) {
+                                a11yPrevSrc = liveSource
+                                slog('W', "目标应用被系统静音${recDetail()}，改无障碍录音：录音源 $liveSource → 6，改前输入 ${"%.0f".format(a11yFloor)}dB")
+                                liveSource = 6; a11yChkSec = 0; a11yPeak = -200f
+                                a11yThread = Thread({ try { while (true) { Thread.sleep(3000); a11yBoost(true, quiet = true) } } catch (_: InterruptedException) {} }, "a11y-keep").apply { isDaemon = true; start() }
+                                if (!rebuildRec("改无障碍录音")) return
+                                continue
+                            } else a11yFailed = true
+                        }
+                    } else tgtSilSec = 0
+                    if (a11yOn && a11yChkSec in 0..3) {
+                        if (a11yChkSec > 0) a11yPeak = maxOf(a11yPeak, liveLevelDb)
+                        if (++a11yChkSec > 3) {
+                            if (a11yPeak < a11yFloor - 15f || a11yPeak < -90f) {
+                                slog('W', "无障碍录音输入只有 ${"%.0f".format(a11yPeak)}dB（改前 ${"%.0f".format(a11yFloor)}dB），退回录音源 $a11yPrevSrc")
+                                a11yThread?.interrupt(); a11yThread = null; a11yBoost(false); a11yFailed = true
+                                if (a11yPrevSrc >= 0) liveSource = a11yPrevSrc
+                                if (!rebuildRec("无障碍录音无效")) return
+                                continue
+                            } else { slog('I', "无障碍录音正常：输入 ${"%.0f".format(a11yPeak)}dB"); a11yChkSec = -1 }
+                        }
+                    }
+                    if (sil) {
+                        silSec++
+                        if (!micHint.startsWith("麦克风被系统静音")) { micHint = "麦克风被系统静音（其他应用可能占用了录音）"; slog('W', micHint) }
+                        if (silSec >= 2) {
+                            // 被静音 2 s：重建录音（重建后 shell 成为最新开始的录音，实测 OPPO/一加 即可恢复）。
+                            // 上次重建后恢复过 → 同一录音源再重建；上次重建没用 → 换下一种录音源（全试完就只重建）
+                            silSec = 0
+                            var next = liveSource
+                            if (liveSource == android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION || !silGood) {
+                                while (silTry < silOrder.size) { val c = silOrder[silTry++]; if (c != liveSource && c !in silTried) { next = c; break } }
+                            }
+                            silTried += liveSource
+                            silGood = false
+                            slog('W', "录音源 $liveSource 被系统静音（${silWho()}），" + (if (next == liveSource) "原录音源重建" else "改用录音源 $next 重建"))
+                            liveSource = next
+                            if (!rebuildRec("被系统静音")) return
+                            micHint = "麦克风被系统静音，正在重新接管"
+                            continue
+                        }
+                    } else {
+                        if (silTried.isNotEmpty() && !silGood) { silGood = true; slog('I', "录音源 $liveSource 没有被静音（之前被静音：${silTried.joinToString(",")}）") }
+                        silSec = 0
+                        if (micHint.startsWith("麦克风被系统静音")) micHint = ""
+                    }
+                }
                 rdMax = maxOf(rdMax, System.nanoTime() - tr0)
                 if (liveExternal) {
                     micRing.write(inBuf, 0, hop)
@@ -987,13 +1145,7 @@ class InjectorService : Binder {
                         val rc = recCount()
                         slog('M', "live/s mic=${"%.0f".format(liveLevelDb)}dB readMax=${rdMax / 1_000_000}ms writeMax=${wrMax / 1_000_000}ms " +
                             "outBuf=${obMin * 1000 / SR}~${obMax * 1000 / SR}ms 断流+${underruns - lastUnder} 积压mic=${micRing.size() * 1000 / SR}ms 目标在录=$rc")
-                        if (rc != lastRec) { slog('I', "目标录音数 $lastRec → $rc"); lastRec = rc }
-                        if (Build.VERSION.SDK_INT >= 29) runCatching {
-                            val sid = rec?.audioSessionId ?: -1
-                            val me = am?.activeRecordingConfigurations?.firstOrNull { it.clientAudioSessionId == sid }
-                            if (me?.isClientSilenced == true) { if (!micHint.startsWith("麦克风被系统静音")) { micHint = "麦克风被系统静音（其他应用可能占用了录音）"; slog('W', micHint) } }
-                            else if (micHint.startsWith("麦克风被系统静音")) micHint = ""
-                        }
+                        if (rc != lastRec) { slog('I', "目标录音数 $lastRec → $rc ${recDetail()}"); lastRec = rc }
                         statT = now; rdMax = 0; wrMax = 0; obMin = Int.MAX_VALUE; obMax = 0; lastUnder = underruns
                     }
                     continue
@@ -1025,6 +1177,8 @@ class InjectorService : Binder {
             slog('E', "liveLoop", t)
         } finally {
             curRec = null
+            a11yThread?.interrupt(); a11yThread = null
+            if (a11yOn) a11yBoost(false)
             watchdog?.interrupt()
             runCatching { rec?.stop() }
             runCatching { aec?.release() }; runCatching { ns?.release() }; aec = null; ns = null
@@ -1033,14 +1187,89 @@ class InjectorService : Binder {
         }
     }
 
+    // ------------------------------------------------------------ 注入轨道
+
+    /** 本进程里建成功过的方式（manual-LL / manual-NO / src），下次优先用 */
+    @Volatile private var trackWay: String? = null
+    @Volatile private var lastTrackErr = ""
+
+    /**
+     * 建注入轨道。两种方式：
+     *  - src：AudioPolicy.createAudioTrackSource(mix)。它内部建 AudioTrack 时不带 Context，
+     *    Android 17（一加 PMS110、Redmi 24117RK2CC 实测）在 shell 进程里会抛 Cannot create AudioTrack。
+     *  - manual：照 createAudioTrackSource 的做法手建，但带上 Context（AudioTrack.Builder.setContext，API 34+）：
+     *    公开 setUsage(USAGE_VIRTUAL_SOURCE) + addTag("addr=<mix registration>")，格式取 mix 的格式，
+     *    缓冲 max(minBuf, 2×10ms)，先 LOW_LATENCY 后 NONE（思路来自 SR-Voiceover-Roulette，MIT）。
+     *    反射 setSystemUsage(VIRTUAL_SOURCE) 在 Android 17 上报 Invalid system usage 15，所以用公开 setUsage。
+     * Android 17+ 先 manual 后 src；34–36 先 src（原有行为）后 manual；更老只有 src。
+     */
+    private fun newInjectTrack(pol: Any, mix: Any): AudioTrack? {
+        lastTrackErr = ""
+        val ways = ArrayList<String>()
+        val manualOk = Build.VERSION.SDK_INT >= 34
+        if (Build.VERSION.SDK_INT >= 37) { if (manualOk) ways += listOf("manual-LL", "manual-NO"); ways += "src" }
+        else { ways += "src"; if (manualOk) ways += listOf("manual-LL", "manual-NO") }
+        trackWay?.let { w -> if (ways.remove(w)) ways.add(0, w) }
+        val errs = ArrayList<String>()
+        for (w in ways) {
+            val t = runCatching { if (w == "src") srcTrack(pol, mix) else manualTrack(mix, w == "manual-LL") }
+                .onFailure { errs += "$w: ${describe(it)}" }.getOrNull()
+            if (t != null && t.state == AudioTrack.STATE_INITIALIZED) {
+                if (trackWay != w) slog('I', "注入轨道建立方式：$w" + if (errs.isEmpty()) "" else "（之前失败：${errs.joinToString("；")}）")
+                trackWay = w
+                return t
+            }
+            if (t != null) { errs += "$w: state=${t.state}"; runCatching { t.release() } }
+        }
+        lastTrackErr = errs.joinToString("；")
+        slog('E', "注入轨道建立失败：$lastTrackErr")
+        return null
+    }
+
+    /** getRegistration / setContext 走反射，保险起见放开隐藏 API（shell 进程一般本来就不限制） */
+    private val hiddenApiOnce by lazy {
+        runCatching {
+            val vm = Class.forName("dalvik.system.VMRuntime")
+            val rt = vm.getMethod("getRuntime").invoke(null)
+            vm.getMethod("setHiddenApiExemptions", Array<String>::class.java).invoke(rt, arrayOf("L"))
+        }
+        Unit
+    }
+
+    private fun srcTrack(pol: Any, mix: Any): AudioTrack? {
+        val polCls = Class.forName("android.media.audiopolicy.AudioPolicy")
+        val mixCls = Class.forName("android.media.audiopolicy.AudioMix")
+        return polCls.getMethod("createAudioTrackSource", mixCls).invoke(pol, mix) as AudioTrack?
+    }
+
+    private fun manualTrack(mix: Any, lowLatency: Boolean): AudioTrack {
+        val c = shellCtx ?: throw IllegalStateException("没有 Context")
+        hiddenApiOnce
+        val mixCls = Class.forName("android.media.audiopolicy.AudioMix")
+        val reg = mixCls.getMethod("getRegistration").invoke(mix) as String?
+        if (reg.isNullOrEmpty()) throw IllegalStateException("拿不到 mix registration")
+        val mf = mixCls.getMethod("getFormat").invoke(mix) as AudioFormat
+        val ch = if (mf.channelCount == 1) AudioFormat.CHANNEL_OUT_MONO else AudioFormat.CHANNEL_OUT_STEREO
+        val tf = AudioFormat.Builder().setSampleRate(mf.sampleRate).setChannelMask(ch).setEncoding(mf.encoding).build()
+        val ab = android.media.AudioAttributes.Builder().setUsage(USAGE_VIRTUAL_SOURCE)
+        android.media.AudioAttributes.Builder::class.java.getMethod("addTag", String::class.java)
+            .invoke(ab, if (reg.startsWith("addr=")) reg else "addr=$reg")
+        val minBuf = AudioTrack.getMinBufferSize(tf.sampleRate, ch, tf.encoding)
+        val bps = if (tf.encoding == AudioFormat.ENCODING_PCM_FLOAT) 4 else 2
+        val buf = maxOf(minBuf, tf.sampleRate / 100 * (if (ch == AudioFormat.CHANNEL_OUT_MONO) 1 else 2) * bps * 2)
+        val b = AudioTrack.Builder().setAudioAttributes(ab.build()).setAudioFormat(tf)
+            .setBufferSizeInBytes(buf).setTransferMode(AudioTrack.MODE_STREAM)
+            .setPerformanceMode(if (lowLatency) AudioTrack.PERFORMANCE_MODE_LOW_LATENCY else AudioTrack.PERFORMANCE_MODE_NONE)
+        AudioTrack.Builder::class.java.getMethod("setContext", Context::class.java).invoke(b, c)
+        return b.build()
+    }
+
     /** 注入轨道失效（系统音频服务重启等）时从同一个策略重建一条；失败返回 false */
     private fun rebuildTrack(): Boolean = runCatching {
         val pol = policy ?: return false
         val mix = mixObj ?: return false
-        val polCls = Class.forName("android.media.audiopolicy.AudioPolicy")
-        val mixCls = Class.forName("android.media.audiopolicy.AudioMix")
         runCatching { track?.stop() }; runCatching { track?.release() }
-        val t = polCls.getMethod("createAudioTrackSource", mixCls).invoke(pol, mix) as AudioTrack?
+        val t = newInjectTrack(pol, mix)
         if (t == null || t.state != AudioTrack.STATE_INITIALIZED) { runCatching { t?.release() }; track = null; false }
         else { t.play(); track = t; slog('W', "注入轨道已重建"); true }
     }.getOrElse { slog('W', "注入轨道重建失败", it); false }
@@ -1079,6 +1308,25 @@ class InjectorService : Binder {
         phase = "IDLE"
     }
 
+    /** 注入失败时把系统音频相关 logcat 与音频加固状态写进日志（shell 才能读到 audioserver 的日志） */
+    private var diagDumped = 0
+    private fun dumpAudioDiag() {
+        if (diagDumped >= 2) return
+        diagDumped++
+        fun run(vararg cmd: String, max: Int): List<String> = runCatching {
+            val p = ProcessBuilder(*cmd).redirectErrorStream(true).start()
+            val out = p.inputStream.bufferedReader().readLines()
+            p.waitFor(); out.takeLast(max)
+        }.getOrElse { listOf("（${cmd.joinToString(" ")} 失败：${it.message}）") }
+        val re = Regex("AudioFlinger|AudioPolicy|APM_|AudioTrack|AudioHardening|audio_hw|AudioSystem|MicMask", RegexOption.IGNORE_CASE)
+        val lc = run("logcat", "-d", "-v", "threadtime", "-t", "1500", max = 1500).filter { re.containsMatchIn(it) }.takeLast(80)
+        slog('W', "系统音频诊断（注入失败时）：sdk=${Build.VERSION.SDK_INT} 相关 logcat ${lc.size} 行\n" + lc.joinToString("\n"))
+        if (Build.VERSION.SDK_INT >= 37) {
+            val hd = run("sh", "-c", "dumpsys audio | grep -i -m 20 -E 'hardening|AudioHardening'", max = 20)
+            slog('W', "音频加固状态（Android 17）：\n" + hd.joinToString("\n"))
+        }
+    }
+
     private fun unregister() {
         val p = policy ?: return
         policy = null
@@ -1090,10 +1338,23 @@ class InjectorService : Binder {
 
     /** 目标 uid 现在有没有在录音（shell 进程能看到 clientUid） */
     /** 其他应用的录音数（不算 shell 自己和 MicMask；系统隐藏 uid 时只能全算上） */
+    /** 当前所有录音会话：uid、包名、录音源、是否被系统静音（排查 QQ 提示「麦克风没有声音」用） */
+    private fun recDetail(): String = runCatching {
+        val list = am?.activeRecordingConfigurations ?: return ""
+        val c = android.media.AudioRecordingConfiguration::class.java
+        fun g(o: Any, m: String) = runCatching { c.getMethod(m).invoke(o) }.getOrNull()
+        val pm = shellCtx?.packageManager
+        list.joinToString(prefix = "[", postfix = "]") { r ->
+            val uid = g(r, "getClientUid") as? Int ?: -1
+            val pkg = g(r, "getClientPackageName") ?: runCatching { pm?.getNameForUid(uid) }.getOrNull()
+            "uid=$uid $pkg src=${g(r, "getClientAudioSource")} 静音=${g(r, "isClientSilenced")} 设备=${(g(r, "getAudioDevice") as? android.media.AudioDeviceInfo)?.type}"
+        }
+    }.getOrDefault("")
+
     private fun recCount(): Int = runCatching {
         val list = am?.activeRecordingConfigurations ?: return 0
         val getUid = android.media.AudioRecordingConfiguration::class.java.getMethod("getClientUid")
-        list.count { val u = getUid.invoke(it) as Int; u != Process.myUid() && (u != callerUid || u < 0) }
+        list.count { val u = getUid.invoke(it) as Int; u != Process.myUid() && u != ShellAudioRecord.REC_UID && (u != callerUid || u < 0) }
     }.getOrDefault(0)
 
     /**
@@ -1145,7 +1406,7 @@ class InjectorService : Binder {
         val pos = playPos.coerceAtLeast(0)
         return listOf(
             "phase=$phase",
-            "uid=${Process.myUid()}",
+            "uid=${Process.myUid()}/rec${ShellAudioRecord.REC_UID}",
             "perm=${if (hasRoutingPermission()) 1 else 0}",
             "target=${if (scopeAll) "auto" else targetUids.joinToString(",")}",
             "trig=$trigger",
@@ -1177,12 +1438,12 @@ class InjectorService : Binder {
 
     /** 包名伪装成 com.android.shell，和 uid 2000 对得上（GameMicLab 同款做法） */
     private class ShellContext(base: Context) : ContextWrapper(base) {
-        private val isShell = Process.myUid() == 2000
+        private val isShell = ShellAudioRecord.REC_UID == 2000
         override fun getPackageName(): String = if (isShell) "com.android.shell" else super.getPackageName()
         override fun getOpPackageName(): String = if (isShell) "com.android.shell" else super.getOpPackageName()
         override fun getAttributionSource(): AttributionSource {
             if (!isShell || Build.VERSION.SDK_INT < 31) return super.getAttributionSource()
-            return AttributionSource.Builder(Process.myUid()).setPackageName("com.android.shell").build()
+            return AttributionSource.Builder(ShellAudioRecord.REC_UID).setPackageName("com.android.shell").build()
         }
         override fun getApplicationContext(): Context = this
     }

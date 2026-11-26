@@ -20,7 +20,9 @@ class ProbeService : Service() {
             val out: (String) -> Unit = { synchronized(w) { w.write(it); w.newLine(); w.flush() } }
             try {
                 out("PID|${android.os.Process.myPid()}")
-                if (model == null) Probe.header(out, "App 进程") else Probe.runOne(File(model), tier, out)
+                if (model == null) Probe.header(out, "App 进程")
+                else if (Probe.TIERS6.any { it.first == tier } && intent.getBooleanExtra("q6", false)) Probe.runOne6(File(model), tier, intent.getStringExtra("qnn"), intent.getStringExtra("qnn_noprep"), out)
+                else Probe.runOne(File(model), tier, out)
             } catch (t: Throwable) { out("异常：$t") }
             out("END"); w.close()
             android.os.Process.killProcess(android.os.Process.myPid())

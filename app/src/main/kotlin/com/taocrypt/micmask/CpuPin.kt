@@ -17,9 +17,14 @@ object CpuPin {
                 val f = File(d, "cpufreq/cpuinfo_max_freq").takeIf { it.canRead() }?.readText()?.trim()?.toLongOrNull() ?: return@mapNotNull null
                 d.name.removePrefix("cpu").toInt() to f
             }
-        val minF = cpus.minOfOrNull { it.second } ?: return emptyList()
+        if (cpus.isEmpty()) return emptyList()
         if (cpus.map { it.second }.distinct().size < 2) return emptyList()
-        cpus.filter { it.second > minF }.sortedByDescending { it.second }.map { it.first }
+        // 取最高频 70% 以上的核：骁龙 8 Elite/8 Elite Gen 5 是 2 超大核 + 6 大核、没有小核，
+        // 旧规则「高于最低频」只剩 2 个核，4 线程挤 2 核反而更慢（PMS110 实测 NEON 声码器 367ms）
+        val maxF = cpus.maxOf { it.second }
+        val pick = cpus.filter { it.second * 10 >= maxF * 7 }
+        if (pick.size == cpus.size) return emptyList()   // 全是性能核：不绑
+        pick.sortedByDescending { it.second }.map { it.first }
     }.getOrDefault(emptyList())
 
     fun pinSelf(why: String) {

@@ -198,6 +198,8 @@ object BeaconHub {
 
     private val beaconApp get() = BuildConfig.BEACON_APP_ID.ifBlank { "micmask" }
     private fun iid() = Beacon.installId()
+    /** 本设备 ID（赞赏弹窗里显示、可复制，找作者处理赞助时用）；Beacon 关闭时为 null */
+    val deviceId: String? get() = if (enabled) runCatching { iid() }.getOrNull() else null
 
     /** 验证 {until, iat, sig}；返回有效到期时间（毫秒），无效返回 0 */
     private fun verifiedUntil(o: org.json.JSONObject?): Long {

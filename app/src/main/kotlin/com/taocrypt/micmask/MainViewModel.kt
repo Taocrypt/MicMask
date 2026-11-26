@@ -794,11 +794,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         val voice = ModelStore.currentVoice(ctx) ?: throw IllegalStateException(tr("还没有音色，先在变声页下载"))
                         val tu = _state.value
                         // 档位/线程变了要换新引擎（release 后执行器不可复用）
-                        clipEngine?.let { if (clipEngineVoice == voice && it.tune(tu.aiTier, tu.aiGate, tu.aiFeatTh, tu.aiSynTh)) { it.release(); clipEngine = null } }
+                        clipEngine?.let { if (clipEngineVoice == voice && (it.tune(tu.aiTier, tu.aiGate, tu.aiFeatTh, tu.aiSynTh) or it.setVocoder(aiTuneVoc()))) { it.release(); clipEngine = null } }
                         val e = clipEngine?.takeIf { clipEngineVoice == voice } ?: run {
                             clipEngine?.release()
                             LiveRvc { canon -> ModelStore.locate(ctx, if (canon.startsWith(ModelStore.DEFAULT_VOICE + "_stream")) ModelStore.voiceFile(voice, canon) else canon) }
-                                .also { it.pickCache = File(ctx.filesDir, "pick_clip_$voice.txt"); it.tune(tu.aiTier, tu.aiGate, tu.aiFeatTh, tu.aiSynTh); clipEngine = it; clipEngineVoice = voice }
+                                .also { it.pickCache = File(ctx.filesDir, "pick_clip_$voice.txt"); it.tune(tu.aiTier, tu.aiGate, tu.aiFeatTh, tu.aiSynTh); it.setVocoder(aiTuneVoc()); clipEngine = it; clipEngineVoice = voice }
                         }
                         e.indexRate = aiIndex()
                         e.semis = prefs.getFloat("ai_semis", 0f).toInt()
@@ -1092,7 +1092,52 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         inj.tuneTier = st.aiTier; inj.tuneGate = st.aiGate; inj.tuneFeat = st.aiFeatTh; inj.tuneSyn = st.aiSynTh
         inj.tunePin = prefs.getBoolean("ai_pin", true)
         inj.tuneIdx = aiIndex()
+        inj.tuneVoc = aiTuneVoc()
     }
+    /** 声码器（pref ai_vocoder = auto / ort / neon16 / npu）→ 0 自动 1 ORT 整图 2 NEON fp16 3 骁龙 NPU */
+    fun aiVocoder(): Int = when (prefs.getString("ai_vocoder", "auto")) { "ort" -> 1; "neon16" -> 2; "npu" -> 3; else -> 0 }
+    /** HuBERT（内容特征）也交给骁龙 NPU；默认关 */
+    fun aiHubNpu(): Boolean = prefs.getBoolean("ai_hubert_npu", false)
+    fun setAiHubNpu(on: Boolean) {
+        if (on == aiHubNpu()) return
+        prefs.edit().putBoolean("ai_hubert_npu", on).apply()
+        com.taocrypt.micmask.inject.MicInjector.tuneVoc = aiTuneVoc()
+        L.i("AI HuBERT NPU → $on")
+    }
+    /** 发给推理引擎的值：声码器 0..3，HuBERT 上 NPU 再加 4 */
+    fun aiTuneVoc(): Int = aiVocoder() or (if (aiHubNpu()) 4 else 0)
+    /** 改声码器：运行中推给注入进程（会重新加载合成器，停顿 1~3 秒；首次用 NEON 还要拆分模型） */
+    fun setAiVocoder(v: Int) {
+        val k = when (v) { 1 -> "ort"; 2 -> "neon16"; 3 -> "npu"; else -> "auto" }
+        if (k == prefs.getString("ai_vocoder", "auto")) return
+        prefs.edit().putString("ai_vocoder", k).apply()
+        com.taocrypt.micmask.inject.MicInjector.tuneVoc = aiTuneVoc()
+        L.i("AI 声码器 → $k")
+    }
+    // ---- 骁龙 NPU 组件（QNN，按需从官方 Maven 仓库下载）
+    /** null = 本机不是已知骁龙；否则 HTP 架构 */
+    fun npuArch(): String? = QnnPack.deviceArch()
+    fun npuInstalled(): Boolean = npuArch()?.let { QnnPack.installed(QnnPack.appDir(ctx, it), it) } ?: false
+    val npuProgress = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    @Volatile private var npuJob: kotlinx.coroutines.Job? = null
+    fun npuDownload(onDone: (Boolean) -> Unit) {
+        val arch = npuArch() ?: return onDone(false)
+        if (npuJob?.isActive == true) return
+        npuJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val ok = runCatching {
+                QnnPack.download(QnnPack.appDir(ctx, arch), arch) { p ->
+                    npuProgress.value = tr("下载中 {0}%（{1} / {2} MB，{3}）", (p.done * 100 / maxOf(1, p.total)).toInt(), p.done shr 20, p.total shr 20, p.mirror)
+                }
+            }.onFailure { L.e("NPU 组件下载失败", it); npuProgress.value = tr("下载失败：{0}", it.message ?: it.javaClass.simpleName) }.isSuccess
+            if (ok) { npuProgress.value = null; L.i("NPU 组件已下载（$arch）") }
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { onDone(ok) }
+        }
+    }
+    fun npuCancel() { QnnPack.cancel = true }
+    fun npuDelete() { npuArch()?.let { QnnPack.delete(QnnPack.appDir(ctx, it)) }; npuProgress.value = null }
+
+    /** 本机 CPU 是否支持 NEON fp16 声码器（ARMv8.2 asimdhp） */
+    fun neonVocoderSupported(): Boolean = NeonVocoder.fp16Supported()
     fun aiIndex(): Float = prefs.getFloat("ai_index", 0.3f)
     /** 检索比例：不重载模型，松手后推给运行中的引擎 */
     fun setAiIndex(v: Float) {
@@ -1120,7 +1165,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         com.taocrypt.micmask.inject.MicInjector.tunePin = on
         L.i("AI 推理绑大核 → $on")
     }
-    fun resetAiTune() { setAiTune(0, -50f, 3, 4); setAiIndex(0.3f); commitAiTune() }
+    fun resetAiTune() { setAiTune(0, -50f, 3, 4); setAiIndex(0.3f); setAiVocoder(0); setAiHubNpu(false); commitAiTune() }
     /** 按模式开始/停止；运行中切到别的模式会先停再按新模式重启 */
     fun startMode(mode: Int) {
         if (mode == 2 && !com.taocrypt.micmask.inject.MicInjector.liveOn && speakerMode()) { _state.value = _state.value.copy(toast = tr("外放模式下声卡不可用（需要 Shizuku）")); return }
@@ -1435,10 +1480,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (!LiveRvc.modelPresent(ctx)) { _state.value = _state.value.copy(liveBench = tr("缺实时变声模型，先在模型页导入")); return }
         _state.value = _state.value.copy(liveBenching = true, liveMsg = tr("性能测试中，约 20 秒…"))
         Thread {
-            val r = com.taocrypt.micmask.inject.MicInjector.liveBench(ctx, ModelStore.liveNames(ctx))
-            L.i("UI 性能测试结果：$r")
+            // 用「全自动」测：档位自动、声码器各方式都测，装了 NPU 组件就连 HuBERT 也试 NPU；测完把最快的配置存下来
+            val inj = com.taocrypt.micmask.inject.MicInjector
+            val oldTier = inj.tuneTier; val oldVoc = inj.tuneVoc
+            inj.tuneTier = 0; inj.tuneVoc = if (npuInstalled()) 4 else 0
+            val raw = try { inj.liveBench(ctx, ModelStore.liveNames(ctx)) } finally { inj.tuneTier = oldTier; inj.tuneVoc = oldVoc }
+            val r = raw.substringBefore('§')
+            L.i("UI 性能测试结果：$raw")
+            var applied = ""
+            raw.substringAfter('§', "").split(';').takeIf { it.size == 2 && !r.startsWith("失败") }?.let { (kind, hub) ->
+                val v = when (kind) { "NEON" -> 2; "NPU" -> 3; else -> 1 }
+                prefs.edit().putString("ai_vocoder", when (v) { 2 -> "neon16"; 3 -> "npu"; else -> "ort" }).putBoolean("ai_hubert_npu", hub == "1").apply()
+                setAiTune(tier = 0)
+                inj.tuneVoc = aiTuneVoc(); commitAiTune()
+                applied = tr("已自动采用：档位自动 · 声码器 {0} · HuBERT {1}", kind, if (hub == "1") "NPU" else "CPU")
+                L.i("UI 性能测试：$applied")
+            }
             if (!r.startsWith("失败")) ctx.getSharedPreferences("live", 0).edit().putString("bench_" + _state.value.liveVoice, r).apply()
-            _state.value = _state.value.copy(liveBenching = false, liveBench = r, liveMsg = if (r.startsWith("失败")) r else tr("性能测试完成"))
+            _state.value = _state.value.copy(liveBenching = false, liveBench = r, liveMsg = if (r.startsWith("失败")) r else applied.ifEmpty { tr("性能测试完成") })
         }.start()
     }
 

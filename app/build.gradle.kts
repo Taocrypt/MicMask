@@ -14,16 +14,30 @@ android {
         applicationId = "com.taocrypt.micmask"
         minSdk = 26
         targetSdk = 34
-        versionCode = 139
-        versionName = "2.0.0"
+        versionCode = 141
+        versionName = "2.1-alpha.1"
         // Beacon 后台（公告 / 推荐位 / 匿名统计 / 反馈）：CI 从 Secrets 注入，源码与本地构建为空 → SDK 关闭
         fun env(k: String) = (System.getenv(k) ?: "").replace("\\", "").replace("\"", "")
         buildConfigField("String", "BEACON_URL", "\"${env("BEACON_URL")}\"")
         buildConfigField("String", "BEACON_APP_ID", "\"${env("BEACON_APP_ID")}\"")
         buildConfigField("String", "BEACON_KEY", "\"${env("BEACON_KEY")}\"")
         ndk {
-            // 目前只做离线文件转换，纯 Kotlin + ONNX Runtime（自带 x86_64/arm64 原生库）
+            // 只出 arm64-v8a（ONNX Runtime 与原生声码器 libmicmask_vocoder.so）
             abiFilters += listOf("arm64-v8a")
+        }
+        externalNativeBuild {
+            cmake {
+                // libc++ 静态链进 libmicmask_vocoder.so，不额外带 libc++_shared.so
+                arguments += listOf("-DANDROID_STL=c++_static")
+            }
+        }
+    }
+
+    // 原生 NEON fp16 声码器（app/src/main/cpp，内核移植自 nasuiyile/mobile-rvc，MIT）
+    ndkVersion = "28.2.13676358"
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
         }
     }
 
@@ -115,8 +129,10 @@ dependencies {
     implementation("dev.rikka.shizuku:api:13.1.5")
     implementation("dev.rikka.shizuku:provider:13.1.5")
 
-    // ONNX Runtime Android（含 arm64-v8a / x86_64 原生库）
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.22.0")
+    // ONNX Runtime Android（带 QNN EP 的版本，只有 arm64-v8a）。
+    // 高通 QNN 运行库（com.qualcomm.qti:qnn-runtime）不随 App 分发：其许可不允许单独分发，且与 GPL 合并分发有冲突；
+    // 用户需要 NPU 时在 App 内同意许可后从官方 Maven 仓库按需下载（QnnPack.kt）。
+    implementation("com.microsoft.onnxruntime:onnxruntime-android-qnn:1.29.0") { exclude(group = "com.qualcomm.qti") }
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

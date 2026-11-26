@@ -71,6 +71,15 @@ class LiveRvc(private val open: (String) -> Any?) {
     private var hubert: OrtSession? = null
     private var rmvpe: OrtSession? = null
     private var netG: OrtSession? = null
+    /** 拆分声码器通路（ORT 前半图 + NEON fp16 或 NPU 跑 dec），owner = 它所属的整图会话 */
+    private class VocPath(val owner: OrtSession, val pre: OrtSession, val split: NeonVocoder.Split, val desc: String, val kind: String,
+                          val dec: (FloatArray, Int, FloatArray, FloatArray?) -> FloatArray, private val closeDec: () -> Unit) : java.io.Closeable {
+        override fun close() { runCatching { closeDec() }; runCatching { pre.close() } }
+    }
+    @Volatile private var voc: VocPath? = null
+    @Volatile private var lastPreMs = 0L
+    @Volatile private var lastDecMs = 0L
+    private val stPre = ArrayList<Long>(); private val stDec = ArrayList<Long>()
     /** 内容特征维度：v2=768（hubert 第 12 层 feat），v1=256（第 9 层 + final_proj，hubert_dyn8.onnx 新版的 feat9 输出） */
     @Volatile private var emb = 768
 
@@ -152,6 +161,16 @@ class LiveRvc(private val open: (String) -> Any?) {
     @Volatile private var idxMs = 0L
     /** 推理线程绑大核（高级设置，默认开） */
     @Volatile var pinBig = true
+    /** 声码器：0=自动（本机实测选最快：ORT 整图 / NEON fp16 / NPU）1=ORT 整图 2=NEON fp16（支持就用）3=骁龙 NPU（可用就用） */
+    @Volatile var vocoder = 0; private set
+    /** 返回 true = 变了，要重新加载 */
+    /** HuBERT 也尝试上 NPU（setVocoder 的第 3 位，值 4） */
+    @Volatile var hubWant = false; private set
+    /** 最近一次测速选出的配置「声码器;HuBERT 是否 NPU」，性能测试据此自动采用 */
+    @Volatile var benchCfg = ""
+    fun setVocoder(v: Int): Boolean { val n = (v and 3).coerceIn(0, 3); val h = v and 4 != 0; val c = n != vocoder || h != hubWant; vocoder = n; hubWant = h; return c }
+    /** 取 QNN 库目录（只在注入进程里设置；返回 null = 不用 NPU） */
+    @Volatile var qnnDirProvider: (() -> File?)? = null
     /** 应用调参；返回 true 表示要重新加载模型才生效（档位/线程变了） */
     fun tune(t: Int, gate: Float, fth: Int, sth: Int): Boolean {
         gateDb = gate.coerceIn(-80f, -20f)
@@ -196,8 +215,9 @@ class LiveRvc(private val open: (String) -> Any?) {
         stFeat.add(feat); stSyn.add(syn); stLag.add(lag)
         if (stLag.size >= 20) {
             L.i("live 汇总(20块) 特征 p50=${pct(stFeat, .5)} p95=${pct(stFeat, .95)} max=${stFeat.max()}ms | 合成 p50=${pct(stSyn, .5)} p95=${pct(stSyn, .95)} max=${stSyn.max()}ms | " +
-                "端到端 p50=${pct(stLag, .5)} p95=${pct(stLag, .95)}ms | 预算 ${BLOCK * 10}ms | 丢块累计 $dropped 静音块累计 $gated")
-            stFeat.clear(); stSyn.clear(); stLag.clear()
+                "端到端 p50=${pct(stLag, .5)} p95=${pct(stLag, .95)}ms | 预算 ${BLOCK * 10}ms | 丢块累计 $dropped 静音块累计 $gated" +
+                (if (stDec.isNotEmpty()) " | 声码器 ${voc?.kind ?: "?"} 前半图 p50=${pct(stPre, .5)} 声码器 p50=${pct(stDec, .5)} p95=${pct(stDec, .95)} max=${stDec.max()}ms" else " | 声码器 ORT 整图"))
+            stFeat.clear(); stSyn.clear(); stLag.clear(); stPre.clear(); stDec.clear()
         }
     }
 
@@ -230,7 +250,7 @@ class LiveRvc(private val open: (String) -> Any?) {
     /** force=true：忽略缓存重新测速（「性能测试」按钮） */
     fun load(onLog: (String) -> Unit, force: Boolean = false) {
         if (netG != null && !force) return
-        if (force) { runCatching { netG?.close() }; netG = null; runCatching { pickCache?.delete() } }
+        if (force) { runCatching { voc?.close() }; voc = null; runCatching { netG?.close() }; netG = null; runCatching { pickCache?.delete() } }
         if (pinBig) CpuPin.pinSelf("加载前")
         fun need(n: String): Any = open(n) ?: throw IllegalStateException("缺模型 $n，请先导入")
         fun opts(th: Int) = OrtSession.SessionOptions().apply {
@@ -270,6 +290,7 @@ class LiveRvc(private val open: (String) -> Any?) {
             val t = System.nanoTime(); decim3(FloatArray(WIN48)); val td = System.nanoTime() - t
             featMs = th / 3_000_000 + tr / 3_000_000 + td / 1_000_000
             benchFeatMs = featMs
+            hubMs = th / 3_000_000
             L.i("live 测速 hubert=${th / 3_000_000}ms rmvpe=${tr / 3_000_000}ms 抽取=${td / 1_000_000}ms 特征合计≈${featMs}ms")
         }.onFailure { L.e("live 特征预热失败", it) }
         // 流式合成器：有几个版本就都测一遍，用最快的
@@ -331,15 +352,43 @@ class LiveRvc(private val open: (String) -> Any?) {
             o = opts(featThreads); curTh = featThreads; hubert = load("HuBERT", ModelStore.HUBERT); o = opts(synThreads); curTh = synThreads
         }
         checkHubert()
+        if (hubWant && !hubertNpu) runCatching { featMs = tryNpuHubert(featMs) }.onFailure { L.e("live NPU HuBERT 失败，留在 CPU", it) }
         LEN = runNetG(phFor(netG!!), pi, pf).size / UPP
+        // 声码器：ORT 前半图 + 原生 NEON fp16 / 骁龙 NPU 跑 dec（失败或不划算就留在 ORT 整图）
+        var synMs = pick.ms
+        var vocNote = ""
+        voc?.close(); voc = null
+        val ph0 = phFor(netG!!)
+        val ortMs = if (vocoder == 1) -1L else runCatching { runOrt(netG!!, ph0, pi, pf); val t = System.nanoTime(); repeat(3) { runOrt(netG!!, ph0, pi, pf) }; (System.nanoTime() - t) / 3_000_000 }.getOrDefault(-1L)
+        fun bench(vp: VocPath): Long? = runCatching {
+            runSplit(vp, ph0, pi, pf)
+            var a = 0L; var b = 0L
+            repeat(3) { runSplit(vp, ph0, pi, pf); a += lastPreMs; b += lastDecMs }
+            L.i("live 声码器测速：${vp.kind} 前半图 ${a / 3}ms + 声码器 ${b / 3}ms = ${(a + b) / 3}ms（${vp.desc}）")
+            (a + b) / 3
+        }.onFailure { L.e("live 声码器 ${vp.kind} 试跑失败", it) }.getOrNull()
+        val cands = ArrayList<Pair<VocPath, Long>>()
+        if (vocoder == 0 || vocoder == 2) runCatching { buildVoc(open(pick.name), netG!!) }.onFailure { L.e("live NEON 声码器准备失败", it) }.getOrNull()
+            ?.let { vp -> bench(vp)?.let { cands += vp to it } ?: vp.close() }
+        if (vocoder == 0 || vocoder == 3) runCatching { buildNpu(open(pick.name), netG!!, ph0, pi, pf) }.onFailure { L.e("live NPU 声码器准备失败", it) }.getOrNull()
+            ?.let { vp -> bench(vp)?.let { cands += vp to it } ?: vp.close() }
+        if (ortMs >= 0) L.i("live 声码器测速：ORT 整图 ${ortMs}ms")
+        val forced = cands.firstOrNull { (vocoder == 2 && it.first.kind == "NEON") || (vocoder == 3 && it.first.kind == "NPU") }
+        val best = forced ?: cands.minByOrNull { it.second }?.takeIf { ortMs < 0 || it.second * 100 < ortMs * 95 }
+        for ((vp, _) in cands) if (vp !== best?.first) vp.close()
+        if (best != null) {
+            voc = best.first; synMs = best.second; vocNote = if (best.first.kind == "NPU") " · NPU 声码器" else " · NEON 声码器"
+            L.i("live 声码器：用 ${best.first.kind}${if (forced != null) "（设置指定）" else "（${best.second}ms，ORT 整图 ${ortMs}ms）"}")
+        } else if (vocoder != 1) L.i("live 声码器：用 ORT 整图（${ortMs}ms）${if (cands.isNotEmpty()) "，拆分通路不更快" else ""}")
         runCatching {
             val f = pickCache ?: return@runCatching
             val old = f.takeIf { it.exists() }?.readText()?.split("\n").orEmpty().chunked(4).filter { it.size == 4 && it[0] != key }
             f.writeText((listOf(listOf(key, pick.name, "${pick.ms}", "$LEN")) + old).take(16).flatten().joinToString("\n"))
         }
         val tier = if (BLOCK <= 30) "标准" else "省电"
-        benchSummary = (if (compatOf(netG!!) != null) "兼容模式·" else "") + "${tier}档：每步 ${BLOCK * 10}ms · 特征 ${featMs}ms · 合成 ${pick.ms}ms · 负载 ${"%.0f".format(ratio(pick) * 100)}%"
+        benchSummary = (if (compatOf(netG!!) != null) "兼容模式·" else "") + "${tier}档：每步 ${BLOCK * 10}ms · 特征 ${featMs}ms · 合成 ${synMs}ms · 负载 ${"%.0f".format(maxOf(synMs, featMs) * 100.0 / pick.blockMs)}%$vocNote"
         L.i("live 选用 ${pick.name} → $benchSummary")
+        benchCfg = "${best?.first?.kind ?: "ORT"};${if (hubertNpu) 1 else 0}"
         if (ratio(pick) > 1.0) L.w("live 本机最快的档位也超预算，会断音")
         if (pinBig) CpuPin.pinSelf("加载后")   // ORT 线程池在建会话时才创建，再绑一次
         onConfig?.invoke(BLOCK * 10)
@@ -408,15 +457,18 @@ class LiveRvc(private val open: (String) -> Any?) {
                     if (!noB50Logged) { noB50Logged = true; L.w("live 本音色没有块长更大的档位，无法自动降档") }
                     shifting = false; return@Thread
                 }
+                // 当前在用 NEON 声码器：给新档位也准备一份（首次拆分约 1–3 s，在本后台线程里做）
+                val nv = if (voc != null) runCatching { buildVoc(open(b.first), b.second) }.onFailure { L.e("live 降档后声码器准备失败，用 ORT 整图", it) }.getOrNull() else null
                 synExec.execute {
-                    val old = netG
-                    netG = b.second
+                    val old = netG; val oldVoc = voc
+                    netG = b.second; voc = nv
                     val ph = FloatArray(T * embOf(b.second)); val pi = LongArray(T) { 120 }; val pf = FloatArray(T) { 300f }
                     val newLen = runCatching { runNetG(ph, pi, pf).size / UPP }.getOrElse { L.e("live 省电档试跑失败", it); -1 }
-                    if (newLen <= 0) { netG = old; runCatching { b.second.close() }; shifting = false; return@execute }
+                    if (newLen <= 0) { netG = old; voc = oldVoc; runCatching { nv?.close() }; runCatching { b.second.close() }; shifting = false; return@execute }
                     LEN = newLen; curName = b.first
+                    runCatching { oldVoc?.close() }
                     runCatching { old?.close() }
-                    benchSummary = "省电档(自动)：每步 ${BLOCK * 10}ms"
+                    benchSummary = "省电档(自动)：每步 ${BLOCK * 10}ms" + (if (voc != null) " · NEON 声码器" else "")
                     L.i("live 已自动降档到 ${b.first}，每步 ${BLOCK * 10}ms（本次运行有效，下次开始仍按测速结果）")
                     onConfig?.invoke(BLOCK * 10)
                     shifting = false
@@ -483,8 +535,8 @@ class LiveRvc(private val open: (String) -> Any?) {
         stop()
         val t0 = System.nanoTime()
         while (inflight.get() > 0 && System.nanoTime() - t0 < 1_500_000_000L) Thread.sleep(5)
-        runCatching { synExec.submit { runCatching { netG?.close() }; netG = null }.get(2, java.util.concurrent.TimeUnit.SECONDS) }
-            .onFailure { runCatching { netG?.close() }; netG = null }
+        runCatching { synExec.submit { runCatching { voc?.close() }; voc = null; runCatching { netG?.close() }; netG = null }.get(2, java.util.concurrent.TimeUnit.SECONDS) }
+            .onFailure { runCatching { voc?.close() }; voc = null; runCatching { netG?.close() }; netG = null }
         curName = null; noB50Logged = false
         L.i("live 换音色：保留特征模型，只重载合成器")
     }
@@ -492,8 +544,8 @@ class LiveRvc(private val open: (String) -> Any?) {
     fun release() {
         stop()
         featExec.shutdownNow(); synExec.shutdownNow()
-        runCatching { hubert?.close() }; runCatching { rmvpe?.close() }; runCatching { netG?.close() }
-        hubert = null; rmvpe = null; netG = null
+        runCatching { hubert?.close() }; runCatching { rmvpe?.close() }; runCatching { voc?.close() }; runCatching { netG?.close() }
+        hubert = null; rmvpe = null; voc = null; netG = null; hubertNpu = false
     }
 
     private fun pumpLoop() {
@@ -589,15 +641,17 @@ class LiveRvc(private val open: (String) -> Any?) {
                 synExec.execute {
                     try {
                         val t1 = System.nanoTime()
+                        val usedVoc = voc?.takeIf { it.owner === netG } != null
                         val y = runNetG(phone, pitch, pitchf)
                         lastSynMs = (System.nanoTime() - t1) / 1_000_000
+                        val vocTag = if (usedVoc && voc != null) "(前半${lastPreMs}+NEON声码器${lastDecMs})" else ""
                         val t2 = System.nanoTime()
                         emit(y)
                         val t3 = System.nanoTime()
                         var pk = 0f; for (v in y) pk = maxOf(pk, kotlin.math.abs(v))
                         val lag = (t3 - tAvail) / 1_000_000
                         L.m("live 块#$id in=${"%.0f".format(db)}dB 等待=${waitFeat}ms 重采样=${(tH - t0) / 1_000_000} hubert=${(tR - tH) / 1_000_000}${if (idxMs > 0) "(检索 $idxMs)" else ""} rmvpe=${(tE - tR) / 1_000_000} 特征=${featMs} " +
-                            "排队=${(t1 - tQ) / 1_000_000} 合成=$lastSynMs 推送=${(t3 - t2) / 1_000_000} 端到端=${lag}ms 浊音帧=$voiced/$T 峰值=${"%.2f".format(pk)} 在途=${inflight.get()}")
+                            "排队=${(t1 - tQ) / 1_000_000} 合成=$lastSynMs$vocTag 推送=${(t3 - t2) / 1_000_000} 端到端=${lag}ms 浊音帧=$voiced/$T 峰值=${"%.2f".format(pk)} 在途=${inflight.get()}")
                         // 特征与合成分线程流水，吞吐只看较慢的一段是否超过块长；端到端只是延迟，超过 2 倍块长才提示。5 s 内最多一条
                         val slow = maxOf(featMs, lastSynMs)
                         val nowW = System.currentTimeMillis()
@@ -633,6 +687,30 @@ class LiveRvc(private val open: (String) -> Any?) {
         }
         prevTail = y.copyOfRange(BLOCK_S, BLOCK_S + XF)
         io?.push(out)
+    }
+
+    @Volatile private var hubertNpu = false
+    private var hubMs = 0L
+
+    /** 骁龙 NPU 跑 HuBERT：成功就替换 CPU 会话，返回新的特征耗时 */
+    private fun tryNpuHubert(featMs: Long): Long {
+        val dir = runCatching { qnnDirProvider?.invoke() }.getOrNull() ?: return featMs
+        val f = open(ModelStore.HUBERT) as? File ?: return featMs
+        if (!QnnVocoder.init(dir)) return featMs
+        val cpu = hubert ?: return featMs
+        val t = System.nanoTime()
+        val s = QnnHubert.open(env, dir, f, 16320, cpu, featOut()) ?: return featMs
+        val z = FloatArray(16320) { (Math.random().toFloat() - 0.5f) * 0.1f }
+        QnnHubert.run(env, s, z, featOut())
+        var ms = 0L
+        repeat(3) { val a = System.nanoTime(); QnnHubert.run(env, s, z, featOut()); ms += System.nanoTime() - a }
+        ms /= 3_000_000
+        L.i("live NPU HuBERT 就绪：${ms}ms（CPU ${hubMs}ms），用时 ${(System.nanoTime() - t) / 1_000_000}ms")
+        if (hubMs > 0 && ms >= hubMs) { L.w("live NPU HuBERT 不比 CPU 快，不用"); s.close(); return featMs }
+        hubert = s; hubertNpu = true; runCatching { cpu.close() }
+        val nf = if (hubMs > 0) featMs - hubMs + ms else featMs
+        benchFeatMs = nf; hubMs = ms
+        return nf
     }
 
     private fun runHubert(x: FloatArray): Array<FloatArray> {
@@ -671,6 +749,18 @@ class LiveRvc(private val open: (String) -> Any?) {
     private fun runNetG(phone: FloatArray, pitch: LongArray, pitchf: FloatArray): FloatArray {
         val s = netG!!
         compatOf(s)?.let { return runCompat(s, it, phone, pitch, pitchf) }
+        val v = voc
+        if (v != null && v.owner === s) {
+            try { return runSplit(v, phone, pitch, pitchf) } catch (t: Throwable) {
+                // 原生通路出错：本次运行退回 ORT 整图，不影响出声
+                L.e("live 声码器 ${v.kind} 运行出错，退回 ORT 整图", t)
+                if (voc === v) { voc = null; runCatching { v.close() } }
+            }
+        }
+        return runOrt(s, phone, pitch, pitchf)
+    }
+
+    private fun runOrt(s: OrtSession, phone: FloatArray, pitch: LongArray, pitchf: FloatArray): FloatArray {
         OnnxTensor.createTensor(env, FloatBuffer.wrap(phone), longArrayOf(1, T.toLong(), (phone.size / T).toLong())).use { a ->
             OnnxTensor.createTensor(env, LongBuffer.wrap(pitch), longArrayOf(1, T.toLong())).use { b ->
                 OnnxTensor.createTensor(env, FloatBuffer.wrap(pitchf), longArrayOf(1, T.toLong())).use { c ->
@@ -682,6 +772,88 @@ class LiveRvc(private val open: (String) -> Any?) {
                 }
             }
         }
+    }
+
+    private data class PreOut(val z: FloatArray, val zl: Int, val har: FloatArray, val cond: FloatArray?)
+
+    private fun preRun(v: VocPath, phone: FloatArray, pitch: LongArray, pitchf: FloatArray): PreOut {
+        OnnxTensor.createTensor(env, FloatBuffer.wrap(phone), longArrayOf(1, T.toLong(), (phone.size / T).toLong())).use { a ->
+            OnnxTensor.createTensor(env, LongBuffer.wrap(pitch), longArrayOf(1, T.toLong())).use { b ->
+                OnnxTensor.createTensor(env, FloatBuffer.wrap(pitchf), longArrayOf(1, T.toLong())).use { c ->
+                    v.pre.run(mapOf("phone" to a, "pitch" to b, "pitchf" to c)).use { res ->
+                        fun get(n: String): OnnxTensor = res.get(n).orElseThrow { IllegalStateException("前半图缺输出 $n") } as OnnxTensor
+                        val zt = get(v.split.z); val zl = (zt.info as TensorInfo).shape[2].toInt()
+                        val z = FloatArray(zt.floatBuffer.remaining()).also { zt.floatBuffer.get(it) }
+                        val ht = get(v.split.har); val har = FloatArray(ht.floatBuffer.remaining()).also { ht.floatBuffer.get(it) }
+                        val cond = v.split.cond?.let { n -> val ct = get(n); FloatArray(ct.floatBuffer.remaining()).also { ct.floatBuffer.get(it) } }
+                        return PreOut(z, zl, har, cond)
+                    }
+                }
+            }
+        }
+    }
+
+    /** ORT 前半图（z / har / cond）→ NEON / NPU 声码器 → 48k 波形 */
+    private fun runSplit(v: VocPath, phone: FloatArray, pitch: LongArray, pitchf: FloatArray): FloatArray {
+        val t0 = System.nanoTime()
+        val p = preRun(v, phone, pitch, pitchf)
+        val t1 = System.nanoTime()
+        val y = v.dec(p.z, p.zl, p.har, p.cond)
+        val t2 = System.nanoTime()
+        lastPreMs = (t1 - t0) / 1_000_000; lastDecMs = (t2 - t1) / 1_000_000
+        if (running) synchronized(this) { stPre.add(lastPreMs); stDec.add(lastDecMs) }
+        return y
+    }
+
+    /** 拆分（首次会处理模型）+ 前半图会话；不支持返回 null */
+    private fun splitFor(f: Any?, owner: OrtSession): Pair<NeonVocoder.Split, OrtSession>? {
+        if (f !is File) return null
+        if (compatOf(owner) != null) return null
+        if (!NeonVocoder.available()) { L.w("live 声码器：原生库不可用（${NeonVocoder.loadError}）"); return null }
+        val sp = NeonVocoder.prepare(env, f, synThreads) ?: return null
+        val pre = OrtLoad.create(env, sp.pre) {
+            OrtSession.SessionOptions().apply {
+                setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+                setIntraOpNumThreads(synThreads); setInterOpNumThreads(1)
+                // 前半图跑完马上轮到声码器，ORT 线程别空转抢核
+                addConfigEntry("session.intra_op.allow_spinning", "0")
+            }
+        }
+        return sp to pre
+    }
+
+    /** NEON fp16 声码器通路 */
+    private fun buildVoc(f: Any?, owner: OrtSession): VocPath? {
+        if (f !is File) return null
+        if (!NeonVocoder.fp16Supported()) { L.w("live 声码器：CPU 不支持 ARMv8.2 fp16（asimdhp），不用 NEON"); return null }
+        val t = System.nanoTime()
+        val (sp, pre) = splitFor(f, owner) ?: return null
+        val dec = try { NeonVocoder.open(sp.blob, synThreads, true) } catch (e: Throwable) { pre.close(); throw e }
+        L.i("live NEON 声码器就绪 ${f.name}：${dec.desc}，用时 ${(System.nanoTime() - t) / 1_000_000}ms")
+        return VocPath(owner, pre, sp, dec.desc, "NEON", { z, zl, h, c -> dec.run(z, zl, h, c) }, { dec.close() })
+    }
+
+    /** 骁龙 NPU 声码器通路：QNN 库在注入进程里才有（qnnDir） */
+    private fun buildNpu(f: Any?, owner: OrtSession, ph: FloatArray, pi: LongArray, pf: FloatArray): VocPath? {
+        val dir = runCatching { qnnDirProvider?.invoke() }.onFailure { L.e("live NPU：取 QNN 组件失败", it) }.getOrNull() ?: run { if (vocoder == 3) L.w("live NPU 声码器：没有 QNN 组件（在 AI 页「高级」里下载）或本机不支持"); return null }
+        if (f !is File) return null
+        if (!QnnVocoder.init(dir)) return null
+        val t = System.nanoTime()
+        val (sp, pre) = splitFor(f, owner) ?: return null
+        try {
+            // 前半图跑一次：拿 z 的帧数（NPU 图要固定形状）和一组真实输入做首次校验
+            val probe = VocPath(owner, pre, sp, "", "probe", { _, _, _, _ -> FloatArray(0) }, {})
+            val (z, zl, har, cond) = preRun(probe, ph, pi, pf)
+            var ref: NeonVocoder.Dec? = null
+            val dec = try {
+                QnnVocoder.open(env, dir, sp, zl, Triple(z, har, cond)) { a, b, c, d ->
+                    (ref ?: NeonVocoder.open(sp.blob, synThreads, false).also { ref = it }).run(a, b, c, d)
+                }
+            } finally { runCatching { ref?.close() } }
+            if (dec == null) { pre.close(); return null }
+            L.i("live NPU 声码器就绪 ${f.name}：${dec.desc}，用时 ${(System.nanoTime() - t) / 1_000_000}ms")
+            return VocPath(owner, pre, sp, dec.desc, "NPU", { a, b, c, d -> dec.run(a, b, c, d) }, { dec.close() })
+        } catch (e: Throwable) { pre.close(); throw e }
     }
 
     private fun runCompat(s: OrtSession, c: Compat, phone: FloatArray, pitch: LongArray, pitchf: FloatArray): FloatArray {

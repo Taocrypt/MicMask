@@ -12,6 +12,7 @@ object ShellProbe {
         val out: (String) -> Unit = { println(it); System.out.flush() }
         try {
             if (args.getOrNull(0) == "header") Probe.header(out, "shell 进程")
+            else if (args.getOrNull(2) == "q6") Probe.runOne6(File(args[0]), args[1], System.getenv("MICMASK_QNN_DIR"), System.getenv("MICMASK_QNN_NOPREP"), out)
             else Probe.runOne(File(args[0]), args[1], out)
         } catch (t: Throwable) {
             out("shell 测试异常：$t"); t.stackTrace.take(8).forEach { out("  at $it") }

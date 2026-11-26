@@ -22,6 +22,8 @@ import java.io.File
  *    没装正式版 / 没用过 AI 变声时，用「选择模型文件」自己挑 .onnx（可多选）。
  * 2. 「App 进程测试」「shell 进程测试」各跑一遍 CPU / GPU / NPU。
  * 3. 「复制日志」发给开发者。
+ * qnntest-4：「4. qnntest-4 App 进程」只测 dec_rewrite.py 的产物（*_dec_*、*_synth_rw）和 hubert_f32_static，
+ *    档位 CPU / NPU fp16 / NPU fp16 整图 / NPU fp16 整图+上下文缓存。模型旁的 <模型>.onnx.inputs 一起导入。
  */
 class MainActivity : Activity() {
     private lateinit var log: TextView
@@ -44,6 +46,15 @@ class MainActivity : Activity() {
         }
         btn("2. App 进程测试（CPU / GPU / NPU）") { appTest() }
         btn("3. shell 进程测试（需 Shizuku）") { shellTest() }
+        btn("4. qnntest-4：声码器/hubert fp16（App 进程）") { appTest(tasks4(), 600_000L, true) }
+        btn("5. qnntest-4：同上（shell 进程，需 Shizuku）") { shellTest(tasks4(), true) }
+        btn("6a. 导入 QNN 包（zip，按需下载的模拟）") {
+            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "*/*" }, 2)
+        }
+        btn("6. qnntest-6：外置 QNN（App 进程）") { appTest(tasks6(), 600_000L, true, q6 = true) }
+        btn("7. qnntest-6：外置 QNN（shell 进程，需 Shizuku）") { shellTest6() }
+        btn("8. qnntest-7：NNAPI + GPU（App 进程）") { appTest(tasks7(), 600_000L, true) }
+        btn("9. qnntest-7：NNAPI + GPU（shell 进程，需 Shizuku）") { shellTest(tasks7(), true) }
         btn("复制日志") {
             (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("qnn", sb.toString()))
             Toast.makeText(this, "已复制", Toast.LENGTH_SHORT).show()
@@ -51,7 +62,7 @@ class MainActivity : Activity() {
         log = TextView(this).apply { textSize = 11f; setTextIsSelectable(true) }
         root.addView(ScrollView(this).apply { addView(log) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
-        out("模型目录：$modelDir（现有 ${models().joinToString { it.name }.ifEmpty { "无" }}）")
+        out("${Probe.VERSION} · 模型目录：$modelDir（现有 ${models().joinToString { it.name }.ifEmpty { "无" }}）")
         out("提示：测试时保持亮屏、App 在前台；整个过程约 1–3 分钟。")
     }
 
@@ -97,6 +108,7 @@ class MainActivity : Activity() {
     @Deprecated("simple test app")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 2 && resultCode == RESULT_OK && data?.data != null) { importPack(data.data!!); return }
         if (requestCode != 1 || resultCode != RESULT_OK || data == null) return
         val uris = data.clipData?.let { c -> (0 until c.itemCount).map { c.getItemAt(it).uri } } ?: listOfNotNull(data.data)
         bg {
@@ -109,13 +121,23 @@ class MainActivity : Activity() {
     }
 
     private fun tasks(): List<Pair<File?, String>> = listOf<Pair<File?, String>>(null to "header") +
-        models().flatMap { m -> Probe.TIERS.map { m to it.first } }
+        models().filter { !Probe.isQ4Model(it.name) }.flatMap { m -> Probe.TIERS.map { m to it.first } }
+
+    /** qnntest-4：先测改写后的声码器（notail → 带尾巴 → 整合成器），再测未改写的对照和 hubert */
+    private fun tasks4(): List<Pair<File?, String>> {
+        val order = listOf("_dec_rw_notail", "_dec_rw.", "_synth_rw", "_dec_f32", "hubert_f32")
+        val ms = models().filter { Probe.isQ4Model(it.name) }.sortedBy { m -> order.indexOfFirst { m.name.contains(it) }.let { if (it < 0) 99 else it } }
+        if (ms.isEmpty()) out("没有 qnntest-4 模型：用「选择模型文件」导入 *_dec_rw*.onnx（连同 .onnx.inputs）或 hubert_f32_static.onnx")
+        return listOf<Pair<File?, String>>(null to "header") + ms.flatMap { m -> Probe.TIERS4.map { m to it.first } }
+    }
+    private fun tierName(t: String) = (Probe.TIERS + Probe.TIERS4 + Probe.TIERS6 + Probe.TIERS7).first { it.first == t }.second
 
     /** App 进程：每项起一次 :probe 进程，跟踪它写的日志文件；进程消失却没写 END 就记为崩溃 */
-    private fun appTest() = bg {
+    private fun appTest(list: List<Pair<File?, String>>? = null, timeoutMs: Long = 180_000L, q4: Boolean = false, q6: Boolean = false) = bg {
+        if (q6 && !File(appQnn, "libQnnHtp.so").isFile) { out("还没导入 QNN 包：先点「6a. 导入 QNN 包」"); return@bg }
         val start = all.size
-        for ((m, tier) in tasks()) {
-            if (m != null) out("-- ${m.name} · ${Probe.TIERS.first { it.first == tier }.second}")
+        for ((m, tier) in list ?: tasks()) {
+            if (m != null) out("-- ${m.name} · ${tierName(tier)}")
             val f = File(cacheDir, "probe.log"); f.delete()
             val conn = object : android.content.ServiceConnection {
                 override fun onServiceConnected(n: android.content.ComponentName?, b: android.os.IBinder?) {}
@@ -123,6 +145,7 @@ class MainActivity : Activity() {
             }
             // 每次用不同的 action，保证 onBind 都会被调用（同一 Intent 的 binder 会被缓存）
             val it = Intent(this, ProbeService::class.java).setAction("run${System.nanoTime()}").putExtra("log", f.path).putExtra("model", m?.path).putExtra("tier", tier)
+                .putExtra("q6", q6).putExtra("qnn", appQnn.path).putExtra("qnn_noprep", appQnnNoPrep.path)
             bindService(it, conn, BIND_AUTO_CREATE or BIND_IMPORTANT or BIND_ABOVE_CLIENT)
             var read = 0; var pid = 0; var done = false; val t0 = System.currentTimeMillis(); var gone = 0
             while (!done) {
@@ -135,26 +158,96 @@ class MainActivity : Activity() {
                 }
                 read = lines.size
                 if (!done && pid != 0 && !File("/proc/$pid").exists()) { if (++gone > 3) { out("  进程崩溃（无输出）"); if (m != null) out("RESULT|${m.name}|$tier|CRASH"); done = true } }
-                if (!done && System.currentTimeMillis() - t0 > 180_000) { out("  超时 180s"); if (m != null) out("RESULT|${m.name}|$tier|TIMEOUT"); done = true }
+                if (!done && System.currentTimeMillis() - t0 > timeoutMs) { out("  超时 ${timeoutMs / 1000}s"); if (m != null) out("RESULT|${m.name}|$tier|TIMEOUT"); done = true }
             }
             runCatching { unbindService(conn) }; Thread.sleep(300)
         }
-        Probe.summary(all.drop(start)).forEach(::out)
+        (if (q4) Probe.summary4(all.drop(start)) else Probe.summary(all.drop(start))).forEach(::out)
     }
 
-    private fun shellTest() {
+    // ---------------- qnntest-6 ----------------
+    /** 包解压到外部目录（shell 能读）；App 进程从内部 files/qnn 加载（外部存储不可执行），shell 从 /data/local/tmp 加载 */
+    private val packDir by lazy { File(getExternalFilesDir(null), "qnnpack") }
+    private val appQnn by lazy { File(filesDir, "qnn") }
+    private val appQnnNoPrep by lazy { File(filesDir, "qnn_noprep") }
+    private val shQnn = "/data/local/tmp/micmask-qnn"
+    private val shQnnNoPrep = "/data/local/tmp/micmask-qnn-noprep"
+
+    private fun importPack(u: android.net.Uri) = bg {
+        packDir.deleteRecursively(); packDir.mkdirs()
+        var n = 0L
+        contentResolver.openInputStream(u)?.use { ins ->
+            java.util.zip.ZipInputStream(ins).use { z ->
+                while (true) {
+                    val e = z.nextEntry ?: break
+                    val name = File(e.name).name
+                    if (e.isDirectory || !name.endsWith(".so")) continue
+                    File(packDir, name).outputStream().use { z.copyTo(it) }
+                    n += File(packDir, name).length(); out("  解压 $name ${File(packDir, name).length() / 1024} KB")
+                }
+            }
+        }
+        for ((dir, noPrep) in listOf(appQnn to false, appQnnNoPrep to true)) {
+            dir.deleteRecursively(); dir.mkdirs()
+            packDir.listFiles()?.filter { !(noPrep && it.name == "libQnnHtpPrepare.so") }?.forEach { it.copyTo(File(dir, it.name), true) }
+        }
+        out("QNN 包已导入：共 %.1f MB → ${appQnn.path}（无编译器版 ${appQnnNoPrep.path}）".format(n / 1e6))
+        if (Shizuku.pingBinder()) shellCopy()
+    }
+
+    private fun shellCopy(): Boolean {
+        if (!shizukuOk()) return false
+        sh("rm -rf $shQnn $shQnnNoPrep; mkdir -p $shQnn $shQnnNoPrep && cp '${packDir.path}'/*.so $shQnn/ && cp '${packDir.path}'/*.so $shQnnNoPrep/ && rm -f $shQnnNoPrep/libQnnHtpPrepare.so && chmod 755 $shQnn $shQnnNoPrep && chmod 644 $shQnn/*.so $shQnnNoPrep/*.so && echo \"shell 侧 QNN 目录就绪：\$(ls $shQnn | wc -l) 个库\"") { out(it) }
+        return true
+    }
+
+    /** qnntest-7：hubert / rmvpe / 声码器 × CPU 与 WebGPU */
+    private fun tasks7(): List<Pair<File?, String>> {
+        val order = listOf("hubert_f32", "hubert_dyn8", "rmvpe", "_dec_rw_notail", "_dec_rw.", "atri48_stream_fp32")
+        val ms = models().filter { m -> order.any { m.name.contains(it) } }.sortedBy { m -> order.indexOfFirst { m.name.contains(it) } }
+        if (ms.isEmpty()) out("没有模型：先点 1 从 MicMask 复制，或用 1' 导入 hubert_f32_static.onnx、*_dec_rw*.onnx")
+        return listOf<Pair<File?, String>>(null to "header") + ms.flatMap { m -> Probe.TIERS7.map { m to it.first } }
+    }
+
+    private fun tasks6(): List<Pair<File?, String>> {
+        val order = listOf("_dec_rw_notail", "atri48_dec_rw", "_dec_rw.")
+        val ms = models().filter { m -> m.name.contains("_dec_rw") }.sortedBy { m -> order.indexOfFirst { m.name.contains(it) }.let { if (it < 0) 99 else it } }
+        if (ms.isEmpty()) out("没有声码器模型：用「选择模型文件」导入 qnntest-4 的 *_dec_rw*.onnx（连同 .onnx.inputs）")
+        return listOf<Pair<File?, String>>(null to "header") + ms.flatMap { m -> Probe.TIERS6.map { m to it.first } }
+    }
+
+    private fun shellTest6() {
+        if (!shizukuOk()) return
+        if (!File(packDir, "libQnnHtp.so").isFile) { out("还没导入 QNN 包：先点「6a. 导入 QNN 包」"); return }
+        bg {
+            shellCopy()
+            val start = all.size
+            val apk = applicationInfo.sourceDir
+            // LD_LIBRARY_PATH 只给 ORT 本体；QNN 库由 Probe.useQnnDir 从 /data/local/tmp 按绝对路径加载
+            val base = "export LD_LIBRARY_PATH='$libDir'; export MICMASK_QNN_DIR='$shQnn'; export MICMASK_QNN_NOPREP='$shQnnNoPrep'; " +
+                "CLASSPATH='$apk' app_process -Djava.class.path='$apk' -Djava.library.path='$libDir' /system/bin com.taocrypt.micmask.qnntest.ShellProbe"
+            for ((m, tier) in tasks6()) {
+                if (m != null) out("-- ${m.name} · ${tierName(tier)}（shell）")
+                val rc = sh(if (m == null) "$base header" else "$base '${m.path}' $tier q6") { out(it) }
+                if (rc != 0 && m != null) { out("  shell 进程异常退出 rc=$rc"); out("RESULT|${m.name}|$tier|CRASH") }
+            }
+            Probe.summary4(all.drop(start)).forEach(::out)
+        }
+    }
+
+    private fun shellTest(list: List<Pair<File?, String>>? = null, q4: Boolean = false) {
         if (!shizukuOk()) return
         bg {
             val start = all.size
             val apk = applicationInfo.sourceDir
             val base = "export LD_LIBRARY_PATH='$libDir'; export ADSP_LIBRARY_PATH='$adsp'; " +
                 "CLASSPATH='$apk' app_process -Djava.class.path='$apk' -Djava.library.path='$libDir' /system/bin com.taocrypt.micmask.qnntest.ShellProbe"
-            for ((m, tier) in tasks()) {
-                if (m != null) out("-- ${m.name} · ${Probe.TIERS.first { it.first == tier }.second}（shell）")
+            for ((m, tier) in list ?: tasks()) {
+                if (m != null) out("-- ${m.name} · ${tierName(tier)}（shell）")
                 val rc = sh(if (m == null) "$base header" else "$base '${m.path}' $tier") { out(it) }
                 if (rc != 0 && m != null) { out("  shell 进程异常退出 rc=$rc"); out("RESULT|${m.name}|$tier|CRASH") }
             }
-            Probe.summary(all.drop(start)).forEach(::out)
+            (if (q4) Probe.summary4(all.drop(start)) else Probe.summary(all.drop(start))).forEach(::out)
         }
     }
 }
