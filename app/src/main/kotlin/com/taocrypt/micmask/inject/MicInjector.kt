@@ -110,7 +110,7 @@ object MicInjector {
         }.getOrElse { "ERR ${it.message}" }
         rootOk = out.contains("uid=0")
         L.i("ROOT 检测：${if (rootOk) "已获取" else "未获取"}（$out）")
-        if (rootOk) L.i("ROOT 环境：" + suExec("for d in /data/adb/magisk /data/adb/ksu /data/adb/ap; do [ -e \$d ] && echo -n \"\$d \"; done; su -v 2>&1 | head -1; echo; su 2000 -c id 2>&1 | head -1; getenforce").replace('\n', ' | '))
+        if (rootOk) L.i("ROOT 环境：" + suExec("for d in /data/adb/magisk /data/adb/ksu /data/adb/ap; do [ -e \$d ] && echo -n \"\$d \"; done; su -v 2>&1 | head -1; echo; su 2000 -c id 2>&1 | head -1; getenforce").replace("\n", " | "))
         return rootOk
     }
     private fun suExec(cmd: String): String = runCatching {
