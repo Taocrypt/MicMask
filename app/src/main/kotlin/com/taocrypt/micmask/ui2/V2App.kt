@@ -873,8 +873,8 @@ private fun LazyListScope.aiPage(vm: MainViewModel, st: UiState, open: (String) 
         }
     }
     if (st.liveVoices.isNotEmpty()) item(key = "base-miss") {
-        val miss = remember(st.liveVoices, st.dlId, st.importing) { vm.baseMissing() }
-        if (miss) Card(Modifier.fillMaxWidth().padding(PagePad)) {
+        val miss = remember(st.liveVoices, st.dlId, st.importing, st.modelItems) { vm.baseMissing() }
+        if (miss) Card(Modifier.fillMaxWidth().padding(PagePad).padding(bottom = 8.dp)) {
             Text(tr("还缺基础模型（HuBERT / RMVPE），音色暂时用不了：先在「设置 → 模型仓库」添加官方模型仓库，再下载任意一个音色。"),
                 Modifier.padding(16.dp), fontSize = 13.sp, color = MiuixTheme.colorScheme.error)
         }
@@ -1010,7 +1010,7 @@ private fun VoiceItem(vm: MainViewModel, st: UiState, v: String, handle: Modifie
         Row(Modifier.padding(start = 2.dp, end = 4.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             val label = vm.voiceLabel(v)
             val pinned = v in st.voicePins
-            // 拖动把手：按住上下拖排序
+            // 拖动把手：长按震动后上下拖排序
             Text("⋮⋮", handle.padding(horizontal = 8.dp, vertical = 10.dp), fontSize = 16.sp, color = Summary)
             Box(Modifier.size(42.dp).clip(CircleShape).background(if (sel) primary else primary.copy(alpha = 0.12f)), contentAlignment = Alignment.Center) {
                 Text(label.take(1), fontWeight = FontWeight.Bold, color = if (sel) MiuixTheme.colorScheme.onPrimary else primary)
@@ -1598,7 +1598,7 @@ private fun RepoSetting(vm: MainViewModel, st: UiState) {
                     Switch(checked = r.on, onCheckedChange = { vm.toggleRepo(r.url, it) })
                 }
             }
-            Text(tr("按住 ⋮⋮ 拖动排序，靠上的仓库优先；点一项可改备注名或删除。"), Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+            Text(tr("长按 ⋮⋮ 震动后拖动排序，靠上的仓库优先；点一项可改备注名或删除。"), Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                 fontSize = 12.sp, color = Summary)
             Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(tr("刷新全部"), onClick = { vm.refreshRepo() }, enabled = st.repos.any { it.on } && !st.repoLoading, modifier = Modifier.weight(1f))
@@ -1712,9 +1712,10 @@ fun Knob(label: String, value: Float, size: Dp = 64.dp, text: String? = null, re
     val cur by androidx.compose.runtime.rememberUpdatedState(value)
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         val start = remember { value }
+        val hap = rememberHaptics()
         Canvas(Modifier.size(size).pointerInput(Unit) {
-            detectDragGestures { ch, drag -> ch.consume(); onChange((cur - drag.y / 300f + drag.x / 600f).coerceIn(0f, 1f)) }
-        }.pointerInput(Unit) { detectTapGestures(onDoubleTap = { onChange(reset ?: start) }) }) {
+            detectDragGestures { ch, drag -> ch.consume(); val nv = (cur - drag.y / 300f + drag.x / 600f).coerceIn(0f, 1f); hap.onValue(cur, nv, reset ?: start); onChange(nv) }
+        }.pointerInput(Unit) { detectTapGestures(onDoubleTap = { hap.edge(); onChange(reset ?: start) }) }) {
             val r = this.size.minDimension / 2
             val sw = r * 0.14f
             drawArc(track, 135f, 270f, false, style = Stroke(sw, cap = StrokeCap.Round),
@@ -1740,9 +1741,10 @@ fun Fader(label: String, value: Float, text: String? = null, reset: Float? = nul
     val cur by androidx.compose.runtime.rememberUpdatedState(value)
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         val start = remember { value }
+        val hap = rememberHaptics()
         Canvas(Modifier.width(44.dp).height(180.dp).pointerInput(Unit) {
-            detectVerticalDragGestures { ch, dy -> ch.consume(); onChange((cur - dy / size.height).coerceIn(0f, 1f)) }
-        }.pointerInput(Unit) { detectTapGestures(onDoubleTap = { onChange(reset ?: start) }) }) {
+            detectVerticalDragGestures { ch, dy -> ch.consume(); val nv = (cur - dy / size.height).coerceIn(0f, 1f); hap.onValue(cur, nv, reset ?: start); onChange(nv) }
+        }.pointerInput(Unit) { detectTapGestures(onDoubleTap = { hap.edge(); onChange(reset ?: start) }) }) {
             val cx = size.width / 2
             val top = 12f; val bot = size.height - 12f
             drawLine(track, Offset(cx, top), Offset(cx, bot), strokeWidth = 8f, cap = StrokeCap.Round)

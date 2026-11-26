@@ -412,7 +412,7 @@
   "把模型交给注入服务…": "Handing models to the inject service…",
   "拼接重叠": "Chunk overlap",
   "指标": "Metrics",
-  "按住 ⋮⋮ 拖动排序，靠上的仓库优先；点一项可改备注名或删除。": "Hold ⋮⋮ and drag to reorder; higher repositories take priority. Tap one to edit its name or delete it.",
+  "长按 ⋮⋮ 震动后拖动排序，靠上的仓库优先；点一项可改备注名或删除。": "Long-press ⋮⋮ until it vibrates, then drag to reorder; higher repositories take priority. Tap one to edit its name or delete it.",
   "按住 录一句": "Hold to record a line",
   "按住 录制预览": "Hold to record preview",
   "按壁纸或所选主色生成整套配色": "Generate a full palette from the wallpaper or the chosen key color",
