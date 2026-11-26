@@ -631,9 +631,9 @@ class LiveRvc(private val open0: (String) -> Any?) {
                     eMax = maxOf(eMax, e / (i1 - i0)); i0 = i1
                 }
                 val db = (10 * log10(eMax + 1e-12)).toFloat()
-                val voiced = db >= gateDb
-                if (voiced) gateHold = GATE_HOLD else if (gateHold > 0) gateHold--
-                if (!voiced && gateHold == 0) {
+                val loud = db >= gateDb
+                if (loud) gateHold = GATE_HOLD else if (gateHold > 0) gateHold--
+                if (!loud && gateHold == 0) {
                     gated++
                     if (gated % 10 == 1L) L.m("live 块#$id 静音（${"%.0f".format(db)}dB < $gateDb）跳过推理")
                     // 静音块也要按真实推理的延迟送出：否则静音→说话时输出时间轴突然往后跳一个推理延迟（~360ms），
