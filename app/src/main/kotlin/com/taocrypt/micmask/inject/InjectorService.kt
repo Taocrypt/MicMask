@@ -428,6 +428,27 @@ class InjectorService : Binder {
         val c = shellCtx ?: return "服务没有拿到 Context（Shizuku 版本过低？）"
         val audioManager = am ?: return "AudioManager 不可用"
 
+        armGen++; cycling = false
+        buildAndRegister(uids, c, audioManager)?.let { return it }
+
+        targetUids = uids
+        baseRecCount = recCount()
+        trigger = ""
+        autoStart = auto
+        timeoutMs = if (tmo > 0) tmo else 60_000L
+        playPos = -1
+        targetSeenRecording = false
+        phase = "WAITING"
+        lastError = ""
+        running = true
+        if (live) phase = "LIVE"
+        worker = Thread({ if (live) liveLoop() else loop() }, "micmask-inject-pcm").apply { isDaemon = true; start() }
+        slog('I', "ARMED uids=${uids.joinToString()} baseRec=$baseRecCount auto=$auto pcm=${pcm.size}")
+        return null
+    }
+
+    /** 建 AudioPolicy + mix 并注册、建注入轨道；成功返回 null。arm 和「通话开始后重新接管」共用 */
+    private fun buildAndRegister(uids: IntArray, c: Context, audioManager: AudioManager): String? {
         try {
             val ruleCls = Class.forName("android.media.audiopolicy.AudioMixingRule")
             val ruleB = Class.forName("android.media.audiopolicy.AudioMixingRule\$Builder")
@@ -512,19 +533,6 @@ class InjectorService : Binder {
             return lastError
         }
 
-        targetUids = uids
-        baseRecCount = recCount()
-        trigger = ""
-        autoStart = auto
-        timeoutMs = if (tmo > 0) tmo else 60_000L
-        playPos = -1
-        targetSeenRecording = false
-        phase = "WAITING"
-        lastError = ""
-        running = true
-        if (live) phase = "LIVE"
-        worker = Thread({ if (live) liveLoop() else loop() }, "micmask-inject-pcm").apply { isDaemon = true; start() }
-        slog('I', "ARMED uids=${uids.joinToString()} baseRec=$baseRecCount auto=$auto pcm=${pcm.size}")
         return null
     }
 
@@ -1097,6 +1105,7 @@ class InjectorService : Binder {
             var lastTgtSil: Boolean? = null
             // 被系统静音检测（AI / 普通两种模式都查）：连续 2 s 被静音且当前不是原始麦克风 → 改用原始麦克风重建一次
             var silChkT = System.nanoTime(); var silSec = 0
+            var callSec = 0; var callCycled = false
             // 0 DEFAULT、1 MIC、5 CAMCORDER、6 VOICE_RECOGNITION、9 UNPROCESSED、10 VOICE_PERFORMANCE
             val silOrder = intArrayOf(1, 6, 5, 9, 10, 0); var silTry = 0; val silTried = LinkedHashSet<Int>(); var silGood = true
             fun silWho(): String = runCatching {
@@ -1170,6 +1179,13 @@ class InjectorService : Binder {
                         val sid = rec?.audioSessionId ?: -1
                         am?.activeRecordingConfigurations?.firstOrNull { it.clientAudioSessionId == sid }?.isClientSilenced == true
                     }.getOrDefault(false)
+                    // 2.1.1-alpha.3：进入通话模式 2 s 仍看不到别的应用录音 → 撤掉注入再重新接管（每次通话一次）
+                    val inCall = runCatching { am?.mode.let { it == android.media.AudioManager.MODE_IN_COMMUNICATION || it == android.media.AudioManager.MODE_IN_CALL } }.getOrDefault(false)
+                    if (!inCall) { callSec = 0; callCycled = false }
+                    else if (!callCycled && ++callSec >= 2) {
+                        if (appRecording()) callCycled = true
+                        else { callCycled = true; cyclePolicy() }
+                    }
                     // 我们没被静音、目标应用却被静音 2 s → 改无障碍录音；改完 3 s 输入比改前底噪低 15 dB 以上 → 判定无效，退回
                     lvlHist.addLast(liveLevelDb); while (lvlHist.size > 3) lvlHist.removeFirst()
                     if (preOk && (preOn || preRevoked)) {
@@ -1427,10 +1443,44 @@ class InjectorService : Binder {
         else { t.play(); track = t; slog('W', "注入轨道已重建"); true }
     }.getOrElse { slog('W', "注入轨道重建失败", it); false }
 
+    /** 通话开始后重新接管中（注入策略暂时撤掉），这期间写注入轨道直接丢弃 */
+    @Volatile private var cycling = false
+    @Volatile private var armGen = 0
+
+    /**
+     * 2.1.1-alpha.3：先开变声再打微信语音，vivo V2415A 上微信的通话录音（源 7）根本不出现、对面无声；
+     * 通话中再开变声则 1 s 内被接管（实测）。所以进入通话模式 2 s 还看不到别的应用录音时：撤掉策略 → 等对方开麦（≤3 s）→ 重新注册。
+     * 每次通话只做一次；正常机型目标录音会照常出现，不会触发
+     */
+    private fun cyclePolicy() {
+        if (cycling) return
+        cycling = true
+        val gen = armGen
+        Thread({
+            try {
+                slog('W', "进入通话模式 2 s 仍没看到目标应用录音 ${recDetail()}，撤掉注入让对方先开麦，再重新接管")
+                runCatching { track?.stop() }; runCatching { track?.release() }
+                track = null
+                unregister()
+                val t0 = System.nanoTime()
+                while (running && !appRecording() && System.nanoTime() - t0 < 3_000_000_000L) Thread.sleep(100)
+                val seen = appRecording()
+                Thread.sleep(200)
+                if (!running || gen != armGen) return@Thread
+                val c = shellCtx; val m = am
+                val err = if (c == null || m == null) "没有 Context" else buildAndRegister(targetUids, c, m)
+                if (err != null) { slog('E', "重新接管失败：$err"); lastError = err; running = false }
+                else slog('I', "已重新接管（等待 ${(System.nanoTime() - t0) / 1_000_000}ms，${if (seen) "对方已开麦" else "仍没看到对方录音"}）${recDetail()}")
+            } catch (t: Throwable) { slog('E', "重新接管出错", t) } finally { if (gen == armGen) cycling = false }
+        }, "micmask-recycle").apply { isDaemon = true; start() }
+    }
+
     /** 写注入轨道；写失败先重建一次再写，仍失败返回 false（结束变声） */
     private fun writeOut(b: ByteArray): Boolean {
-        var t = track ?: return false
+        if (cycling) return true
+        var t = track ?: return cycling
         var w = t.write(b, 0, b.size)
+        if (w < 0 && cycling) return true
         if (w < 0) {
             slog('W', "AudioTrack.write=$w，尝试重建注入轨道")
             if (!rebuildTrack()) { lastError = "AudioTrack.write=$w"; return false }
