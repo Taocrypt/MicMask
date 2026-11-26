@@ -1096,7 +1096,6 @@
   "相位锁定": "Phase lock",
   "让变声后的音量起伏跟着原声走，轻声说话也轻；越高越贴原声。默认关": "Make the converted voice follow your own loudness, so soft speech stays soft. Higher follows more closely. Off by default",
   "让每段合成的声音首尾相位接上，减轻块与块之间的轻微「嗒嗒」声。实验功能，切换会重新加载模型": "Keeps the phase continuous between synthesized blocks to reduce faint clicks at block boundaries. Experimental; switching reloads the model",
-  "音高不变，只改声音的厚薄：往右更细更亮，往左更厚更沉。实验功能，默认 0": "Keeps the pitch and only changes the timbre: right is thinner and brighter, left is thicker and deeper. Experimental, default 0",
   "性能测试中，约 1–2 分钟…": "Running performance test, about 1–2 minutes…",
   "性能测试：试线程 {0}/{1}…": "Performance test: trying threads {0}/{1}…",
   "已自动采用：档位自动 · 声码器 {0} · HuBERT {1} · 线程 {2}/{3}": "Applied automatically: tier auto · vocoder {0} · HuBERT {1} · threads {2}/{3}",
@@ -1132,5 +1131,6 @@
   "ROOT 模式：不需要 Shizuku，用 su 拉起注入服务（降为 shell 身份），功能与 Shizuku 模式相同。实验功能，没在 Magisk 上测过。": "ROOT mode: no Shizuku needed. The injection service is started with su (dropped to the shell identity) and works the same as Shizuku mode. Experimental, not yet tested on Magisk.",
   "高级 0.25s": "Pro 0.25s",
   "比标准再快约 0.1 秒：用标准档模型每 0.25 秒推一次，算力多约 20%。只建议高端旗舰；跟不上会自动退回标准 0.3s": "About 0.1 s faster than Standard: runs the standard model every 0.25 s; compute up ~20%. Recommended for high-end flagships only; falls back to Standard 0.3s automatically if the phone can't keep up",
-  "手机跟不上会断音，且不会自动降档": "Audio drops out if the phone can't keep up, and it won't switch to a lighter tier automatically"
+  "手机跟不上会断音，且不会自动降档": "Audio drops out if the phone can't keep up, and it won't switch to a lighter tier automatically",
+  "音高不变，只改声音的厚薄：往右更细更亮，往左更厚更沉。按 −/+ 每次微调 0.1。实验功能，默认 0": "Keeps the pitch and only changes the timbre: right is thinner and brighter, left is thicker and deeper. Tap −/+ to fine-tune by 0.1. Experimental, default 0"
 }

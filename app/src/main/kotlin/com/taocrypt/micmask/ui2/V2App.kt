@@ -726,11 +726,17 @@ private fun AiAdvanced(vm: MainViewModel, st: UiState) {
         onValueChangeFinished = { vm.commitAiTune() })
     Text(tr("让变声后的音量起伏跟着原声走，轻声说话也轻；越高越贴原声。默认关"), fontSize = 12.sp, color = Summary)
     var fmt by remember(vm.aiResetGen.intValue) { mutableStateOf(vm.aiFormant()) }
-    Row(Modifier.padding(top = 14.dp)) { Text(tr("共振峰"), Modifier.weight(1f), fontSize = 14.sp)
-        Text(if (kotlin.math.abs(fmt) < 0.05f) tr("关") else "%+.1f".format(fmt), color = Summary) }
-    Slider(value = fmt, onValueChange = { fmt = (it * 2).roundToInt() / 2f; vm.setAiFormant(fmt) }, valueRange = -6f..6f, steps = 23,
+    // 精细调节：滑块按 0.1 取整，右侧 −/+ 每次微调 0.1
+    fun setFmt(v: Float) { fmt = ((v * 10).roundToInt() / 10f).coerceIn(-6f, 6f); vm.setAiFormant(fmt) }
+    Row(Modifier.padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically) { Text(tr("共振峰"), Modifier.weight(1f), fontSize = 14.sp)
+        val nudge = Modifier.size(30.dp).clip(RoundedCornerShape(8.dp)).background(MiuixTheme.colorScheme.secondaryContainer)
+        Box(nudge.clickable { setFmt(fmt - 0.1f); vm.commitAiTune() }, contentAlignment = Alignment.Center) { Text("−", color = MiuixTheme.colorScheme.onSecondaryContainer) }
+        Text(if (kotlin.math.abs(fmt) < 0.05f) tr("关") else "%+.1f".format(fmt), Modifier.width(52.dp), color = Summary, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        Box(nudge.clickable { setFmt(fmt + 0.1f); vm.commitAiTune() }, contentAlignment = Alignment.Center) { Text("+", color = MiuixTheme.colorScheme.onSecondaryContainer) }
+    }
+    Slider(value = fmt, onValueChange = { setFmt(it) }, valueRange = -6f..6f,
         onValueChangeFinished = { vm.commitAiTune() })
-    Text(tr("音高不变，只改声音的厚薄：往右更细更亮，往左更厚更沉。实验功能，默认 0"), fontSize = 12.sp, color = Summary)
+    Text(tr("音高不变，只改声音的厚薄：往右更细更亮，往左更厚更沉。按 −/+ 每次微调 0.1。实验功能，默认 0"), fontSize = 12.sp, color = Summary)
     var pl by remember(vm.aiResetGen.intValue) { mutableStateOf(vm.aiPhaseLock()) }
     SwitchPreference(checked = pl, onCheckedChange = { pl = it; vm.setAiPhaseLock(it) }, title = tr("相位锁定"),
         summary = tr("让每段合成的声音首尾相位接上，减轻块与块之间的轻微「嗒嗒」声。实验功能，切换会重新加载模型"))
