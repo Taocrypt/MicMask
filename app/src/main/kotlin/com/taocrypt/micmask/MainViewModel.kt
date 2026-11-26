@@ -197,6 +197,8 @@ data class UiState(
     val speakerMode: Boolean = false,
     /** 用户选了普通模式（不走 Shizuku） */
     val forceNormal: Boolean = false,
+    /** 运行模式选了 ROOT（不经 Shizuku，su 执行） */
+    val rootMode: Boolean = false,
     /** 录播（外放模式）：转换中 / 进度 / 结果 */
     val clipBusy: Boolean = false,
     val clipStage: String = "",
@@ -319,9 +321,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         com.taocrypt.micmask.inject.MicInjector.forceNormal = prefs.getBoolean("force_normal", false)
+        com.taocrypt.micmask.inject.MicInjector.rootMode = prefs.getBoolean("root_mode", false)
+        if (com.taocrypt.micmask.inject.MicInjector.rootMode && !com.taocrypt.micmask.inject.MicInjector.forceNormal)
+            Thread { com.taocrypt.micmask.inject.MicInjector.checkRoot(); android.os.Handler(android.os.Looper.getMainLooper()).post { refreshInjectState() } }.start()
         com.taocrypt.micmask.inject.MicInjector.recCompat = prefs.getBoolean("rec_compat", false)
         com.taocrypt.micmask.inject.MicInjector.loadScope(prefs)
-        _state.value = _state.value.copy(forceNormal = com.taocrypt.micmask.inject.MicInjector.forceNormal)
+        _state.value = _state.value.copy(forceNormal = com.taocrypt.micmask.inject.MicInjector.forceNormal, rootMode = com.taocrypt.micmask.inject.MicInjector.rootMode)
         // Toast 由 ViewModel 直接用系统 Toast 弹出：App 在后台（悬浮窗操作）时也能看到
         viewModelScope.launch {
             _state.collect { st -> st.toast?.let { msg ->
@@ -705,6 +710,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshInjectState() {
         val inj = com.taocrypt.micmask.inject.MicInjector
         val txt = when {
+            inj.rootMode -> if (inj.rootOk) tr("Root 已授权") + (if (inj.binder != null) tr("，注入服务：") + inj.ping() else "") else tr("Root 未授权（在 Magisk / KernelSU / APatch 里允许 MicMask）")
             !inj.shizukuRunning() -> tr("Shizuku 未运行（先装 Shizuku 并用无线调试启动）")
             !inj.shizukuPermitted() -> tr("Shizuku 已运行，未授权本 App")
             else -> tr("Shizuku 已授权") + (if (inj.binder != null) tr("，注入服务：") + inj.ping() else "")
@@ -1972,16 +1978,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** 设置页权限模式：true=普通模式（扬声器外放/录播），false=Shizuku 实时注入 */
-    fun setNormalMode(normal: Boolean) {
-        if (com.taocrypt.micmask.inject.MicInjector.liveOn || _state.value.liveOn) { toast(tr("请先关闭变声，再切换模式")); return }
-        prefs.edit().putBoolean("force_normal", normal).apply()
-        com.taocrypt.micmask.inject.MicInjector.forceNormal = normal
-        _state.value = _state.value.copy(forceNormal = normal)
-        L.i("UI 权限模式 → ${if (normal) "普通" else "Shizuku"}")
-        if (!normal && !com.taocrypt.micmask.inject.MicInjector.shizukuPermitted()) requestShizuku() else refreshInjectState()
+    fun setNormalMode(normal: Boolean) = setPermMode(if (normal) 2 else 0)
+
+    /** 运行模式：0=Shizuku，1=ROOT，2=普通。切换后丢掉已连的注入服务，下次开始按新模式拉起 */
+    fun setPermMode(mode: Int) {
+        val inj = com.taocrypt.micmask.inject.MicInjector
+        if (inj.liveOn || _state.value.liveOn) { toast(tr("请先关闭变声，再切换模式")); return }
+        val normal = mode == 2; val root = mode == 1
+        if (!normal && root != inj.rootMode) inj.resetBackend()
+        prefs.edit().putBoolean("force_normal", normal).apply { if (!normal) putBoolean("root_mode", root) }.apply()
+        inj.forceNormal = normal
+        if (!normal) inj.rootMode = root
+        _state.value = _state.value.copy(forceNormal = normal, rootMode = inj.rootMode)
+        L.i("UI 权限模式 → ${listOf("Shizuku", "ROOT", "普通")[mode]}")
+        if (!normal && !inj.shizukuPermitted()) requestShizuku() else refreshInjectState()
     }
 
     fun requestShizuku() {
+        if (com.taocrypt.micmask.inject.MicInjector.rootMode) {
+            com.taocrypt.micmask.inject.MicInjector.requestShizuku { ok ->
+                if (!ok) toast(tr("没有获取到 Root 权限，请在 Magisk / KernelSU / APatch 里允许 MicMask"))
+                android.os.Handler(android.os.Looper.getMainLooper()).post { refreshInjectState() }
+            }
+            return
+        }
         if (!com.taocrypt.micmask.inject.MicInjector.shizukuRunning()) { toast(tr("Shizuku 没有运行，请先打开 Shizuku 并启动服务")); refreshInjectState(); return }
         com.taocrypt.micmask.inject.MicInjector.requestShizuku { ok ->
             L.i("Shizuku 授权结果：$ok")

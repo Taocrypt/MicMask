@@ -59,7 +59,7 @@ object MicInjector {
 
     /** 开始变声时顺手自检一次，只写日志 */
     fun auditPlayAudio() {
-        if (!shizukuRunning() || Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) return
+        if (!shizukuPermitted()) return
         val m = mutedByAppOps()
         if (m.isNotEmpty()) L.w("音频自检：以下应用的 PLAY_AUDIO 被设为禁止，会完全没声音（不是 MicMask 写的）：${m.joinToString { "${it.first}=${it.second}" }}；可在 设置→音频还原 一键恢复")
         else L.i("音频自检：没有应用的 PLAY_AUDIO 被禁止")
@@ -70,7 +70,7 @@ object MicInjector {
      * 返回给用户看的结果。需要 Shizuku。
      */
     fun repairAudio(app: Context): String {
-        if (!shizukuRunning() || Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) return tr("需要 Shizuku 授权才能还原")
+        if (!shizukuPermitted()) return if (rootMode) tr("需要 Root 授权才能还原") else tr("需要 Shizuku 授权才能还原")
         runCatching { stopLive() }
         val m = mutedByAppOps()
         L.i("音频还原：PLAY_AUDIO 被禁止的应用 ${m.ifEmpty { null }?.joinToString { "${it.first}=${it.second}" } ?: "无"}")
@@ -89,7 +89,35 @@ object MicInjector {
         }
     }
 
-    fun shizukuRunning(): Boolean = runCatching { Shizuku.pingBinder() }.getOrDefault(false)
+    /** ROOT 模式下表示 su 可用；Shizuku 模式下表示 Shizuku 服务在跑 */
+    fun shizukuRunning(): Boolean = if (rootMode) rootOk else runCatching { Shizuku.pingBinder() }.getOrDefault(false)
+
+    // ------------------------------------------------------------ ROOT 模式（2.1-alpha.8）
+    /**
+     * 不经 Shizuku：命令用 su 执行，注入进程走自启路径（app_process 跑 ShellMain，su 2000 降成 shell 身份，
+     * binder 经 ShellBinderProvider 交回）。uid 0 录音会让目标应用被系统静音（realme/小米 实测），所以优先降权。
+     */
+    @Volatile var rootMode = false
+    /** 上次 su 检测结果（checkRoot 更新） */
+    @Volatile var rootOk = false
+        private set
+    /** 阻塞：跑一次 su -c id（首次会弹 Magisk/KernelSU 授权框），不要在主线程调用 */
+    fun checkRoot(): Boolean {
+        val out = runCatching {
+            val p = ProcessBuilder("su", "-c", "id").redirectErrorStream(true).start()
+            val done = p.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)
+            if (!done) { p.destroy(); "timeout" } else p.inputStream.bufferedReader().readText().trim()
+        }.getOrElse { "ERR ${it.message}" }
+        rootOk = out.contains("uid=0")
+        L.i("ROOT 检测：${if (rootOk) "已获取" else "未获取"}（$out）")
+        if (rootOk) L.i("ROOT 环境：" + suExec("for d in /data/adb/magisk /data/adb/ksu /data/adb/ap; do [ -e \$d ] && echo -n \"\$d \"; done; su -v 2>&1 | head -1; echo; su 2000 -c id 2>&1 | head -1; getenforce").replace('\n', ' | '))
+        return rootOk
+    }
+    private fun suExec(cmd: String): String = runCatching {
+        val p = ProcessBuilder("su", "-c", cmd).start()
+        val out = p.inputStream.bufferedReader().readText() + p.errorStream.bufferedReader().readText()
+        p.waitFor(); out.trim()
+    }.getOrElse { "ERR ${it.javaClass.simpleName}: ${it.message}" }
 
     /** 用户在设置里选了「普通模式」：即使 Shizuku 已授权，也按外放模式工作 */
     @Volatile var forceNormal = false
@@ -102,16 +130,20 @@ object MicInjector {
         scopeAuto = sp.getBoolean("scope_auto", sp.getString("qqInjectTarget", null) == null)
     }
 
+    fun notReadyMsg(): String = if (rootMode) tr("没有获取到 Root 权限，请在 Magisk / KernelSU / APatch 里允许 MicMask")
+        else if (runCatching { Shizuku.pingBinder() }.getOrDefault(false)) tr("还没授权 Shizuku") else tr("Shizuku 没有运行")
+
     /** 变声是否走 Shizuku 注入（已授权且用户没选普通模式） */
     fun shizukuGranted(): Boolean = !forceNormal && shizukuPermitted()
 
     /** Shizuku 本身是否已授权（不看用户选的模式；音频还原/自检/授权页用） */
-    fun shizukuPermitted(): Boolean = runCatching {
+    fun shizukuPermitted(): Boolean = if (rootMode) rootOk else runCatching {
         shizukuRunning() && !Shizuku.isPreV11() &&
             Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
     }.getOrDefault(false)
 
     fun requestShizuku(onResult: (Boolean) -> Unit) {
+        if (rootMode) { Thread { onResult(checkRoot()) }.start(); return }
         if (!shizukuRunning()) { onResult(false); return }
         if (shizukuPermitted()) { onResult(true); return }
         val l = object : Shizuku.OnRequestPermissionResultListener {
@@ -170,7 +202,7 @@ object MicInjector {
     private fun ensureBound(ctx: Context, then: () -> Unit) {
         if (binder?.pingBinder() == true) { then(); return }
         if (!shizukuPermitted()) {
-            setPhase(Phase.ERROR, if (shizukuRunning()) tr("还没授权 Shizuku") else tr("Shizuku 没有运行"))
+            setPhase(Phase.ERROR, notReadyMsg())
             return
         }
         val first = synchronized(pendingAfterBind) { pendingAfterBind.add(then); pendingAfterBind.size == 1 }
@@ -179,6 +211,12 @@ object MicInjector {
         bindAttempt = 0; selfLaunched = false
         val app = ctx.applicationContext
         appCtx = app
+        if (rootMode) {
+            // ROOT 模式：不碰 Shizuku，清掉残留进程后直接自启
+            staleCleared = true
+            Thread { killStaleInjector(app); main.post { startRoot(app) } }.start()
+            return
+        }
         if (!staleCleared) {
             // App 重启后上一个进程留下的注入服务可能还没退干净，直接绑会卡住（1.13 日志：重启后卡加载，重新授权才好）
             staleCleared = true
@@ -215,6 +253,40 @@ object MicInjector {
         main.postDelayed({ check() }, 1000)
     }
     private var staleCleared = false
+
+    /** 切换 Shizuku/ROOT 时调用：断开当前注入服务，下次按新模式重新拉起 */
+    fun resetBackend() {
+        val b = binder
+        binder = null; staleCleared = false; selfLaunched = false; rootAsShell = true; bindAttempt++
+        synchronized(pendingAfterBind) { pendingAfterBind.clear() }
+        if (b != null) L.i("MicInjector 切换运行模式：断开当前注入服务")
+        appCtx?.let { app -> Thread { killStaleInjector(app) }.start() }
+    }
+
+    /** ROOT 模式启动：先 su 2000 降权自启；12 s 没交回 binder 就改用 root 身份自启（目标应用可能被静音，记日志） */
+    private fun startRoot(app: Context) {
+        val attempt = ++bindAttempt
+        selfLaunched = true
+        setPhase(Phase.CONNECTING, tr("正在启动注入服务（Root）…"))
+        Thread { selfLaunch(app) }.start()
+        val t0 = android.os.SystemClock.elapsedRealtime()
+        fun check() {
+            if (binder?.pingBinder() == true || bindAttempt != attempt) return
+            val waited = (android.os.SystemClock.elapsedRealtime() - t0) / 1000
+            if (waited < 12) { main.postDelayed({ check() }, 1000); return }
+            Thread { L.w("MicInjector Root 自启 ${waited}s 没交回 binder（降权=${rootAsShell}）：" + shell("tail -n 30 /data/local/tmp/micmask-models/shellmain.log")) }.start()
+            if (rootAsShell) {
+                L.w("MicInjector su 2000 降权失败，改用 root 身份启动注入进程（部分机型目标应用会被系统静音）")
+                rootAsShell = false
+                startRoot(app)
+            } else {
+                synchronized(pendingAfterBind) { pendingAfterBind.clear() }
+                selfLaunched = false
+                setPhase(Phase.ERROR, tr("Root 模式启动注入服务失败，请导出日志反馈"))
+            }
+        }
+        main.postDelayed({ check() }, 1000)
+    }
 
     /** 交给 ShellMain 做死亡监听：App 进程没了，shell 侧自己退出 */
     val appToken = android.os.Binder()
@@ -253,7 +325,7 @@ object MicInjector {
     @Volatile var rootAsShell = true
 
     /** 通过 Shizuku 以 shell 身份跑命令（newProcess 在 API 13 是私有的，反射调用） */
-    private fun shell(cmd: String): String = runCatching {
+    private fun shell(cmd: String): String = if (rootMode) suExec(cmd) else runCatching {
         val m = Shizuku::class.java.getDeclaredMethod("newProcess", Array<String>::class.java, Array<String>::class.java, String::class.java)
         m.isAccessible = true
         val p = m.invoke(null, arrayOf("sh", "-c", cmd), null, null) as Process
@@ -366,7 +438,7 @@ object MicInjector {
         val uids = targetPkg.split(',', ' ', ';').map { it.trim() }.filter { it.isNotEmpty() }
             .map { uidOf(app, it) }.filter { it >= 0 }.distinct().toIntArray().let { if (scopeAuto) IntArray(0) else it }
         if (uids.isEmpty() && !scopeAuto) { status(tr("没找到目标 App：{0}", targetPkg)); return }
-        if (!shizukuGranted()) { status(if (shizukuRunning()) tr("还没授权 Shizuku") else tr("Shizuku 没有运行")); return }
+        if (!shizukuGranted()) { status(notReadyMsg()); return }
         ensureBound(app) {
             Thread {
                 val err = runCatching {
@@ -625,8 +697,8 @@ object MicInjector {
         if (app.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             done(tr("自检需要录音权限，先在「变声」页录一次音授权")); return
         }
-        if (!shizukuPermitted()) { done(if (shizukuRunning()) tr("还没授权 Shizuku") else tr("Shizuku 没有运行")); return }
-        main.postDelayed({ if (binder == null) done(tr("注入服务 10 秒没连上（Shizuku 拉起失败）")) }, 10_000)
+        if (!shizukuPermitted()) { done(notReadyMsg()); return }
+        main.postDelayed({ if (binder == null) done(if (rootMode) tr("注入服务 10 秒没连上（Root 自启失败）") else tr("注入服务 10 秒没连上（Shizuku 拉起失败）")) }, 10_000)
         ensureBound(app) {
             Thread {
                 val sb = StringBuilder()

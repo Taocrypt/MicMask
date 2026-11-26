@@ -35,7 +35,6 @@
   "Retrieval-based Voice Conversion 音色转换": "Retrieval-based Voice Conversion",
   "Shizuku 已授权": "Shizuku authorized",
   "Shizuku 已运行，未授权本 App": "Shizuku is running, but this app isn't authorized",
-  "Shizuku 未授权": "Shizuku not authorized",
   "Shizuku 未运行（先装 Shizuku 并用无线调试启动）": "Shizuku is not running (install Shizuku and start it via wireless debugging)",
   "Shizuku 模式": "Shizuku Mode",
   "Shizuku 模式：把变声直接送进目标应用的麦克风，支持实时 AI 变声、普通变声和虚拟声卡。": "Shizuku Mode: sends the changed voice straight into the target app's microphone, with live AI Voice, Basic Voice and Virtual Sound Card.",
@@ -1120,5 +1119,16 @@
   "缺基础模型：请先添加官方模型仓库并下载任意一个音色": "Base models missing: add the official model repository and download any voice first",
   "还缺基础模型": "Base models missing",
   "自己导入的音色也要用到基础模型（HuBERT 和 RMVPE），这台手机上还没有。\n\n请先到「设置 → 模型仓库」添加官方模型仓库，然后在 AI 变声页下载任意一个音色，基础模型会一起下好。之后你导入的音色就能用了。": "Voices you import yourself also need the base models (HuBERT and RMVPE), which aren't on this phone yet.\n\nGo to Settings → Model repositories, add the official repository, then download any voice on the AI page. The base models are downloaded along with it, and your imported voices will work after that.",
-  "还缺基础模型（HuBERT / RMVPE），音色暂时用不了：先在「设置 → 模型仓库」添加官方模型仓库，再下载任意一个音色。": "Base models (HuBERT / RMVPE) are missing, so voices can't be used yet: add the official repository in Settings → Model repositories, then download any voice."
+  "还缺基础模型（HuBERT / RMVPE），音色暂时用不了：先在「设置 → 模型仓库」添加官方模型仓库，再下载任意一个音色。": "Base models (HuBERT / RMVPE) are missing, so voices can't be used yet: add the official repository in Settings → Model repositories, then download any voice.",
+  "Root 已授权": "Root granted",
+  "Root 未授权（在 Magisk / KernelSU / APatch 里允许 MicMask）": "Root not granted (allow MicMask in Magisk / KernelSU / APatch)",
+  "没有获取到 Root 权限，请在 Magisk / KernelSU / APatch 里允许 MicMask": "Couldn't get root. Allow MicMask in Magisk / KernelSU / APatch",
+  "需要 Root 授权才能还原": "Root permission is needed to restore",
+  "正在启动注入服务（Root）…": "Starting injection service (root)…",
+  "Root 模式启动注入服务失败，请导出日志反馈": "Root mode couldn't start the injection service. Please export logs and report",
+  "注入服务 10 秒没连上（Root 自启失败）": "Injection service didn't connect within 10 s (root launch failed)",
+  "ROOT 模式": "ROOT mode",
+  "点击切换": "Tap to switch",
+  "\nRoot 未授权，点上方「ROOT 模式」重新申请。": "\nRoot not granted. Tap \"ROOT mode\" above to request again.",
+  "ROOT 模式：不需要 Shizuku，用 su 拉起注入服务（降为 shell 身份），功能与 Shizuku 模式相同。实验功能，没在 Magisk 上测过。": "ROOT mode: no Shizuku needed. The injection service is started with su (dropped to the shell identity) and works the same as Shizuku mode. Experimental, not yet tested on Magisk."
 }

@@ -123,7 +123,7 @@ class LiveService : Service() {
         Thread {
             val main = android.os.Handler(mainLooper)
             try {
-                if (!MicInjector.shizukuGranted()) { main.post { status(tr("Shizuku 未授权")) }; stopSelf(); return@Thread }
+                if (!MicInjector.shizukuGranted()) { main.post { status(MicInjector.notReadyMsg()) }; stopSelf(); return@Thread }
                 main.post { status(tr("把模型交给注入服务…")) }
                 val names = ModelStore.liveNames(applicationContext)
                 val err = MicInjector.sendLiveModels(applicationContext, names)

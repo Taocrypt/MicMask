@@ -1921,29 +1921,33 @@ private fun Mim3Page(vm: MainViewModel, st: UiState) {
 private fun PermModeCard(vm: MainViewModel, st: UiState) {
     val primary = MiuixTheme.colorScheme.primary
     // 授权状态变化后 refreshInjectState 会更新 qqShizuku / speakerMode，以此作为 key 重新读取
-    val permitted = remember(st.qqShizuku, st.speakerMode, st.forceNormal) { com.taocrypt.micmask.inject.MicInjector.shizukuPermitted() }
+    val permitted = remember(st.qqShizuku, st.speakerMode, st.forceNormal, st.rootMode) { com.taocrypt.micmask.inject.MicInjector.shizukuPermitted() }
     // 未授权 Shizuku 时实际按普通模式工作，选中态也显示为普通模式
     val effNormal = st.forceNormal || !permitted
     Card(Modifier.fillMaxWidth().padding(PagePad)) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                listOf(false to tr("Shizuku 模式"), true to tr("普通模式")).forEach { (isNormal, name) ->
-                    val sel = effNormal == isNormal
+                // 0=Shizuku 1=ROOT 2=普通
+                listOf(0 to tr("Shizuku 模式"), 1 to tr("ROOT 模式"), 2 to tr("普通模式")).forEach { (mode, name) ->
+                    val isNormal = mode == 2
+                    val sel = if (isNormal) effNormal else !effNormal && st.rootMode == (mode == 1)
+                    val selMode = !isNormal && !st.forceNormal && st.rootMode == (mode == 1)
                     val bg by animateColorAsState(if (sel) primary else MiuixTheme.colorScheme.surfaceContainer, label = "perm")
                     val fg = if (sel) MiuixTheme.colorScheme.onPrimary else MiuixTheme.colorScheme.onSurface
                     Column(Modifier.weight(1f).clip(RoundedCornerShape(14.dp)).background(bg)
-                        .clickable(enabled = !st.liveOn) { if (!sel || (!isNormal && !permitted)) vm.setNormalMode(isNormal) }
-                        .padding(vertical = 14.dp, horizontal = 12.dp),
+                        .clickable(enabled = !st.liveOn) { if (!sel || (!isNormal && !permitted)) vm.setPermMode(mode) }
+                        .padding(vertical = 14.dp, horizontal = 6.dp),
                         horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(name, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = fg)
-                        Text(if (isNormal) tr("无需授权") else if (permitted) tr("已授权") else tr("未授权"), fontSize = 12.sp, color = fg.copy(alpha = 0.75f))
+                        Text(name, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = fg, maxLines = 1)
+                        Text(if (isNormal) tr("无需授权") else if (selMode && permitted) tr("已授权") else if (selMode) tr("未授权") else tr("点击切换"), fontSize = 12.sp, color = fg.copy(alpha = 0.75f))
                     }
                 }
             }
             Text(when {
                 st.liveOn -> tr("变声中不能切换，先关闭变声。")
                 effNormal -> tr("普通模式：不使用 Shizuku。变声和音效从扬声器外放，AI/普通变声为「录一句再放」的录播方式，声卡不可用；对方可能听到原声。") +
-                    if (!st.forceNormal && !permitted) tr("\nShizuku 未授权，点上方「Shizuku 模式」申请。") else ""
+                    if (!st.forceNormal && !permitted) (if (st.rootMode) tr("\nRoot 未授权，点上方「ROOT 模式」重新申请。") else tr("\nShizuku 未授权，点上方「Shizuku 模式」申请。")) else ""
+                st.rootMode -> tr("ROOT 模式：不需要 Shizuku，用 su 拉起注入服务（降为 shell 身份），功能与 Shizuku 模式相同。实验功能，没在 Magisk 上测过。")
                 else -> tr("Shizuku 模式：把变声直接送进目标应用的麦克风，支持实时 AI 变声、普通变声和虚拟声卡。")
             }, fontSize = 12.sp, color = Summary)
         }
