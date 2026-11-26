@@ -164,19 +164,21 @@ jobs:
           json.dump(data, open("artifacts/update.json", "w", encoding="utf-8"), ensure_ascii=False, indent=2)
           PY
           cat artifacts/update.json
-      # 不标 prerelease：旧版 App 走 releases/latest；新版按通道读 update-feed 里的 stable.json / beta.json
+      # 版本号含 alpha/beta/rc 的标为 prerelease，releases/latest（官网下载、GitHub「Latest」）只指向正式版。
+      # App 内更新不看这个标记：2.0-alpha30 起按 tag 名区分通道，并读 update-feed 里的 stable.json / beta.json。
       - name: Publish
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="$GITHUB_REF_NAME"
+          if echo "$TAG" | grep -qiE 'alpha|beta|rc'; then PRE="--prerelease"; else PRE="--prerelease=false"; fi
           ls -l artifacts
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release edit "$TAG" --title "$TAG" --notes-file notes.md
+            gh release edit "$TAG" --title "$TAG" --notes-file notes.md $PRE
             gh release upload "$TAG" artifacts/* --clobber
           else
-            gh release create "$TAG" artifacts/* --title "$TAG" --notes-file notes.md --verify-tag
+            gh release create "$TAG" artifacts/* --title "$TAG" --notes-file notes.md --verify-tag $PRE
           fi
       # 更新通道清单：滚动发布 update-feed（标为 prerelease，不影响 latest）
       #   beta.json   每次发版都更新

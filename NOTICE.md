@@ -60,3 +60,11 @@ mobile-rvc 的解码器结构又移植自 RVC（mobile-rvc 的 THIRD_PARTY_NOTIC
 ## 名称与图标
 
 「MicMask」名称与图标仅用于标识本项目。基于本项目的修改版请使用不同的名称与图标，避免与官方版本混淆。
+
+### liquid-glass（MIT）
+
+官网赞赏墙弹幕的液态玻璃折射（`site/vendor/liquid-glass.js`）原样收录自
+[deepika-builds/liquid-glass](https://github.com/deepika-builds/liquid-glass)，文件头部注明了出处。全文见 `notices/liquid-glass-MIT.txt`：
+
+> liquid-glass — https://github.com/deepika-builds/liquid-glass
+> MIT License, Copyright (c) 2026 Deepika Rao

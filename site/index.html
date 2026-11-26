@@ -152,6 +152,7 @@
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" type="image/png" href="icon.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
+<script src="vendor/liquid-glass.js" defer></script>
 <style>
 :root {
   --bg: #F3F4F6;
@@ -291,6 +292,13 @@ h1 { font-size: clamp(40px, 6vw, 68px); line-height: 1.12; letter-spacing: -.02e
 .lead { font-size: 19px; color: var(--text-2); max-width: 30em; margin: 0 0 32px; }
 .cta { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
 .cta-note { margin: 16px 0 0; font-size: 14px; color: var(--text-3); }
+/* 下载通道切换：默认正式版，可手动切到测试版 */
+.chan { display: inline-flex; margin-top: 16px; padding: 3px; border-radius: 999px; background: var(--surface); gap: 2px; }
+.chan button { font: inherit; font-size: 14px; font-weight: 600; border: 0; border-radius: 999px; padding: 6px 16px; min-height: 34px; background: none; color: var(--text-2); cursor: pointer; transition: background .15s, color .15s; }
+.chan button[aria-checked="true"] { background: var(--ink); color: var(--on-ink); }
+.chan button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.chan-tip { margin-top: 10px; max-width: 34em; }
+.chan-tip.is-beta { color: color-mix(in srgb, #D97706 80%, var(--text)); }
 
 .stage { position: relative; display: flex; justify-content: flex-end; padding-right: 48px; }
 
@@ -502,25 +510,46 @@ a.qq:hover { text-decoration: underline; }
 .rel-more a:hover { text-decoration: underline; }
 /* 打开页面时赞助者与贡献者弹幕全屏飘过一遍 */
 .dm-fly { position: fixed; inset: 0; z-index: 9999; pointer-events: none; overflow: hidden; }
-.dm-fly .dm-chip { position: absolute; left: 100%; opacity: .6; box-shadow: 0 4px 14px rgba(0,0,0,.12); animation: dm-fly var(--dur, 9s) linear var(--delay, 0s) both; }
+.dm-fly .dm-chip { position: absolute; left: 100%; width: max-content; opacity: .92; -webkit-backdrop-filter: blur(6px) saturate(1.6); backdrop-filter: blur(6px) saturate(1.6); animation: dm-fly var(--dur, 9s) linear var(--delay, 0s) both; }
 @keyframes dm-fly { from { transform: translateX(0); } to { transform: translateX(calc(-100vw - 100% - 40px)); } }
 @media (prefers-reduced-motion: reduce) { .dm-fly { display: none; } }
 .dm-ct { margin-top: 22px; }
 .dm-ct .dm-wrap { display: flex; flex-wrap: wrap; gap: 10px; }
 /* sponsor danmaku */
 .dm { display: grid; gap: 10px; padding: 4px 0; }
-.dm-lane { position: relative; height: 34px; overflow: hidden; -webkit-mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent); mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent); }
-.dm-track { position: absolute; left: 0; top: 0; display: flex; gap: 12px; width: max-content; animation: dm-run var(--dur, 30s) linear infinite; will-change: transform; }
+.dm-lane { position: relative; height: 52px; overflow: hidden; -webkit-mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent); mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent); }
+.dm-track { position: absolute; left: 0; top: 0; height: 100%; display: flex; align-items: center; gap: 12px; width: max-content; animation: dm-run var(--dur, 30s) linear infinite; will-change: transform; }
 .dm-lane:hover .dm-track, .dm-lane.is-held .dm-track { animation-play-state: paused; }
 .dm-lane.is-fast .dm-track { animation-duration: calc(var(--dur, 30s) / 5); }
 @keyframes dm-run { from { transform: translateX(0); } to { transform: translateX(-50%); } }
-.dm-chip { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 3px 12px 3px 3px; border-radius: 999px; white-space: nowrap; font-size: 13.5px; background: color-mix(in srgb, var(--tc) 16%, var(--surface)); border: 1.5px solid transparent; cursor: default; transition: transform .2s, border-color .2s; }
-.dm-chip:hover { transform: scale(1.05); border-color: var(--tc); }
-.dm-chip .av { width: 26px; height: 26px; border-radius: 50%; background: var(--fill); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; overflow: hidden; flex: none; }
+.dm-chip { position: relative; display: inline-flex; align-items: center; gap: 8px; min-height: 34px; width: max-content; flex: none; padding: 3px 14px 3px 3px; border-radius: 22px; white-space: nowrap; font-size: 13.5px;
+  /* 液态玻璃：半透明档位色 + 顶部高光 + 细亮边；折射由 vendor/liquid-glass.js 在 Chromium 上补上 */
+  background: linear-gradient(180deg, rgba(255,255,255,.34), rgba(255,255,255,.08) 55%, rgba(255,255,255,.16)), color-mix(in srgb, var(--tc) 18%, transparent);
+  -webkit-backdrop-filter: blur(10px) saturate(1.6); backdrop-filter: blur(10px) saturate(1.6);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.65), inset 0 -1px 0 rgba(255,255,255,.18), inset 0 0 0 1px rgba(255,255,255,.28), 0 4px 14px rgba(0,0,0,.08);
+  border: 1.5px solid transparent; cursor: default; transition: transform .2s, border-color .2s; }
+.dm-chip:hover { transform: scale(1.03); border-color: var(--tc); }
+@media (prefers-color-scheme: dark) {
+  .dm-chip { background: linear-gradient(180deg, rgba(255,255,255,.14), rgba(255,255,255,.03) 55%, rgba(255,255,255,.07)), color-mix(in srgb, var(--tc) 22%, transparent);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.22), inset 0 0 0 1px rgba(255,255,255,.1), 0 4px 14px rgba(0,0,0,.3); }
+}
+/* 赞赏墙每条轨道自带一层柔和彩色背景，玻璃才有东西可折射（轨道有 mask，子元素的 backdrop 只看得到轨道内部） */
+.dm-lane::before { content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none; opacity: .28; border-radius: 18px;
+  background: radial-gradient(40% 120% at 15% 50%, var(--g1), transparent 70%), radial-gradient(35% 120% at 50% 50%, var(--g3), transparent 70%), radial-gradient(40% 120% at 85% 50%, var(--g5), transparent 70%); }
+.dm-lane:nth-child(2)::before { background: radial-gradient(40% 120% at 20% 50%, var(--g2), transparent 70%), radial-gradient(35% 120% at 60% 50%, var(--g4), transparent 70%), radial-gradient(40% 120% at 90% 50%, var(--g6), transparent 70%); }
+.dm-lane:nth-child(3)::before { background: radial-gradient(40% 120% at 10% 50%, var(--g4), transparent 70%), radial-gradient(35% 120% at 45% 50%, var(--g6), transparent 70%), radial-gradient(40% 120% at 80% 50%, var(--g2), transparent 70%); }
+.dm-track { z-index: 1; }
+.dm-lane .dm-chip small { color: var(--text-2); }
+@media (prefers-color-scheme: dark) { .dm-lane::before { opacity: .4; } }
+.dm-chip .av { width: 28px; height: 28px; border-radius: 50%; background: var(--fill); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; overflow: hidden; flex: none; }
 .dm-chip .av img { width: 100%; height: 100%; object-fit: cover; }
 .dm-chip b { font-weight: 600; color: var(--text); }
 .dm-chip em { font-style: normal; color: color-mix(in srgb, var(--tc) 80%, var(--text)); font-size: 12.5px; }
 .dm-chip small { color: var(--text-3); font-size: 12px; }
+/* 双行：第一行名字、金额、日期；第二行留言（有留言才显示），过长省略 */
+.dm-chip .tx { display: flex; flex-direction: column; justify-content: center; gap: 1px; line-height: 1.25; min-width: 0; }
+.dm-chip .l1 { display: flex; align-items: baseline; gap: 6px; }
+.dm-chip .l2 { max-width: 20em; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); font-size: 12px; }
 .dm-sum { color: var(--text-2); font-size: 14px; margin: 0 0 12px; }
 .dm-all { margin-top: 14px; }
 .dm-all summary { cursor: pointer; color: var(--text-2); font-size: 14px; }
@@ -642,6 +671,11 @@ footer .brand .mark svg { width: 13px; height: 13px; }
           GitHub
         </a>
       </div>
+      <div class="chan" role="radiogroup" aria-label="下载版本" data-i18n-attr="aria-label:chan.aria">
+        <button type="button" role="radio" aria-checked="true" data-chan="stable" data-i18n="chan.stable">正式版</button><button type="button" role="radio" aria-checked="false" data-chan="beta" data-i18n="chan.beta">测试版</button>
+      </div>
+      <p class="cta-note chan-tip" data-chan-tip="stable" data-i18n="chan.tipStable">推荐大多数人使用，经过完整测试。</p>
+      <p class="cta-note chan-tip is-beta" data-chan-tip="beta" hidden data-i18n="chan.tipBeta">测试版有最新功能，但可能不稳定，没有在所有机型上测过。装上后 App 会默认接收测试版更新，可在设置里切回正式版。遇到问题请导出日志反馈。</p>
       <p class="cta-note dl-status" aria-live="polite" hidden></p>
       <p class="cta-note" data-i18n="hero.note">64 位 Android 8.0+ · 无需 ROOT · 不用虚拟机</p>
     </div>
@@ -961,6 +995,11 @@ footer .brand .mark svg { width: 13px; height: 13px; }
     "hero.h1": "Swap your voice<br><span class=\"shine\">in real time</span>",
     "hero.lead": "A native real-time AI voice changer for Android. MicMask uses Shizuku to feed your changed voice straight into the system microphone, while RVC voice models run right on your phone. Open QQ, WeChat or your game as usual — the other side hears your new voice.",
     "cta.apk": "Download APK",
+    "chan.aria": "Download channel",
+    "chan.stable": "Stable",
+    "chan.beta": "Beta",
+    "chan.tipStable": "Recommended for most people. Fully tested.",
+    "chan.tipBeta": "Beta builds get the newest features but may be unstable and haven’t been tested on every phone. Once installed, the app receives beta updates by default — you can switch back to stable in Settings. Please export logs if anything goes wrong.",
     "hero.note": "64-bit Android 8.0+ · No root · No virtual machine",
     "ph.title": "AI Voice",
     "ph.basic": "Basic",
@@ -1513,12 +1552,29 @@ footer .brand .mark svg { width: 13px; height: 13px; }
             img.src = s.avatar;
           }
           c.appendChild(av);
-          var n = document.createElement("b"); n.textContent = s.name; c.appendChild(n);
-          if (s.contributor) { if (s.commits) { var k = document.createElement("small"); k.textContent = T("commits", s.commits); c.appendChild(k); } }
-          else { var m = document.createElement("em"); m.textContent = money(s.amount); c.appendChild(m); }
-          if (s.last && !s.contributor) { var t = document.createElement("small"); t.textContent = mmdd(s.last); c.appendChild(t); }
-          if (s.remark) { var r = document.createElement("small"); r.textContent = s.remark.slice(0, 16); c.appendChild(r); }
+          var tx = document.createElement("span"); tx.className = "tx";
+          var l1 = document.createElement("span"); l1.className = "l1";
+          var n = document.createElement("b"); n.textContent = s.name; l1.appendChild(n);
+          if (s.contributor) { if (s.commits) { var k = document.createElement("small"); k.textContent = T("commits", s.commits); l1.appendChild(k); } }
+          else { var m = document.createElement("em"); m.textContent = money(s.amount); l1.appendChild(m); }
+          if (s.last && !s.contributor) { var t = document.createElement("small"); t.textContent = mmdd(s.last); l1.appendChild(t); }
+          tx.appendChild(l1);
+          var rm = String(s.remark || "").trim();
+          if (rm) { var r = document.createElement("span"); r.className = "l2"; r.textContent = rm.length > 40 ? rm.slice(0, 40) + "…" : rm; r.title = rm; tx.appendChild(r); }
+          c.appendChild(tx);
           return c;
+        }
+        // 赞赏墙弹幕的液态玻璃折射（vendor/liquid-glass.js，MIT）。只有 Chromium 真折射，其余浏览器保留 CSS 磨砂；
+        // 飘屏弹幕数量多、全屏移动，不加折射，只用 CSS 玻璃，避免手机掉帧
+        function glassify(root) {
+          function go() {
+            if (!window.liquidGlass) return;
+            Array.prototype.forEach.call(root.querySelectorAll(".dm-chip"), function (c) {
+              if (c.__lg) return;
+              c.__lg = window.liquidGlass(c, { scale: -36, chroma: 3, border: 0.1, mapBlur: 6, blur: 2, saturate: 1.6, fallbackBlur: 10 });
+            });
+          }
+          if (window.liquidGlass) go(); else window.addEventListener("load", go, { once: true });
         }
         var dmBox = null;
         function renderDanmaku(cur, host) {
@@ -1546,6 +1602,7 @@ footer .brand .mark svg { width: 13px; height: 13px; }
               w = tr.scrollWidth;
             }
             set.forEach(function (s) { tr.appendChild(chip(s, true)); });
+            glassify(tr);
             var speed = 34 + l * 12; // px/s
             tr.style.setProperty("--dur", Math.max(8, (tr.scrollWidth / 2) / speed) + "s");
             tr.style.animationDelay = (-l * 1.3) + "s";
@@ -1664,7 +1721,7 @@ footer .brand .mark svg { width: 13px; height: 13px; }
           if (!items.length) return;
           var box = document.createElement("div");
           box.className = "dm-fly"; box.setAttribute("aria-hidden", "true");
-          var h = window.innerHeight, rows = Math.max(3, Math.floor((h - 80) / 48)), end = 0;
+          var h = window.innerHeight, rows = Math.max(3, Math.floor((h - 80) / 58)), end = 0;
           items.forEach(function (s, i) {
             var c = chip(s, true);
             if (s.contributor) c.style.setProperty("--tc", "#4C8DF0");
@@ -1709,13 +1766,22 @@ footer .brand .mark svg { width: 13px; height: 13px; }
     var b = a.filter(function (x) { return /arm64/.test(x.name); })[0] || a[0];
     return b ? { name: b.name, url: b[urlKey] } : null;
   }
-  var cache = null;
-  function latestApk() {
-    if (cache) return cache;
-    var api = json("https://api.github.com/repos/Taocrypt/MicMask/releases/latest", 6000).then(function (j) { var x = apkOf(j.assets, "browser_download_url"); if (!x) throw 0; x.ver = j.tag_name; return x; });
-    var feeds = MIRRORS.map(function (m) { return json(mu(m, UPDATE_JSON), 7000).then(function (j) { var x = apkOf(j.assets, "url"); if (!x) throw 0; x.ver = j.tag || j.version; return x; }); });
-    cache = any([api].concat(feeds)).catch(function (e) { cache = null; throw e; });
-    return cache;
+  /* 下载通道：stable=releases/latest（alpha/beta/rc 已标 prerelease，不会出现在这里）；
+     beta=所有发布里最新的一个（与 App 测试通道一致），镜像走 update-feed/beta.json。默认正式版，不记住选择 */
+  var BETA_JSON = REL + "/download/update-feed/beta.json";
+  var chan = "stable", caches = {};
+  function latestApk(ch) {
+    ch = ch || chan;
+    if (caches[ch]) return caches[ch];
+    var api = ch === "beta"
+      ? json("https://api.github.com/repos/Taocrypt/MicMask/releases?per_page=10", 6000).then(function (arr) {
+          var r = (arr || []).filter(function (x) { return !x.draft && x.tag_name !== "update-feed"; })[0];
+          var x = r && apkOf(r.assets, "browser_download_url"); if (!x) throw 0; x.ver = r.tag_name; return x; })
+      : json("https://api.github.com/repos/Taocrypt/MicMask/releases/latest", 6000).then(function (j) { var x = apkOf(j.assets, "browser_download_url"); if (!x) throw 0; x.ver = j.tag_name; return x; });
+    var feedUrl = ch === "beta" ? BETA_JSON : UPDATE_JSON;
+    var feeds = MIRRORS.map(function (m) { return json(mu(m, feedUrl), 7000).then(function (j) { var x = apkOf(j.assets, "url"); if (!x) throw 0; x.ver = j.tag || j.version; return x; }); });
+    caches[ch] = any([api].concat(feeds)).catch(function (e) { caches[ch] = null; throw e; });
+    return caches[ch];
   }
   /* 测速：每条线路读 update.json（小文件，测的是连通与延迟）；GitHub 直连不允许跨域读，用 no-cors 计时 */
   function probe(b) {
@@ -1749,27 +1815,42 @@ footer .brand .mark svg { width: 13px; height: 13px; }
       location.href = url;
     }).catch(function () {
       say(T("dlFail"));
-      window.open(REL + "/latest", "_blank", "noopener");
+      window.open(chan === "beta" ? REL : REL + "/latest", "_blank", "noopener");
     }).then(function () { busy = false; setTimeout(function () { say(""); }, 8000); });
   });
   /* 页面上的版本号（.mm-ver）跟随 releases/latest（alpha 也不标 prerelease，所以可能是测试版）：先用上次缓存，再取最新版更新；
      .mm-chan 按版本号是否含 alpha/beta/rc 显示「正式版 / 测试版」；切换语言后重新填 */
-  var ver = null;
-  try { ver = localStorage.getItem("micmask-ver"); } catch (e) {}
+  var vers = {};
+  try { vers.stable = localStorage.getItem("micmask-ver"); vers.beta = localStorage.getItem("micmask-ver-beta"); } catch (e) {}
+  if (vers.stable && /(alpha|beta|rc)/i.test(vers.stable)) vers.stable = null; // 旧缓存可能是 alpha
   function fill() {
+    var ver = vers[chan];
     if (!ver) return;
     Array.prototype.forEach.call(document.querySelectorAll(".mm-ver"), function (el) { if (el.textContent !== ver) el.textContent = ver; });
     var ch = T(/(alpha|beta|rc)/i.test(ver) ? "chPre" : "chStable");
     Array.prototype.forEach.call(document.querySelectorAll(".mm-chan"), function (el) { if (el.textContent !== ch) el.textContent = ch; });
   }
+  function load(ch) {
+    latestApk(ch).then(function (x) {
+      var v = String(x.ver || "").replace(/^v/i, "");
+      if (!/^\d+(\.\d+)+/.test(v)) return;
+      vers[ch] = v; if (ch === chan) fill();
+      try { localStorage.setItem(ch === "beta" ? "micmask-ver-beta" : "micmask-ver", v); } catch (e) {}
+    }).catch(function () {});
+  }
+  function setChan(ch) {
+    chan = ch === "beta" ? "beta" : "stable";
+    Array.prototype.forEach.call(document.querySelectorAll("[data-chan]"), function (b) { b.setAttribute("aria-checked", String(b.getAttribute("data-chan") === chan)); });
+    Array.prototype.forEach.call(document.querySelectorAll("[data-chan-tip]"), function (p) { p.hidden = p.getAttribute("data-chan-tip") !== chan; });
+    Array.prototype.forEach.call(document.querySelectorAll("[data-dl]"), function (a) { a.href = chan === "beta" ? REL : REL + "/latest"; });
+    fill(); load(chan);
+  }
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest && e.target.closest("[data-chan]");
+    if (b) setChan(b.getAttribute("data-chan"));
+  });
   if (window.MMI18N) window.MMI18N.onChange(fill);
-  fill();
-  latestApk().then(function (x) {
-    var v = String(x.ver || "").replace(/^v/i, "");
-    if (!/^\d+(\.\d+)+/.test(v)) return;
-    ver = v; fill();
-    try { localStorage.setItem("micmask-ver", v); } catch (e) {}
-  }).catch(function () {});
+  setChan("stable");
 })();
 </script>
 <script>
