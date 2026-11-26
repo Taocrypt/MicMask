@@ -764,6 +764,8 @@ class InjectorService : Binder {
     @Volatile private var tuneRms = 0f
     @Volatile private var tuneFormant = 0f
     @Volatile private var tunePl = false
+    @Volatile private var tuneDnIn = false
+    @Volatile private var tuneDnOut = false
     /** 读高级参数并套到现有引擎；返回是否需要重载 */
     private fun readTune(d: android.os.Parcel): Boolean {
         tuneTier = d.readInt(); tuneGate = d.readFloat(); tuneFeat = d.readInt(); tuneSyn = d.readInt()
@@ -773,9 +775,11 @@ class InjectorService : Binder {
         if (d.dataAvail() >= 4) tuneRms = d.readFloat()
         if (d.dataAvail() >= 4) tuneFormant = d.readFloat()
         if (d.dataAvail() >= 4) tunePl = d.readInt() != 0
+        if (d.dataAvail() >= 4) tuneDnIn = d.readInt() != 0
+        if (d.dataAvail() >= 4) tuneDnOut = d.readInt() != 0
         val plChanged = engine?.let { it.phaseLock != tunePl } ?: false
-        engine?.let { it.rmsFollow = tuneRms; it.formant = tuneFormant; it.phaseLock = tunePl }
-        slog('I', "音色参数：响度跟随=$tuneRms 共振峰=$tuneFormant 相位锁定=$tunePl")
+        engine?.let { it.rmsFollow = tuneRms; it.formant = tuneFormant; it.phaseLock = tunePl; it.denoiseIn = tuneDnIn; it.denoiseOut = tuneDnOut }
+        slog('I', "音色参数：响度跟随=$tuneRms 共振峰=$tuneFormant 相位锁定=$tunePl 输入降噪=$tuneDnIn 输出降噪=$tuneDnOut")
         engine?.pinBig = tunePin; engine?.indexRate = tuneIdx
         slog('I', "高级参数：档位=${listOf("自动", "标准", "省电").getOrElse(tuneTier) { "?" }} 静音门限=${tuneGate}dB 线程=$tuneFeat/$tuneSyn 绑大核=$tunePin 检索=$tuneIdx 声码器=${listOf("自动", "ORT", "NEON fp16", "NPU").getOrElse(tuneVoc) { "?" }}")
         val vocChanged = engine?.setVocoder(tuneVoc) ?: false
@@ -788,7 +792,7 @@ class InjectorService : Binder {
             it.pickCache = java.io.File(MODEL_DIR, "pick.txt")
             it.tune(tuneTier, tuneGate, tuneFeat, tuneSyn)
             it.pinBig = tunePin; it.indexRate = tuneIdx; it.setVocoder(tuneVoc)
-            it.rmsFollow = tuneRms; it.formant = tuneFormant; it.phaseLock = tunePl
+            it.rmsFollow = tuneRms; it.formant = tuneFormant; it.phaseLock = tunePl; it.denoiseIn = tuneDnIn; it.denoiseOut = tuneDnOut
             it.qnnDirProvider = { com.taocrypt.micmask.QnnPack.shellDir(ctx?.packageName) }
             it.onConfig = { blockMs -> tierPrimeMs = blockMs + 80; livePrimeMs = tierPrimeMs; slog('I', "预缓冲跟随档位 → ${livePrimeMs}ms") }
             engine = it

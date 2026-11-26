@@ -160,6 +160,8 @@ data class UiState(
     val liveBenching: Boolean = false,
     /** 性能测试结束弹窗内容（null = 不弹） */
     val benchDialog: String? = null,
+    /** 缺基础模型（HuBERT/RMVPE）提示弹窗：只导入了自己的音色、没从仓库下过任何音色时出现（alpha.7） */
+    val baseMissDialog: Boolean = false,
     val logMsg: String = "",
     val liveMsg: String = "",
     /** 状态行性能摘要与展开明细（实时 AI 变声中） */
@@ -567,6 +569,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _state.value = _state.value.copy(importing = false, importName = "")
 
             refreshModels()
+            if (result.isSuccess && baseMissing()) { L.w("导入后仍缺基础模型（HuBERT/RMVPE），提示添加官方仓库"); _state.value = _state.value.copy(baseMissDialog = true) }
             _state.value = _state.value.copy(
                 toast = result.fold(
                     { when {
@@ -962,6 +965,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _state.value = _state.value.copy(liveOn = false, liveMsg = tr("缺流式合成器模型，请先在模型页下载或导入实时模型包"))
                 return
             }
+            if (baseMissing()) {
+                L.w("开始 AI 变声：缺基础模型（HuBERT/RMVPE）")
+                _state.value = _state.value.copy(liveOn = false, liveMsg = tr("缺基础模型：请先添加官方模型仓库并下载任意一个音色"), baseMissDialog = true)
+                return
+            }
             LiveService.onStop = { stopAll() }
             LiveService.start(ctx, liveTarget(), _state.value.liveSemis.toInt(), src, cb)
             statLiveStart()
@@ -1109,11 +1117,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         inj.tunePin = prefs.getBoolean("ai_pin", true)
         inj.tuneIdx = aiIndex()
         inj.tuneVoc = aiTuneVoc()
-        inj.tuneRms = aiRms(); inj.tuneFormant = aiFormant(); inj.tunePl = aiPhaseLock()
+        inj.tuneRms = aiRms(); inj.tuneFormant = aiFormant(); inj.tunePl = aiPhaseLock(); inj.tuneDnIn = aiDnIn(); inj.tuneDnOut = aiDnOut()
     }
     fun aiRms(): Float = prefs.getFloat("ai_rms", 0f)
     fun aiFormant(): Float = prefs.getFloat("ai_formant", 0f)
     fun aiPhaseLock(): Boolean = prefs.getBoolean("ai_phase_lock", false)
+    /** 输入/输出降噪（谱门限）：即时生效，不重载 */
+    fun aiDnIn(): Boolean = prefs.getBoolean("ai_dn_in", false)
+    fun aiDnOut(): Boolean = prefs.getBoolean("ai_dn_out", false)
+    fun setAiDnIn(v: Boolean) { prefs.edit().putBoolean("ai_dn_in", v).apply(); com.taocrypt.micmask.inject.MicInjector.tuneDnIn = v; commitAiTune() }
+    fun setAiDnOut(v: Boolean) { prefs.edit().putBoolean("ai_dn_out", v).apply(); com.taocrypt.micmask.inject.MicInjector.tuneDnOut = v; commitAiTune() }
     /** 响度跟随 / 共振峰：不重载，松手后 commitAiTune 推给运行中的引擎；相位锁定会重载合成器 */
     fun setAiRms(v: Float) { prefs.edit().putFloat("ai_rms", v).apply(); com.taocrypt.micmask.inject.MicInjector.tuneRms = v; clipEngine?.rmsFollow = v }
     fun setAiFormant(v: Float) { prefs.edit().putFloat("ai_formant", v).apply(); com.taocrypt.micmask.inject.MicInjector.tuneFormant = v; clipEngine?.formant = v }
@@ -1194,7 +1207,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun resetAiTune() {
         setAiTune(0, LiveRvc.GATE_DB, 3, 4); setAiIndex(0.3f); setAiVocoder(0); setAiHubNpu(false)
         setAiRms(0f); setAiFormant(0f); setAiPin(true)
-        prefs.edit().putBoolean("ai_phase_lock", false).apply(); com.taocrypt.micmask.inject.MicInjector.tunePl = false
+        prefs.edit().putBoolean("ai_phase_lock", false).putBoolean("ai_dn_in", false).putBoolean("ai_dn_out", false).apply()
+        com.taocrypt.micmask.inject.MicInjector.tunePl = false; com.taocrypt.micmask.inject.MicInjector.tuneDnIn = false; com.taocrypt.micmask.inject.MicInjector.tuneDnOut = false
         commitAiTune(); aiResetGen.intValue++
     }
     /** 按模式开始/停止；运行中切到别的模式会先停再按新模式重启 */
@@ -1507,6 +1521,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 性能测试：在本机实测各档合成器，选能稳定跑的最低延迟档，结果记住 */
     fun dismissBenchDialog() { _state.value = _state.value.copy(benchDialog = null) }
+    fun baseMissing(): Boolean = ModelStore.locate(ctx, ModelStore.HUBERT) == null || ModelStore.locate(ctx, ModelStore.RMVPE) == null
+    fun dismissBaseDialog() { _state.value = _state.value.copy(baseMissDialog = false) }
     fun runLiveBench() {
         if (com.taocrypt.micmask.inject.MicInjector.liveOn || _state.value.liveBenching) return
         if (!LiveRvc.modelPresent(ctx)) { _state.value = _state.value.copy(liveBench = tr("缺实时变声模型，先在模型页导入")); return }

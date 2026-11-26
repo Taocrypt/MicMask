@@ -35,6 +35,16 @@ class LiveRvc(private val open0: (String) -> Any?) {
     @Volatile var rmsFollow = 0f
     /** 共振峰偏移（半音，-6..6）：音高不变，只移音色的共振峰 */
     @Volatile var formant = 0f
+    /** 输入/输出降噪（TorchGate 式谱门限，alpha.7）；即时生效 */
+    @Volatile var denoiseIn = false
+    @Volatile var denoiseOut = false
+    private val tgIn = TorchGate(SR)
+    private val tgOut = TorchGate(SR)
+    /** 降噪后的输入窗口（只在特征线程里读写），与 history 同长同对齐 */
+    private val dnHist = FloatArray(WIN48)
+    private var dnFresh = true
+    /** 上次提交以来 history 前进的样本数（采集线程写，提交时带走） */
+    private var sinceSub = 0
     @Volatile private var ph0Now = 0f
     private fun open(n: String): Any? {
         val f = open0(n)
@@ -509,7 +519,7 @@ class LiveRvc(private val open0: (String) -> Any?) {
         if (running) return
         running = true
         startT = System.nanoTime(); synchronized(trouble) { trouble.clear() }
-        java.util.Arrays.fill(history, 0f); fresh = 0; prevTail = null; dropped = 0; gated = 0; blkSeq = 0; synchronized(this) { wFeat.clear(); wSyn.clear(); wLag.clear(); nBlocks = 0; nOver = 0 }
+        java.util.Arrays.fill(history, 0f); fresh = 0; sinceSub = 0; dnFresh = true; tgIn.reset(); tgOut.reset(); prevTail = null; dropped = 0; gated = 0; blkSeq = 0; synchronized(this) { wFeat.clear(); wSyn.clear(); wLag.clear(); nBlocks = 0; nOver = 0 }
         L.i("live 开始，semis=$semis")
         pump = Thread({ boost(); pumpLoop() }, "live-pump").apply { start() }
     }
@@ -597,7 +607,7 @@ class LiveRvc(private val open0: (String) -> Any?) {
                 System.arraycopy(history, n, history, 0, WIN48 - n)
                 for (i in 0 until n) history[WIN48 - n + i] = got[i] / 32768f
             }
-            fresh += n
+            fresh += n; sinceSub += n
             while (fresh >= BLOCK_S && running) {
                 fresh -= BLOCK_S
                 // 若中途还有未处理的新样本，这一步的窗口其实"超前"了 fresh 个样本；量很小，忽略
@@ -609,25 +619,42 @@ class LiveRvc(private val open0: (String) -> Any?) {
                 }
                 val win = history.copyOf()
                 inflight.incrementAndGet()
-                submit(win, id, System.nanoTime())
+                val adv = sinceSub; sinceSub = 0
+                submit(win, id, System.nanoTime(), adv)
             }
         }
     }
 
-    private fun submit(win48: FloatArray, id: Long, tAvail: Long) {
+    /** 输入降噪：只处理新进来的 adv 个样本（前面带 2048 个上下文），接到 dnHist 末尾；返回降噪后的窗口 */
+    private fun denoiseWindow(win48: FloatArray, adv: Int): FloatArray {
+        val ctxN = 2048
+        val a = if (dnFresh) WIN48 - ctxN else adv.coerceIn(1, WIN48 - ctxN)
+        val s0 = WIN48 - a - ctxN
+        val y = tgIn.process(win48.copyOfRange(s0, WIN48), ctxN)
+        System.arraycopy(dnHist, a, dnHist, 0, WIN48 - a)
+        System.arraycopy(y, ctxN, dnHist, WIN48 - a, a)
+        if (dnFresh) System.arraycopy(y, 0, dnHist, s0, ctxN)
+        dnFresh = false
+        return dnHist.copyOf()
+    }
+
+    private fun submit(win48raw: FloatArray, id: Long, tAvail: Long, adv: Int = BLOCK_S) {
         val sh = semis
         featExec.execute {
             try {
                 val t0 = System.nanoTime()
                 val waitFeat = (t0 - tAvail) / 1_000_000
+                // 门限用原声判断（降噪会把轻声也压低）；推理用降噪后的窗口。关掉再打开时从头重学噪声谱
+                val win48 = if (denoiseIn) runCatching { denoiseWindow(win48raw, adv) }.getOrElse { L.e("输入降噪失败", it); denoiseIn = false; win48raw }
+                            else { if (!dnFresh) { dnFresh = true; tgIn.reset() }; win48raw }
                 // 门限：太安静就不推理，直接送静音（省电也避免底噪被"唱"出来）
                 // 按 20 ms 分段取能量最大的一段：整块平均会被句尾的静音段拉低（alpha.6 起）
                 val seg = SR / 50
                 var eMax = 0.0
-                var i0 = win48.size - BLOCK_S
-                while (i0 < win48.size) {
-                    val i1 = minOf(win48.size, i0 + seg); var e = 0.0
-                    for (i in i0 until i1) e += win48[i] * win48[i]
+                var i0 = win48raw.size - BLOCK_S
+                while (i0 < win48raw.size) {
+                    val i1 = minOf(win48raw.size, i0 + seg); var e = 0.0
+                    for (i in i0 until i1) e += win48raw[i] * win48raw[i]
                     eMax = maxOf(eMax, e / (i1 - i0)); i0 = i1
                 }
                 val db = (10 * log10(eMax + 1e-12)).toFloat()
@@ -682,7 +709,8 @@ class LiveRvc(private val open0: (String) -> Any?) {
                         val pl = phaseLock; if (pl) ph0Now = phAcc
                         val y = runNetG(phone, pitch, pitchf)
                         if (pl) { var a = phAcc.toDouble(); val o = T - LEN; for (j in 0 until BLOCK) { val r = pitchf[o + j] / 100.0 + 0.5; a += r - Math.floor(r) - 0.5 }; phAcc = (a - Math.floor(a)).toFloat() }
-                        post(y, win48, pitchf)
+                        post(y, win48raw, pitchf)
+                        if (denoiseOut) runCatching { System.arraycopy(tgOut.process(y), 0, y, 0, y.size) }.onFailure { L.e("输出降噪失败", it); denoiseOut = false }
                         lastSynMs = (System.nanoTime() - t1) / 1_000_000
                         val vocTag = if (usedVoc && voc != null) "(前半${lastPreMs}+NEON声码器${lastDecMs})" else ""
                         val t2 = System.nanoTime()

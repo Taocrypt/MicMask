@@ -260,6 +260,13 @@ fun V2App(vm: MainViewModel) {
             }
         }
         com.taocrypt.micmask.update.UpdateDialog(st.liveOn)
+        if (st.baseMissDialog && !st.importing) {
+            WindowDialog(show = true, title = tr("还缺基础模型"), onDismissRequest = { vm.dismissBaseDialog() }) {
+                Text(tr("自己导入的音色也要用到基础模型（HuBERT 和 RMVPE），这台手机上还没有。\n\n请先到「设置 → 模型仓库」添加官方模型仓库，然后在 AI 变声页下载任意一个音色，基础模型会一起下好。之后你导入的音色就能用了。"), fontSize = 14.sp)
+                top.yukonga.miuix.kmp.basic.TextButton(tr("知道了"), onClick = { vm.dismissBaseDialog() }, modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                    colors = top.yukonga.miuix.kmp.basic.ButtonDefaults.textButtonColorsPrimary())
+            }
+        }
         if (st.importing && st.importTotal > 0) {
             WindowDialog(show = true, title = tr("正在导入模型"), summary = "${st.importDone}/${st.importTotal}  ${st.importName}") {
                 LinearProgressIndicator(progress = st.importDone.toFloat() / st.importTotal.coerceAtLeast(1))
@@ -726,6 +733,12 @@ private fun AiAdvanced(vm: MainViewModel, st: UiState) {
     var pl by remember(vm.aiResetGen.intValue) { mutableStateOf(vm.aiPhaseLock()) }
     SwitchPreference(checked = pl, onCheckedChange = { pl = it; vm.setAiPhaseLock(it) }, title = tr("相位锁定"),
         summary = tr("让每段合成的声音首尾相位接上，减轻块与块之间的轻微「嗒嗒」声。实验功能，切换会重新加载模型"))
+    var dnIn by remember(vm.aiResetGen.intValue) { mutableStateOf(vm.aiDnIn()) }
+    SwitchPreference(checked = dnIn, onCheckedChange = { dnIn = it; vm.setAiDnIn(it) }, title = tr("输入降噪"),
+        summary = tr("送进模型前先压掉持续的底噪（风扇、电流声），免得被模型「唱」出来。改用无障碍录音后系统降噪不生效时尤其有用。实验功能，默认关"))
+    var dnOut by remember(vm.aiResetGen.intValue) { mutableStateOf(vm.aiDnOut()) }
+    SwitchPreference(checked = dnOut, onCheckedChange = { dnOut = it; vm.setAiDnOut(it) }, title = tr("输出降噪"),
+        summary = tr("对变声后的声音再降一次噪，去掉合成出来的嘶声。可能让声音略发闷。实验功能，默认关"))
 
     val cores = Runtime.getRuntime().availableProcessors()
     Row(Modifier.padding(top = 14.dp)) { Text(tr("特征线程"), Modifier.weight(1f), fontSize = 14.sp); Text("${st.aiFeatTh}", color = Summary) }
@@ -857,6 +870,13 @@ private fun LazyListScope.aiPage(vm: MainViewModel, st: UiState, open: (String) 
     if (st.liveVoices.isEmpty()) item {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
             Text(tr("还没有音色。从下方仓库下载，或导入模型 zip。"), Modifier.padding(16.dp), color = Summary)
+        }
+    }
+    if (st.liveVoices.isNotEmpty()) item(key = "base-miss") {
+        val miss = remember(st.liveVoices, st.dlId, st.importing) { vm.baseMissing() }
+        if (miss) Card(Modifier.fillMaxWidth().padding(PagePad)) {
+            Text(tr("还缺基础模型（HuBERT / RMVPE），音色暂时用不了：先在「设置 → 模型仓库」添加官方模型仓库，再下载任意一个音色。"),
+                Modifier.padding(16.dp), fontSize = 13.sp, color = MiuixTheme.colorScheme.error)
         }
     }
     if (st.liveVoices.isNotEmpty()) item(key = "voices") {

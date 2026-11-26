@@ -1112,5 +1112,13 @@
   "麦克风只录到静音，正在换录音方式": "The mic is only picking up silence; switching recording method",
   "麦克风只录到静音：请检查系统的麦克风权限/隐私开关，或在设置里换录音方式": "The mic is only picking up silence: check the system mic permission/privacy toggle, or change the recording method in Settings",
   "TTS 模型": "TTS models",
-  "模型下载": "Model downloads"
+  "模型下载": "Model downloads",
+  "输入降噪": "Input noise reduction",
+  "送进模型前先压掉持续的底噪（风扇、电流声），免得被模型「唱」出来。改用无障碍录音后系统降噪不生效时尤其有用。实验功能，默认关": "Suppresses steady background noise (fans, hum) before it reaches the model, so it isn't \"sung\" back. Especially useful with accessibility capture, where system noise suppression doesn't apply. Experimental, off by default",
+  "输出降噪": "Output noise reduction",
+  "对变声后的声音再降一次噪，去掉合成出来的嘶声。可能让声音略发闷。实验功能，默认关": "Runs noise reduction again on the converted voice to remove synthesized hiss. May sound slightly muffled. Experimental, off by default",
+  "缺基础模型：请先添加官方模型仓库并下载任意一个音色": "Base models missing: add the official model repository and download any voice first",
+  "还缺基础模型": "Base models missing",
+  "自己导入的音色也要用到基础模型（HuBERT 和 RMVPE），这台手机上还没有。\n\n请先到「设置 → 模型仓库」添加官方模型仓库，然后在 AI 变声页下载任意一个音色，基础模型会一起下好。之后你导入的音色就能用了。": "Voices you import yourself also need the base models (HuBERT and RMVPE), which aren't on this phone yet.\n\nGo to Settings → Model repositories, add the official repository, then download any voice on the AI page. The base models are downloaded along with it, and your imported voices will work after that.",
+  "还缺基础模型（HuBERT / RMVPE），音色暂时用不了：先在「设置 → 模型仓库」添加官方模型仓库，再下载任意一个音色。": "Base models (HuBERT / RMVPE) are missing, so voices can't be used yet: add the official repository in Settings → Model repositories, then download any voice."
 }
