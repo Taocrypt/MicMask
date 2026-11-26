@@ -58,7 +58,11 @@ class LiveRvc(private val open0: (String) -> Any?) {
 
     // 档位由选中的合成器决定：标准 LEN=35（每步 0.3 s）/ 省电 LEN=55（每步 0.5 s，延迟 +0.2 s，算力约省 40%）
     @Volatile var LEN = 35; private set
-    val BLOCK get() = LEN - XF_FR
+    /** 高级 0.25s：仍用标准档合成器，每步只前进 25 帧，丢掉输出最前面 CUT 帧（输出与窗口末端对齐，丢的是最旧的部分） */
+    @Volatile var CUT = 0; private set
+    /** 每块实际用到的输出帧数 = 块长 + 交叉淡化 */
+    val OUT get() = LEN - CUT
+    val BLOCK get() = OUT - XF_FR
     val BLOCK_S get() = BLOCK * UPP
     val XF get() = XF_FR * UPP
     /** 档位定下后通知 shell（预缓冲要跟着块长变） */
@@ -133,7 +137,7 @@ class LiveRvc(private val open0: (String) -> Any?) {
     }
     // ---- 兼容模式：w-okada 导出的整段模型（feats/p_len/pitch/pitchf/sid → 模型采样率整段波形）
     /** 每块取最后 compatFrames 帧、重采样到 48k；手动标准档 35 帧，其余 55 帧（整段推理慢，留余量） */
-    private val compatFrames get() = if (tier == 1) 35 else 55
+    private val compatFrames get() = if (tier == 1 || tier == 3) 35 else 55
     private class Compat(val sr: Int, val hop: Int, val up: Int, val dn: Int, val h: FloatArray) {
         /** 多相 FIR 重采样 sr→48k（与 convert_rvc.py 同一设计：UP*24 抽头 Kaiser-sinc） */
         fun to48k(x: FloatArray): FloatArray {
@@ -185,7 +189,7 @@ class LiveRvc(private val open0: (String) -> Any?) {
     @Volatile var semis: Int = 0
 
     // ---- 高级（实时变声页「高级」可调）
-    /** 0=自动（测速选）1=标准 2=省电 */
+    /** 0=自动（测速选）1=标准 2=省电 3=高级 0.25s（标准档模型每 0.25 s 推一次，只手动选） */
     @Volatile var tier = 0
     /** 静音门限 dBFS：块响度低于它跳过推理 */
     @Volatile var gateDb = GATE_DB
@@ -210,7 +214,7 @@ class LiveRvc(private val open0: (String) -> Any?) {
     /** 应用调参；返回 true 表示要重新加载模型才生效（档位/线程变了） */
     fun tune(t: Int, gate: Float, fth: Int, sth: Int): Boolean {
         gateDb = gate.coerceIn(-80f, GATE_MAX)
-        val nt = t.coerceIn(0, 2); val nf = fth.coerceIn(1, 8); val ns = sth.coerceIn(1, 8)
+        val nt = t.coerceIn(0, 3); val nf = fth.coerceIn(1, 8); val ns = sth.coerceIn(1, 8)
         val changed = nt != tier || nf != featThreads || ns != synThreads
         tier = nt; featThreads = nf; synThreads = ns
         return changed
@@ -368,10 +372,10 @@ class LiveRvc(private val open0: (String) -> Any?) {
             }
             // 手动档位：只在对应块长里选，没有就退回全部
             val pool = when (tier) {
-                1 -> cands.filter { it.blockMs <= 300 }   // blockMs 是毫秒（alpha33 起误写成帧数，标准档永远落空）
+                1, 3 -> cands.filter { it.blockMs <= 300 }   // blockMs 是毫秒（alpha33 起误写成帧数，标准档永远落空）
                 2 -> cands.filter { it.blockMs > 300 }
                 else -> cands
-            }.ifEmpty { if (tier != 0) L.w("live 本音色没有${if (tier == 1) "标准" else "省电"}档模型，改为自动"); cands }
+            }.ifEmpty { if (tier != 0) L.w("live 本音色没有${if (tier == 2) "省电" else "标准"}档模型，改为自动"); cands }
             val ok = pool.filter { ratio(it) <= 0.8 }
             chosen = (if (tier != 0) pool.minByOrNull { ratio(it) } else if (ok.isNotEmpty()) ok.minWith(compareBy<Cand> { it.blockMs }.thenBy { it.ms }) else pool.minByOrNull { ratio(it) })
                 ?: throw IllegalStateException("缺流式合成器模型，请导入实时变声模型包")
@@ -392,6 +396,8 @@ class LiveRvc(private val open0: (String) -> Any?) {
         checkHubert()
         if (hubWant && !hubertNpu) runCatching { featMs = tryNpuHubert(featMs) }.onFailure { L.e("live NPU HuBERT 失败，留在 CPU", it) }
         LEN = runNetG(phFor(netG!!), pi, pf).size / UPP
+        CUT = if (tier == 3 && LEN == 35) 5 else 0
+        if (tier == 3 && CUT == 0) L.w("live 高级 0.25s 需要标准档（0.3 s）合成器，当前块长 ${(LEN - XF_FR) * 10}ms，按原块长运行")
         // 声码器：ORT 前半图 + 原生 NEON fp16 / 骁龙 NPU 跑 dec（失败或不划算就留在 ORT 整图）
         var synMs = pick.ms
         var vocNote = ""
@@ -423,11 +429,11 @@ class LiveRvc(private val open0: (String) -> Any?) {
             val old = f.takeIf { it.exists() }?.readText()?.split("\n").orEmpty().chunked(4).filter { it.size == 4 && it[0] != key }
             f.writeText((listOf(listOf(key, pick.name, "${pick.ms}", "$LEN")) + old).take(16).flatten().joinToString("\n"))
         }
-        val tier = if (BLOCK <= 30) "标准" else "省电"
-        benchSummary = (if (compatOf(netG!!) != null) "兼容模式·" else "") + "${tier}档：每步 ${BLOCK * 10}ms · 特征 ${featMs}ms · 合成 ${synMs}ms · 负载 ${"%.0f".format(maxOf(synMs, featMs) * 100.0 / pick.blockMs)}%$vocNote"
+        val tier = if (BLOCK <= 25) "高级" else if (BLOCK <= 30) "标准" else "省电"
+        benchSummary = (if (compatOf(netG!!) != null) "兼容模式·" else "") + "${tier}档：每步 ${BLOCK * 10}ms · 特征 ${featMs}ms · 合成 ${synMs}ms · 负载 ${"%.0f".format(maxOf(synMs, featMs) * 100.0 / (BLOCK * 10))}%$vocNote"
         L.i("live 选用 ${pick.name} → $benchSummary")
         benchCfg = "${best?.first?.kind ?: "ORT"};${if (hubertNpu) 1 else 0}"
-        if (ratio(pick) > 1.0) L.w("live 本机最快的档位也超预算，会断音")
+        if (maxOf(synMs, featMs) > BLOCK * 10) L.w("live 本机最快的档位也超预算，会断音")
         if (pinBig) CpuPin.pinSelf("加载后")   // ORT 线程池在建会话时才创建，再绑一次
         onConfig?.invoke(BLOCK * 10)
         onLog("模型就绪")
@@ -441,7 +447,7 @@ class LiveRvc(private val open0: (String) -> Any?) {
 
     /** 丢块或 shell 输出断流时调用 */
     fun noteTrouble(src: String) {
-        if (!running || shifting || BLOCK > 30 || tier == 1) return  // 手动选了标准档就不自动降
+        if (!running || shifting || BLOCK > 30 || tier == 1 || (tier == 3 && CUT == 0)) return  // 手动选了标准档就不自动降；高级只退回标准
         val now = System.nanoTime()
         if (now - startT < 5_000_000_000L) return           // 刚开始的预缓冲抖动不算
         val n = synchronized(trouble) {
@@ -449,7 +455,20 @@ class LiveRvc(private val open0: (String) -> Any?) {
             while (trouble.isNotEmpty() && now - trouble.first() > 10_000_000_000L) trouble.removeFirst()
             trouble.size
         }
-        if (n >= 3) { synchronized(trouble) { trouble.clear() }; downshift(src) }
+        if (n >= 3) { synchronized(trouble) { trouble.clear() }; if (CUT > 0) upBlock(src) else downshift(src) }
+    }
+
+    /** 高级 0.25s 跟不上：在合成线程里把 CUT 清零，回到标准 0.3s（本次运行有效） */
+    private fun upBlock(src: String) {
+        shifting = true
+        L.w("live 高级 0.25s：10s 内断流/丢块 ≥3 次（最近：$src）→ 退回标准 0.3s")
+        synExec.execute {
+            CUT = 0
+            benchSummary = "标准档(高级跟不上自动退回)：每步 ${BLOCK * 10}ms"
+            L.i("live 已退回标准档，每步 ${BLOCK * 10}ms（本次运行有效，下次开始仍按高级 0.25s）")
+            onConfig?.invoke(BLOCK * 10)
+            shifting = false
+        }
     }
 
     /** 当前在用的合成器（标准名） */
@@ -519,6 +538,8 @@ class LiveRvc(private val open0: (String) -> Any?) {
         if (running) return
         running = true
         startT = System.nanoTime(); synchronized(trouble) { trouble.clear() }
+        // 上次运行高级 0.25s 跟不上退回了标准：重新开始时恢复
+        if (tier == 3 && LEN == 35 && CUT == 0 && netG != null) { CUT = 5; L.i("live 高级 0.25s：恢复每步 ${BLOCK * 10}ms"); onConfig?.invoke(BLOCK * 10) }
         java.util.Arrays.fill(history, 0f); fresh = 0; sinceSub = 0; dnFresh = true; tgIn.reset(); tgOut.reset(); prevTail = null; dropped = 0; gated = 0; blkSeq = 0; synchronized(this) { wFeat.clear(); wSyn.clear(); wLag.clear(); nBlocks = 0; nOver = 0 }
         L.i("live 开始，semis=$semis")
         pump = Thread({ boost(); pumpLoop() }, "live-pump").apply { start() }
@@ -670,7 +691,7 @@ class LiveRvc(private val open0: (String) -> Any?) {
                             val target = lastLagMs
                             val waitMs = target - (System.nanoTime() - tAvail) / 1_000_000
                             if (waitMs > 0) Thread.sleep(minOf(waitMs, BLOCK * 20L))
-                            emit(FloatArray(LEN * UPP))
+                            emit(FloatArray(OUT * UPP))
                         } catch (_: InterruptedException) {
                         } finally { inflight.decrementAndGet() }
                     }
@@ -707,8 +728,9 @@ class LiveRvc(private val open0: (String) -> Any?) {
                         val t1 = System.nanoTime()
                         val usedVoc = voc?.takeIf { it.owner === netG } != null
                         val pl = phaseLock; if (pl) ph0Now = phAcc
-                        val y = runNetG(phone, pitch, pitchf)
-                        if (pl) { var a = phAcc.toDouble(); val o = T - LEN; for (j in 0 until BLOCK) { val r = pitchf[o + j] / 100.0 + 0.5; a += r - Math.floor(r) - 0.5 }; phAcc = (a - Math.floor(a)).toFloat() }
+                        val cut = CUT
+                        val y = runNetG(phone, pitch, pitchf).let { if (cut > 0) it.copyOfRange(cut * UPP, it.size) else it }
+                        if (pl) { var a = phAcc.toDouble(); val o = T - y.size / UPP; for (j in 0 until BLOCK) { val r = pitchf[o + j] / 100.0 + 0.5; a += r - Math.floor(r) - 0.5 }; phAcc = (a - Math.floor(a)).toFloat() }
                         post(y, win48raw, pitchf)
                         if (denoiseOut) runCatching { System.arraycopy(tgOut.process(y), 0, y, 0, y.size) }.onFailure { L.e("输出降噪失败", it); denoiseOut = false }
                         lastSynMs = (System.nanoTime() - t1) / 1_000_000
@@ -785,8 +807,11 @@ class LiveRvc(private val open0: (String) -> Any?) {
         }
     }
 
-    /** y: L*UPP 个样本；前 XF 与上块尾巴交叉淡化，输出 BLOCK_S 个，留后 XF 作新尾巴 */
-    private fun emit(y: FloatArray) {
+    /** y: OUT*UPP 个样本；前 XF 与上块尾巴交叉淡化，输出 BLOCK_S 个，留后 XF 作新尾巴 */
+    private fun emit(y0: FloatArray) {
+        // 档位刚切换时在途块的长度可能和新块长不一致：取末尾 BLOCK_S+XF（输出与窗口末端对齐）
+        val need = BLOCK_S + XF
+        val y = if (y0.size == need) y0 else if (y0.size > need) y0.copyOfRange(y0.size - need, y0.size) else FloatArray(need).also { System.arraycopy(y0, 0, it, need - y0.size, y0.size) }
         val out = ShortArray(BLOCK_S)
         val tail = prevTail
         for (i in 0 until BLOCK_S) {

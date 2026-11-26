@@ -366,7 +366,6 @@
   "底栏": "Bottom bar",
   "延时": "Delay",
   "延迟多约 0.2 秒，算力省约 40%，发热少": "About 0.2 s more latency; compute down ~40%, runs cooler",
-  "延迟最低；手机跟不上会断音，且不会自动降档": "Lowest latency; drops out if the phone can't keep up, and won't step down automatically",
   "开启悬浮窗": "Open floating window",
   "开始": "Start",
   "开始变声": "Start Voice Changing",
@@ -1130,5 +1129,8 @@
   "ROOT 模式": "ROOT mode",
   "点击切换": "Tap to switch",
   "\nRoot 未授权，点上方「ROOT 模式」重新申请。": "\nRoot not granted. Tap \"ROOT mode\" above to request again.",
-  "ROOT 模式：不需要 Shizuku，用 su 拉起注入服务（降为 shell 身份），功能与 Shizuku 模式相同。实验功能，没在 Magisk 上测过。": "ROOT mode: no Shizuku needed. The injection service is started with su (dropped to the shell identity) and works the same as Shizuku mode. Experimental, not yet tested on Magisk."
+  "ROOT 模式：不需要 Shizuku，用 su 拉起注入服务（降为 shell 身份），功能与 Shizuku 模式相同。实验功能，没在 Magisk 上测过。": "ROOT mode: no Shizuku needed. The injection service is started with su (dropped to the shell identity) and works the same as Shizuku mode. Experimental, not yet tested on Magisk.",
+  "高级 0.25s": "Pro 0.25s",
+  "比标准再快约 0.1 秒：用标准档模型每 0.25 秒推一次，算力多约 20%。只建议高端旗舰；跟不上会自动退回标准 0.3s": "About 0.1 s faster than Standard: runs the standard model every 0.25 s; compute up ~20%. Recommended for high-end flagships only; falls back to Standard 0.3s automatically if the phone can't keep up",
+  "手机跟不上会断音，且不会自动降档": "Audio drops out if the phone can't keep up, and it won't switch to a lighter tier automatically"
 }

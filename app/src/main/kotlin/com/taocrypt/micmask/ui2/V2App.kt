@@ -691,17 +691,18 @@ private fun AiAdvanced(vm: MainViewModel, st: UiState) {
     if (!open) return
     Text(tr("档位"), Modifier.padding(top = 8.dp), fontSize = 14.sp)
     Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        listOf(tr("自动"), tr("标准 0.3s"), tr("省电 0.5s")).forEachIndexed { i, t ->
+        // 显示顺序：自动 / 高级 0.25s / 标准 0.3s / 省电 0.5s；档位值 0 / 3 / 1 / 2（3 是后加的，不改旧值）
+        listOf(0 to tr("自动"), 3 to tr("高级 0.25s"), 1 to tr("标准 0.3s"), 2 to tr("省电 0.5s")).forEach { (i, t) ->
             val on = st.aiTier == i
             Box(Modifier.weight(1f).height(34.dp).clip(RoundedCornerShape(10.dp))
                 .background(if (on) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.secondaryContainer)
                 .clickable { vm.setAiTune(tier = i); vm.commitAiTune() }, contentAlignment = Alignment.Center) {
-                Text(t, fontSize = 13.sp, maxLines = 1,
+                Text(t, fontSize = 12.sp, maxLines = 1,
                     color = if (on) MiuixTheme.colorScheme.onPrimary else MiuixTheme.colorScheme.onSecondaryContainer)
             }
         }
     }
-    Text(when (st.aiTier) { 1 -> tr("延迟最低；手机跟不上会断音，且不会自动降档"); 2 -> tr("延迟多约 0.2 秒，算力省约 40%，发热少"); else -> tr("按测速选能跑稳的最低延迟档，频繁断音时自动降到省电") },
+    Text(when (st.aiTier) { 3 -> tr("比标准再快约 0.1 秒：用标准档模型每 0.25 秒推一次，算力多约 20%。只建议高端旗舰；跟不上会自动退回标准 0.3s"); 1 -> tr("手机跟不上会断音，且不会自动降档"); 2 -> tr("延迟多约 0.2 秒，算力省约 40%，发热少"); else -> tr("按测速选能跑稳的最低延迟档，频繁断音时自动降到省电") },
         fontSize = 12.sp, color = Summary, modifier = Modifier.padding(top = 6.dp))
 
     Row(Modifier.padding(top = 14.dp)) { Text(tr("静音门限"), Modifier.weight(1f), fontSize = 14.sp); Text("${st.aiGate.roundToInt()} dB", color = Summary) }

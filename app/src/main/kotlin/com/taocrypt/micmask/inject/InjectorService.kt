@@ -781,7 +781,7 @@ class InjectorService : Binder {
         engine?.let { it.rmsFollow = tuneRms; it.formant = tuneFormant; it.phaseLock = tunePl; it.denoiseIn = tuneDnIn; it.denoiseOut = tuneDnOut }
         slog('I', "音色参数：响度跟随=$tuneRms 共振峰=$tuneFormant 相位锁定=$tunePl 输入降噪=$tuneDnIn 输出降噪=$tuneDnOut")
         engine?.pinBig = tunePin; engine?.indexRate = tuneIdx
-        slog('I', "高级参数：档位=${listOf("自动", "标准", "省电").getOrElse(tuneTier) { "?" }} 静音门限=${tuneGate}dB 线程=$tuneFeat/$tuneSyn 绑大核=$tunePin 检索=$tuneIdx 声码器=${listOf("自动", "ORT", "NEON fp16", "NPU").getOrElse(tuneVoc) { "?" }}")
+        slog('I', "高级参数：档位=${listOf("自动", "标准", "省电", "高级0.25s").getOrElse(tuneTier) { "?" }} 静音门限=${tuneGate}dB 线程=$tuneFeat/$tuneSyn 绑大核=$tunePin 检索=$tuneIdx 声码器=${listOf("自动", "ORT", "NEON fp16", "NPU").getOrElse(tuneVoc) { "?" }}")
         val vocChanged = engine?.setVocoder(tuneVoc) ?: false
         return (engine?.tune(tuneTier, tuneGate, tuneFeat, tuneSyn) ?: false) || vocChanged || plChanged
     }
