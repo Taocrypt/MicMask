@@ -1,1 +1,35 @@
-{"format":1,"updated":0,"count":0,"total":0,"sponsors":[]}
+{
+ "format": 1,
+ "updated": 1795728539,
+ "count": 3,
+ "total": 15.0,
+ "sponsors": [
+  {
+   "name": "爱发电用户_b7beb",
+   "avatar": "https://pic1.afdiancdn.com/default/avatar/avatar-purple.png?imageView2/1/",
+   "amount": 5.0,
+   "since": 1795706352,
+   "last": 1795706352,
+   "expire": 1798298352,
+   "remark": "拼好饭加根肠"
+  },
+  {
+   "name": "天域",
+   "avatar": "https://pic1.afdiancdn.com/default/avatar/avatar-orange.png",
+   "amount": 5.0,
+   "since": 1795707103,
+   "last": 1795707103,
+   "expire": 1798299103,
+   "remark": "老大，加油！"
+  },
+  {
+   "name": "爱发电用户_1645d",
+   "avatar": "https://pic1.afdiancdn.com/default/avatar/avatar-purple.png?imageView2/1/",
+   "amount": 5.0,
+   "since": 1795709081,
+   "last": 1795709081,
+   "expire": 1798301081,
+   "remark": "加油加油"
+  }
+ ]
+}
