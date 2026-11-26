@@ -677,7 +677,7 @@ private fun AiAdvanced(vm: MainViewModel, st: UiState) {
     Row(Modifier.fillMaxWidth().padding(top = 14.dp).clip(RoundedCornerShape(8.dp)).clickable { open = !open }.padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Text(tr("高级"), Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
-        val custom = st.aiTier != 0 || st.aiGate != -50f || st.aiFeatTh != 3 || st.aiSynTh != 4 || vm.aiVocoder() != 0 || vm.aiHubNpu()
+        val custom = st.aiTier != 0 || st.aiGate != com.taocrypt.micmask.LiveRvc.GATE_DB || st.aiFeatTh != 3 || st.aiSynTh != 4 || vm.aiVocoder() != 0 || vm.aiHubNpu()
         if (!open && custom) Text(tr("已自定义  "), fontSize = 13.sp, color = MiuixTheme.colorScheme.primary)
         Text(if (open) tr("收起 ▴") else tr("展开 ▾"), fontSize = 13.sp, color = Summary)
     }
@@ -698,9 +698,9 @@ private fun AiAdvanced(vm: MainViewModel, st: UiState) {
         fontSize = 12.sp, color = Summary, modifier = Modifier.padding(top = 6.dp))
 
     Row(Modifier.padding(top = 14.dp)) { Text(tr("静音门限"), Modifier.weight(1f), fontSize = 14.sp); Text("${st.aiGate.roundToInt()} dB", color = Summary) }
-    Slider(value = st.aiGate, onValueChange = { vm.setAiTune(gate = it.roundToInt().toFloat()) }, valueRange = -70f..-30f, steps = 39,
+    Slider(value = st.aiGate, onValueChange = { vm.setAiTune(gate = it.roundToInt().toFloat()) }, valueRange = -75f..com.taocrypt.micmask.LiveRvc.GATE_MAX, steps = 34,
         onValueChangeFinished = { vm.commitAiTune() })
-    Text(tr("低于它的声音不送进模型（省电、去底噪）。开头字被吞就调低，环境吵、有杂音就调高。默认 -50"), fontSize = 12.sp, color = Summary)
+    Text(tr("低于它的声音不送进模型（省电、去底噪）。越高越容易把说话当成静音：字被吞就调低，环境吵、有杂音才调高。默认 -60"), fontSize = 12.sp, color = Summary)
 
     var idx by remember(vm.aiResetGen.intValue) { mutableStateOf(vm.aiIndex()) }
     val hasIdx = remember(st.liveVoice, st.liveVoices) { vm.voiceHasIndex() }

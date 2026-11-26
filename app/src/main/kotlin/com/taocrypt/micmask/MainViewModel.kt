@@ -219,7 +219,7 @@ data class UiState(
     val pitchGain: Float = 0f,
     /** AI 实时高级：档位 0 自动/1 标准/2 省电、静音门限 dB、特征/合成线程 */
     val aiTier: Int = 0,
-    val aiGate: Float = -50f,
+    val aiGate: Float = LiveRvc.GATE_DB,
     val aiFeatTh: Int = 3,
     val aiSynTh: Int = 4,
     val liveFloat: Boolean = false,
@@ -1087,9 +1087,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             userPresets = mapOf(1 to loadUserPresets(1), 2 to loadUserPresets(2)),
             pitchSemis = prefs.getFloat("pitch_semis", 0f), aiSemis = prefs.getFloat("ai_semis", 0f),
             aiGain = prefs.getFloat("ai_gain", 0f), pitchGain = prefs.getFloat("pitch_gain", 0f), liveMonitor = prefs.getBoolean("monitor", false), liveMode = prefs.getInt("live_mode", 0),
-            aiTier = prefs.getInt("ai_tier", 0), aiGate = prefs.getFloat("ai_gate", -50f),
+            aiTier = prefs.getInt("ai_tier", 0), aiGate = migrateGate(),
             aiFeatTh = prefs.getInt("ai_feat_th", 3), aiSynTh = prefs.getInt("ai_syn_th", 4))
         syncTune()
+    }
+    /** alpha.6：默认门限 -50 → -60，上限 -40。旧默认 -50 跟着改；高于 -40 的压到 -40（只迁移一次） */
+    private fun migrateGate(): Float {
+        var g = prefs.getFloat("ai_gate", LiveRvc.GATE_DB)
+        if (!prefs.getBoolean("ai_gate_v2", false)) {
+            val old = g
+            if (g == -50f) g = LiveRvc.GATE_DB
+            g = g.coerceIn(-80f, LiveRvc.GATE_MAX)
+            prefs.edit().putFloat("ai_gate", g).putBoolean("ai_gate_v2", true).apply()
+            if (old != g) L.i("静音门限迁移：${old}dB → ${g}dB")
+        }
+        return g.coerceIn(-80f, LiveRvc.GATE_MAX)
     }
     private fun syncTune() {
         val st = _state.value; val inj = com.taocrypt.micmask.inject.MicInjector
@@ -1180,7 +1192,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** 高级页「恢复默认」后自增，界面据此刷新本地开关状态 */
     val aiResetGen = androidx.compose.runtime.mutableIntStateOf(0)
     fun resetAiTune() {
-        setAiTune(0, -50f, 3, 4); setAiIndex(0.3f); setAiVocoder(0); setAiHubNpu(false)
+        setAiTune(0, LiveRvc.GATE_DB, 3, 4); setAiIndex(0.3f); setAiVocoder(0); setAiHubNpu(false)
         setAiRms(0f); setAiFormant(0f); setAiPin(true)
         prefs.edit().putBoolean("ai_phase_lock", false).apply(); com.taocrypt.micmask.inject.MicInjector.tunePl = false
         commitAiTune(); aiResetGen.intValue++

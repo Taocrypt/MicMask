@@ -400,7 +400,7 @@ object MicInjector {
                     kv["bench"]?.takeIf { it.isNotEmpty() && it != lastBench }?.let { b -> lastBench = b; onBench?.invoke(b) }
                     perfOf(kv)
                     main.post { status((modeLabel ?: if (external) tr("AI 变声") else tr("普通变声")) + tr(" · 麦电平 {0} · 目标在录={1} · 缓冲 {2} ms · 断流 {3}", kv["live"], kv["recs"], (kv["outBuf"]?.toIntOrNull() ?: 0) / 48, kv["under"]) + (kv["eng"]?.takeIf { it.isNotEmpty() }?.let { " · $it" } ?: statusExtra?.invoke()?.let { " · $it" } ?: "") +
-                        // shell 侧 micHint 原文（供 i18n_check）：tr("没有收到麦克风数据，正在重建录音") tr("采集到的是纯静音（麦克风可能被系统静音或被占用）") tr("麦克风被系统静音（其他应用可能占用了录音）") tr("通话占用了降噪录音，已自动改用原始麦克风")
+                        // shell 侧 micHint 原文（供 i18n_check）：tr("没有收到麦克风数据，正在重建录音") tr("采集到的是纯静音（麦克风可能被系统静音或被占用）") tr("麦克风被系统静音（其他应用可能占用了录音）") tr("通话占用了降噪录音，已自动改用原始麦克风") tr("麦克风只录到静音，正在换录音方式") tr("麦克风只录到静音：请检查系统的麦克风权限/隐私开关，或在设置里换录音方式")
                         (kv["mic"]?.takeIf { it.isNotEmpty() }?.let { "\n⚠ " + tr(it) } ?: "")) }
                     Thread.sleep(300)
                 }

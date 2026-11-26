@@ -74,7 +74,11 @@ class LiveRvc(private val open0: (String) -> Any?) {
         const val UPP = SR / 100          // 480
         const val XF_FR = 5               // 交叉淡化帧数（50 ms），LEN = BLOCK + XF_FR
         const val WIN48 = (T * UPP) + 960 // 1.02 s @48k（让 HuBERT 正好出 50 帧）
-        const val GATE_DB = -50f
+        const val GATE_DB = -60f
+        /** 手动门限上限：再高就会把正常音量的说话也当成静音（2604FRK1EC 设 -30 后 206 块静音 205） */
+        const val GATE_MAX = -40f
+        /** 门限拖尾：出现人声后至少再推理这么多块，避免句尾半块人声半块静音被整块吞掉（2410DPN6CC） */
+        const val GATE_HOLD = 2
         /** 相位锁定模型多一个输入 ph0[1,1,1]；没有就原样。调用方负责 run 完关闭（这里的小张量随 GC 释放） */
         private val phBuf: FloatBuffer = java.nio.ByteBuffer.allocateDirect(4).order(java.nio.ByteOrder.nativeOrder()).asFloatBuffer()
         @Volatile private var phT: OnnxTensor? = null
@@ -195,7 +199,7 @@ class LiveRvc(private val open0: (String) -> Any?) {
     @Volatile var qnnDirProvider: (() -> File?)? = null
     /** 应用调参；返回 true 表示要重新加载模型才生效（档位/线程变了） */
     fun tune(t: Int, gate: Float, fth: Int, sth: Int): Boolean {
-        gateDb = gate.coerceIn(-80f, -20f)
+        gateDb = gate.coerceIn(-80f, GATE_MAX)
         val nt = t.coerceIn(0, 2); val nf = fth.coerceIn(1, 8); val ns = sth.coerceIn(1, 8)
         val changed = nt != tier || nf != featThreads || ns != synThreads
         tier = nt; featThreads = nf; synThreads = ns
@@ -215,6 +219,8 @@ class LiveRvc(private val open0: (String) -> Any?) {
     @Volatile private var lastLagMs = 0L
     private var blkSeq = 0L
     private var gated = 0L
+    /** 拖尾剩余块数（只在 featExec 单线程里读写） */
+    private var gateHold = 0
     private val stFeat = ArrayList<Long>(); private val stSyn = ArrayList<Long>(); private val stLag = ArrayList<Long>()
     private var pulls = 0; private var pullSamples = 0L; private var pullGapMax = 0L; private var lastPullT = 0L; private var pumpStatT = 0L
 
@@ -615,10 +621,19 @@ class LiveRvc(private val open0: (String) -> Any?) {
                 val t0 = System.nanoTime()
                 val waitFeat = (t0 - tAvail) / 1_000_000
                 // 门限：太安静就不推理，直接送静音（省电也避免底噪被"唱"出来）
-                var e = 0.0
-                for (i in win48.size - BLOCK_S until win48.size) e += win48[i] * win48[i]
-                val db = (10 * log10(e / BLOCK_S + 1e-12)).toFloat()
-                if (db < gateDb) {
+                // 按 20 ms 分段取能量最大的一段：整块平均会被句尾的静音段拉低（alpha.6 起）
+                val seg = SR / 50
+                var eMax = 0.0
+                var i0 = win48.size - BLOCK_S
+                while (i0 < win48.size) {
+                    val i1 = minOf(win48.size, i0 + seg); var e = 0.0
+                    for (i in i0 until i1) e += win48[i] * win48[i]
+                    eMax = maxOf(eMax, e / (i1 - i0)); i0 = i1
+                }
+                val db = (10 * log10(eMax + 1e-12)).toFloat()
+                val voiced = db >= gateDb
+                if (voiced) gateHold = GATE_HOLD else if (gateHold > 0) gateHold--
+                if (!voiced && gateHold == 0) {
                     gated++
                     if (gated % 10 == 1L) L.m("live 块#$id 静音（${"%.0f".format(db)}dB < $gateDb）跳过推理")
                     // 静音块也要按真实推理的延迟送出：否则静音→说话时输出时间轴突然往后跳一个推理延迟（~360ms），

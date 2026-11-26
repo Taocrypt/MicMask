@@ -117,7 +117,6 @@
   "传模型失败：{0}": "Failed to transfer models: {0}",
   "传模型超时": "Model transfer timed out",
   "低": "Low",
-  "低于它的声音不送进模型（省电、去底噪）。开头字被吞就调低，环境吵、有杂音就调高。默认 -50": "Sound below this isn't sent to the model (saves power, cuts noise). Lower it if first syllables get cut; raise it in noisy places. Default -50",
   "低切": "Low cut",
   "低音炮": "Sub bass",
   "作者 {0}": "By {0}",
@@ -1108,5 +1107,8 @@
   "贡献者": "Contributors",
   "{0} 位贡献者，谢谢你们！": "{0} contributors, thank you!",
   "全部贡献者 {0} 位": "All {0} contributors",
-  "提交 {0} 次": "{0} commits"
+  "提交 {0} 次": "{0} commits",
+  "低于它的声音不送进模型（省电、去底噪）。越高越容易把说话当成静音：字被吞就调低，环境吵、有杂音才调高。默认 -60": "Sound below this isn't sent to the model (saves power, removes hiss). Higher values treat more speech as silence: lower it if words get cut off; raise it only in noisy places. Default −60",
+  "麦克风只录到静音，正在换录音方式": "The mic is only picking up silence; switching recording method",
+  "麦克风只录到静音：请检查系统的麦克风权限/隐私开关，或在设置里换录音方式": "The mic is only picking up silence: check the system mic permission/privacy toggle, or change the recording method in Settings"
 }

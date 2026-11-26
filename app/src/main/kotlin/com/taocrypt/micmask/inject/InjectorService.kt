@@ -637,6 +637,7 @@ class InjectorService : Binder {
     private var a11yPeak = -200f
     private var a11yChkSec = -1
     private var tgtSilSec = 0
+    private var a11yIdle = 0
     private val lvlHist = ArrayDeque<Float>()
 
     /** 别的应用（非我们自己）有录音被系统静音 */
@@ -993,7 +994,16 @@ class InjectorService : Binder {
             }
             // 并发录音仲裁：系统只放行「最上层/最近开始」的一路，我们和前台 TT 谁后开谁赢（realme uid 2000 实测）。
             // 只在目标应用被静音时才把自己登记为无障碍 uid（不参与仲裁）+ VOICE_RECOGNITION；vivo 上一开始就登记会录到静音（test9 实测）
-            a11yFailed = false; a11yPrevSrc = -1
+            a11yFailed = false; a11yPrevSrc = -1; a11yIdle = 0
+            // alpha.6：非 vivo 机型一开始就登记无障碍 uid + 录音源 6。等目标应用被静音再切要 0.2–1.3 s，
+            // 微信短语音根本来不及（M332BF 日志）；realme test9、小米 2604FRK1EC 上源 6 实测可用。vivo 上一开始就登记会录到静音，仍走延迟切换
+            val isVivo = Build.MANUFACTURER.equals("vivo", true) || Build.BRAND.equals("vivo", true) || Build.BRAND.equals("iqoo", true)
+            if (!isVivo && Build.VERSION.SDK_INT >= 29 && liveSource != 10 && !(scopeAll && autoNoExclude) && a11yBoost(true)) {
+                a11yPrevSrc = liveSource
+                slog('I', "开始即用无障碍录音（非 vivo）：录音源 $liveSource → 6")
+                liveSource = 6; a11yChkSec = -1
+                a11yThread = Thread({ try { while (true) { Thread.sleep(3000); a11yBoost(true, quiet = true) } } catch (_: InterruptedException) {} }, "a11y-keep").apply { isDaemon = true; start() }
+            }
             rec = openRec() ?: return
             curRec = rec
             micHint = ""; recRebuilds = 0
@@ -1027,6 +1037,12 @@ class InjectorService : Binder {
                 return true
             }
             var zeroFrames = 0
+            // alpha.6：录到的一直是平的数字静音（vivo V2148A 2.0.0：shell 录音源 7 连续十几分钟恒为 -87 dB，说话也不变）→ 依次换录音源。
+            // 判据：连续 10 s 最大电平 < -84 dB 且波动 ≤ 1.5 dB；真实底噪会起伏（小米源 7 静默时 -80~-85 来回跳）
+            // 纯 0（-120 dB）不算：通话降噪不说话时本来就输出全 0（2410DPN6CC），那是被系统静音的检测管的
+            var stuckSec = 0; var stuckMax = -200f; var stuckMin = 0f; val stuckTried = LinkedHashSet<Int>(); var stuckOrig = -1; var stuckGaveUp = false
+            var stuckT = System.nanoTime()
+            var lastTgtSil: Boolean? = null
             // 被系统静音检测（AI / 普通两种模式都查）：连续 2 s 被静音且当前不是原始麦克风 → 改用原始麦克风重建一次
             var silChkT = System.nanoTime(); var silSec = 0
             // 0 DEFAULT、1 MIC、5 CAMCORDER、6 VOICE_RECOGNITION、9 UNPROCESSED、10 VOICE_PERFORMANCE
@@ -1068,6 +1084,34 @@ class InjectorService : Binder {
                 if (allZero) for (i in 0 until hop) if (inBuf[i].toInt() != 0) { allZero = false; break }
                 if (allZero) { if (++zeroFrames == 300) { micHint = "采集到的是纯静音（麦克风可能被系统静音或被占用）"; slog('W', micHint) } }
                 else { if (zeroFrames >= 300 || micHint.startsWith("没有收到")) micHint = ""; zeroFrames = 0 }
+                if (System.nanoTime() - stuckT >= 1_000_000_000L) {
+                    stuckT = System.nanoTime()
+                    val lv = liveLevelDb
+                    if (lv < -84f) {
+                        stuckMax = if (stuckSec == 0) lv else maxOf(stuckMax, lv); stuckMin = if (stuckSec == 0) lv else minOf(stuckMin, lv)
+                        if (++stuckSec >= 10 && !stuckGaveUp && stuckMax - stuckMin <= 1.5f && stuckMin > -100f && a11yChkSec !in 0..3 && !micHint.startsWith("麦克风被系统静音")) {
+                            stuckSec = 0
+                            if (stuckOrig < 0) stuckOrig = liveSource
+                            stuckTried += liveSource
+                            val next = intArrayOf(1, 6, 0).firstOrNull { it != liveSource && it !in stuckTried }
+                            if (next != null) {
+                                slog('W', "录音源 $liveSource 连续 10 s 是平的数字静音（${"%.0f".format(stuckMax)}dB），改用录音源 $next")
+                                micHint = "麦克风只录到静音，正在换录音方式"
+                                liveSource = next
+                                if (!rebuildRec("数字静音换源")) return
+                                continue
+                            } else {
+                                slog('W', "录音源 ${stuckTried.joinToString(",")} 都只录到数字静音，退回录音源 $stuckOrig，不再自动切换")
+                                micHint = "麦克风只录到静音：请检查系统的麦克风权限/隐私开关，或在设置里换录音方式"
+                                stuckGaveUp = true
+                                if (liveSource != stuckOrig) { liveSource = stuckOrig; if (!rebuildRec("数字静音换源失败")) return; continue }
+                            }
+                        }
+                    } else {
+                        if (stuckTried.isNotEmpty() && !stuckGaveUp && lv > -70f) { slog('I', "录音源 $liveSource 有声音了（${"%.0f".format(lv)}dB），之前数字静音：${stuckTried.joinToString(",")}"); stuckTried.clear(); stuckOrig = -1; if (micHint.startsWith("麦克风只录到静音")) micHint = "" }
+                        stuckSec = 0
+                    }
+                }
                 if (Build.VERSION.SDK_INT >= 29 && System.nanoTime() - silChkT >= 1_000_000_000L) {
                     silChkT = System.nanoTime()
                     val sil = runCatching {
@@ -1076,6 +1120,10 @@ class InjectorService : Binder {
                     }.getOrDefault(false)
                     // 我们没被静音、目标应用却被静音 2 s → 改无障碍录音；改完 3 s 输入比改前底噪低 15 dB 以上 → 判定无效，退回
                     lvlHist.addLast(liveLevelDb); while (lvlHist.size > 3) lvlHist.removeFirst()
+                    // alpha.6：目标应用的静音状态一变就记一行（以前只在录音数变化时打印，看不出切换后微信是否解除静音）
+                    val ts = targetSilenced()
+                    if (lastTgtSil != null && ts != lastTgtSil) slog('I', "目标应用静音 ${lastTgtSil} → $ts ${recDetail()}")
+                    lastTgtSil = ts
                     if (!sil && !a11yOn && !a11yFailed && targetSilenced()) {
                         if (++tgtSilSec >= 2) {
                             tgtSilSec = 0
@@ -1090,7 +1138,11 @@ class InjectorService : Binder {
                             } else a11yFailed = true
                         }
                     } else tgtSilSec = 0
-                    if (a11yOn && a11yChkSec in 0..3) {
+                    // alpha.6：只在目标应用还在录音时计入判定窗口；目标停录了（用户也不说话），拿那段电平和切换前比必然偏低，会误判无效（M332BF 4 次误判 3 次）
+                    if (a11yOn && a11yChkSec in 0..3 && !appRecording()) {
+                        if (++a11yIdle >= 10) { slog('I', "无障碍录音：目标应用已停止录音，无法判定，保持源 6"); a11yChkSec = -1; a11yIdle = 0 }
+                    } else if (a11yOn && a11yChkSec in 0..3) {
+                        a11yIdle = 0
                         if (a11yChkSec > 0) a11yPeak = maxOf(a11yPeak, liveLevelDb)
                         if (++a11yChkSec > 3) {
                             if (a11yPeak < a11yFloor - 15f || a11yPeak < -80f) {
@@ -1155,7 +1207,9 @@ class InjectorService : Binder {
                     if (primed && k < hop) { underruns++; primed = false; slog('W', "断流#$underruns：输出缓冲只剩 ${k * 1000 / SR}ms"); engine?.takeIf { engineState == "运行" }?.noteTrouble("断流") }
                     // 积压超过「预缓冲 + 一块」就丢旧的回到预缓冲：启动时的积压不会一直挂着变成延迟（1.13 实测稳定在 0.7~1 s）
                     // alpha104：只在积压超 1 s 且最近 0.5 s 输出没有人声时才裁，裁掉的是静音而不是半句话
-                    if (outRing.size() > prime + SR && System.nanoTime() - lastVoicedNs > 500_000_000L) { outRing.trimTo(prime); slog('I', "输出积压过多（静音段），丢到预缓冲 ${livePrimeMs}ms") }
+                    // alpha.6：阈值从「预缓冲 + 1 s」降到「预缓冲 + 一块」（至少 250 ms）。OnePlus 0.5 s 档 outBuf 长期 600–1150 ms，一直没到 1580 ms，多挂约半秒
+                    val blkS = maxOf(SR / 4, SR * (livePrimeMs - 80).coerceAtLeast(0) / 1000)
+                    if (outRing.size() > prime + blkS && System.nanoTime() - lastVoicedNs > 500_000_000L) { outRing.trimTo(prime); slog('I', "输出积压过多（静音段），丢到预缓冲 ${livePrimeMs}ms") }
                     var pk = 0
                     for (i in 0 until hop) { fxBuf[i] = if (i < k) ext[i] / 32768f else 0f; if (i < k) pk = maxOf(pk, kotlin.math.abs(ext[i].toInt())) }
                     if (pk > VOICED_PEAK) lastVoicedNs = System.nanoTime()
