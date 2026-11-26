@@ -501,6 +501,11 @@ a.qq:hover { text-decoration: underline; }
 .rel-more { margin-top: 18px; text-align: center; }
 .rel-more a { color: var(--agent); text-decoration: none; }
 .rel-more a:hover { text-decoration: underline; }
+/* 打开页面时赞助者与贡献者弹幕全屏飘过一遍 */
+.dm-fly { position: fixed; inset: 0; z-index: 9999; pointer-events: none; overflow: hidden; }
+.dm-fly .dm-chip { position: absolute; left: 100%; box-shadow: 0 4px 14px rgba(0,0,0,.12); animation: dm-fly var(--dur, 9s) linear var(--delay, 0s) both; }
+@keyframes dm-fly { from { transform: translateX(0); } to { transform: translateX(calc(-100vw - 100% - 40px)); } }
+@media (prefers-reduced-motion: reduce) { .dm-fly { display: none; } }
 /* sponsor danmaku */
 .dm { display: grid; gap: 10px; padding: 4px 0; }
 .dm-lane { position: relative; height: 34px; overflow: hidden; -webkit-mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent); mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent); }
@@ -1080,13 +1085,13 @@ footer .brand .mark svg { width: 13px; height: 13px; }
           toc: "目录", tocAria: "手册目录", more: "展开全文", less: "收起", shotAlt: "MicMask 截图 {0}",
           noSpon: "还没有赞助者。", first: "成为第一位赞助者", sponFail: "赞助名单暂时无法加载，请稍后再试。",
           anon: "匿名赞助者", expired: "已过期", langAria: "语言 / Language",
-          relFail: "更新日志暂时无法加载，可以到 GitHub 查看。", pre: "测试版", spSum: "{0} 位赞助者 · 累计 {1}，谢谢你们！", spAll: "全部赞助者（当前 {0} 位 · 历史 {1} 位）", noCur: "暂时没有在期的赞助",
+          relFail: "更新日志暂时无法加载，可以到 GitHub 查看。", pre: "测试版", spSum: "{0} 位赞助者 · 累计 {1}，谢谢你们！", spAll: "全部赞助者（当前 {0} 位 · 历史 {1} 位）", noCur: "暂时没有在期的赞助", commits: "提交 {0} 次",
           dlProbe: "正在测速，挑最快的下载线路…", dlGo: "开始下载 {0}", dlFail: "直链暂时连不上，已打开 GitHub 发布页。" },
     en: { manualFail: 'Couldn’t load the manual. You can <a class="link" href="{0}" target="_blank" rel="noopener">read it on GitHub</a> instead.',
           toc: "Contents", tocAria: "Manual contents", more: "Show full manual", less: "Show less", shotAlt: "MicMask screenshot {0}",
           noSpon: "No sponsors yet.", first: "Be the first sponsor", sponFail: "Couldn’t load the sponsor list. Please try again later.",
           anon: "Anonymous sponsor", expired: "Expired", langAria: "Language / 语言",
-          relFail: "Couldn’t load the changelog. You can read it on GitHub.", pre: "Pre-release", spSum: "{0} sponsors · {1} in total. Thank you!", spAll: "All sponsors ({0} current · {1} past)", noCur: "No active sponsorships right now",
+          relFail: "Couldn’t load the changelog. You can read it on GitHub.", pre: "Pre-release", spSum: "{0} sponsors · {1} in total. Thank you!", spAll: "All sponsors ({0} current · {1} past)", noCur: "No active sponsorships right now", commits: "{0} commits",
           dlProbe: "Testing mirrors to pick the fastest download…", dlGo: "Downloading via {0}", dlFail: "Direct download is unreachable right now, so we opened the GitHub release page." }
   };
   var ZH = {}, listeners = [], cur = "zh";
@@ -1485,8 +1490,9 @@ footer .brand .mark svg { width: 13px; height: 13px; }
           }
           c.appendChild(av);
           var n = document.createElement("b"); n.textContent = s.name; c.appendChild(n);
-          var m = document.createElement("em"); m.textContent = money(s.amount); c.appendChild(m);
-          if (s.last) { var t = document.createElement("small"); t.textContent = mmdd(s.last); c.appendChild(t); }
+          if (s.contributor) { if (s.commits) { var k = document.createElement("small"); k.textContent = T("commits", s.commits); c.appendChild(k); } }
+          else { var m = document.createElement("em"); m.textContent = money(s.amount); c.appendChild(m); }
+          if (s.last && !s.contributor) { var t = document.createElement("small"); t.textContent = mmdd(s.last); c.appendChild(t); }
           if (s.remark) { var r = document.createElement("small"); r.textContent = s.remark.slice(0, 16); c.appendChild(r); }
           return c;
         }
@@ -1559,7 +1565,7 @@ footer .brand .mark svg { width: 13px; height: 13px; }
           list.hidden = false;
           var now = Date.now() / 1000;
           var sp = (Array.isArray(d && d.sponsors) ? d.sponsors : [])
-            .filter(function (s) { return s && typeof s === "object"; })
+            .filter(function (s) { return s && typeof s === "object" && s.kind !== "contributor"; })
             .map(function (s) {
               var exp = num(s.expire);
               return { name: s.name ? String(s.name) : T("anon"), amount: s.amount, value: num(s.amount), expired: exp > 0 && exp < now,
@@ -1588,6 +1594,42 @@ footer .brand .mark svg { width: 13px; height: 13px; }
           det.appendChild(list);
           dmBox.appendChild(det);
         }
+        function flyOnce(d) {
+          // 首次打开：在期赞助者 + 贡献者从右到左全屏飘过一遍，不挡点击，结束后移除
+          if (flyOnce.done) return; flyOnce.done = true;
+          if (window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+          var now = Date.now() / 1000, items = [], seen = {};
+          (Array.isArray(d && d.sponsors) ? d.sponsors : []).forEach(function (s) {
+            if (!s || typeof s !== "object") return;
+            var exp = num(s.expire), con = s.kind === "contributor";
+            if (!con && exp > 0 && exp < now) return;
+            var name = s.name ? String(s.name) : T("anon");
+            if (con) seen[name.toLowerCase()] = 1;
+            items.push({ name: name, amount: s.amount, value: con ? 0 : num(s.amount), contributor: con, avatar: s.avatar ? String(s.avatar) : "",
+                         remark: s.remark ? String(s.remark) : "", last: num(s.last) || num(s.since) });
+          });
+          (Array.isArray(d && d.contributors) ? d.contributors : []).forEach(function (g) {
+            if (!g || typeof g !== "object") return;
+            var name = String(g.name || g.login || ""); if (!name || seen[name.toLowerCase()]) return;
+            items.push({ name: name, contributor: true, commits: num(g.contributions), avatar: g.avatar_url ? String(g.avatar_url) : "", remark: g.remark ? String(g.remark) : "" });
+          });
+          if (!items.length) return;
+          var box = document.createElement("div");
+          box.className = "dm-fly"; box.setAttribute("aria-hidden", "true");
+          var h = window.innerHeight, rows = Math.max(3, Math.floor((h - 80) / 48)), end = 0;
+          items.forEach(function (s, i) {
+            var c = chip(s, true);
+            if (s.contributor) c.style.setProperty("--tc", "#4C8DF0");
+            var dur = 8 + Math.random() * 4, delay = (i % rows) * 0.25 + Math.floor(i / rows) * 2.2 + Math.random() * 0.4;
+            c.style.top = (40 + (i * 7 % rows) * ((h - 80) / rows)) + "px";
+            c.style.setProperty("--dur", dur.toFixed(2) + "s");
+            c.style.setProperty("--delay", delay.toFixed(2) + "s");
+            end = Math.max(end, dur + delay);
+            box.appendChild(c);
+          });
+          document.body.appendChild(box);
+          setTimeout(function () { box.remove(); }, (end + 0.5) * 1000);
+        }
         var sponState = null; // null=加载中, false=失败, 对象=数据
         function sponFailed() { sponState = false; plansEl.remove(); emptySponsors(T("sponFail")); }
         window.MMI18N.onChange(function () {
@@ -1597,7 +1639,7 @@ footer .brand .mark svg { width: 13px; height: 13px; }
         try {
           fetch("https://beacon.0666555.xyz/v1/micmask/sponsors", { cache: "no-cache" })
             .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-            .then(function (d) { sponState = d || {}; renderSponsors(sponState); })
+            .then(function (d) { sponState = d || {}; renderSponsors(sponState); flyOnce(sponState); })
             .catch(sponFailed);
         } catch (e) { sponFailed(); }
       })();
