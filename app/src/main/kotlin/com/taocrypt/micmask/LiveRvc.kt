@@ -195,16 +195,20 @@ class LiveRvc(private val open0: (String) -> Any?) {
     @Volatile var gateDb = GATE_DB
     @Volatile var featThreads = FEAT_THREADS
     @Volatile var synThreads = SYN_THREADS
-    /** 实际用的线程数：默认 3/4 时，若绑大核且大核只有 ≤5 个，特征+合成两边同时跑会抢核（MT6896 4 大核实测：合成单测 170ms，并发时均 501ms），按大核数收到合计 = 大核数；手动改过线程就照用户设的 */
+    /** 实际用的线程数与是否串行：默认 3/4 时，若绑大核且大核只有 ≤5 个，特征+合成同时跑会抢核
+     *  （MT6896 4 大核实测：合成单测 163ms，并发时均 501ms；改 2/2 并行后合成单测 358ms，仍超 500ms 档）。
+     *  这时改为串行：特征和合成轮流跑、各用满全部大核（2.1.1-alpha.2）。手动改过线程就照用户设的、仍并行 */
     @Volatile private var effF = FEAT_THREADS
     @Volatile private var effS = SYN_THREADS
+    /** true = 特征与合成串行（下一块的特征等上一块合成完再开始），吞吐看两段之和 */
+    @Volatile var serial = false; private set
     private fun effThreads() {
-        effF = featThreads; effS = synThreads
+        effF = featThreads; effS = synThreads; serial = false
         if (!pinBig || featThreads != FEAT_THREADS || synThreads != SYN_THREADS) return
         val n = CpuPin.bigCores().size
         if (n < 2 || featThreads + synThreads <= n + 1) return
-        effF = (n / 2).coerceAtLeast(1); effS = (n - effF).coerceAtLeast(1)
-        L.i("线程 $featThreads/$synThreads 超过大核数 $n → 实际用 $effF/$effS（避免特征与合成抢核）")
+        effF = n; effS = n; serial = true
+        L.i("线程 $featThreads/$synThreads 超过大核数 $n → 串行推理，特征/合成各用 $n 线程（避免抢核）")
     }
     /** 检索混合比例（RVC index_rate）；0 = 不用。音色带 <音色>_stream_index.bin 才生效 */
     @Volatile var indexRate = 0.3f
@@ -355,7 +359,7 @@ class LiveRvc(private val open0: (String) -> Any?) {
         data class Cand(val name: String, val ms: Long, val len: Int) {
             val blockMs get() = (len - XF_FR) * 10
         }
-        fun ratio(c: Cand) = maxOf(c.ms, featMs).toDouble() / c.blockMs
+        fun ratio(c: Cand) = (if (serial) c.ms + featMs else maxOf(c.ms, featMs)).toDouble() / c.blockMs
         val key = NETG_FILES.joinToString(",") { n -> "$n:" + ((open(n) as? File)?.let { "${it.parentFile?.name}/${it.length()}@${it.lastModified()}" } ?: -1) } + "|t$tier f$effF s$effS"
         var chosen: Cand? = null
         runCatching {
@@ -442,10 +446,10 @@ class LiveRvc(private val open0: (String) -> Any?) {
             f.writeText((listOf(listOf(key, pick.name, "${pick.ms}", "$LEN")) + old).take(16).flatten().joinToString("\n"))
         }
         val tier = if (BLOCK <= 25) "高级" else if (BLOCK <= 30) "标准" else "省电"
-        benchSummary = (if (compatOf(netG!!) != null) "兼容模式·" else "") + "${tier}档：每步 ${BLOCK * 10}ms · 特征 ${featMs}ms · 合成 ${synMs}ms · 负载 ${"%.0f".format(maxOf(synMs, featMs) * 100.0 / (BLOCK * 10))}%$vocNote"
+        benchSummary = (if (compatOf(netG!!) != null) "兼容模式·" else "") + "${tier}档：每步 ${BLOCK * 10}ms · 特征 ${featMs}ms · 合成 ${synMs}ms · 负载 ${"%.0f".format((if (serial) synMs + featMs else maxOf(synMs, featMs)) * 100.0 / (BLOCK * 10))}%${if (serial) " · 串行" else ""}$vocNote"
         L.i("live 选用 ${pick.name} → $benchSummary")
         benchCfg = "${best?.first?.kind ?: "ORT"};${if (hubertNpu) 1 else 0}"
-        if (maxOf(synMs, featMs) > BLOCK * 10) L.w("live 本机最快的档位也超预算，会断音")
+        if ((if (serial) synMs + featMs else maxOf(synMs, featMs)) > BLOCK * 10) L.w("live 本机最快的档位也超预算，会断音")
         if (pinBig) CpuPin.pinSelf("加载后")   // ORT 线程池在建会话时才创建，再绑一次
         onConfig?.invoke(BLOCK * 10)
         onLog("模型就绪")
@@ -735,6 +739,8 @@ class LiveRvc(private val open0: (String) -> Any?) {
                 val featMs = lastFeatMs
                 val tQ = System.nanoTime()
                 val voiced = f0.count { it > 0f }
+                // 串行：等这块合成完，featExec 才接下一块，两段不同时抢大核
+                val done = if (serial) java.util.concurrent.CountDownLatch(1) else null
                 synExec.execute {
                     try {
                         val t1 = System.nanoTime()
@@ -755,19 +761,20 @@ class LiveRvc(private val open0: (String) -> Any?) {
                         L.m("live 块#$id in=${"%.0f".format(db)}dB 等待=${waitFeat}ms 重采样=${(tH - t0) / 1_000_000} hubert=${(tR - tH) / 1_000_000}${if (idxMs > 0) "(检索 $idxMs)" else ""} rmvpe=${(tE - tR) / 1_000_000} 特征=${featMs} " +
                             "排队=${(t1 - tQ) / 1_000_000} 合成=$lastSynMs$vocTag 推送=${(t3 - t2) / 1_000_000} 端到端=${lag}ms 浊音帧=$voiced/$T 峰值=${"%.2f".format(pk)} 在途=${inflight.get()}")
                         // 特征与合成分线程流水，吞吐只看较慢的一段是否超过块长；端到端只是延迟，超过 2 倍块长才提示。5 s 内最多一条
-                        val slow = maxOf(featMs, lastSynMs)
+                        val slow = if (serial) featMs + lastSynMs else maxOf(featMs, lastSynMs)
                         val nowW = System.currentTimeMillis()
                         if ((slow > BLOCK * 10 || lag > BLOCK * 20) && nowW - lastOverWarn > 5000) {
                             lastOverWarn = nowW
-                            if (slow > BLOCK * 10) L.w("live 块#$id 吞吐超预算：${if (featMs >= lastSynMs) "特征" else "合成"} ${slow}ms > 块长 ${BLOCK * 10}ms，会积压/断音")
+                            if (slow > BLOCK * 10) L.w("live 块#$id 吞吐超预算：${if (serial) "特征+合成" else if (featMs >= lastSynMs) "特征" else "合成"} ${slow}ms > 块长 ${BLOCK * 10}ms，会积压/断音")
                             else L.w("live 块#$id 延迟偏高：端到端 ${lag}ms（块长 ${BLOCK * 10}ms）")
                         }
                         lastLagMs = lag
                         record(featMs, lastSynMs, lag)
                     } catch (t: Throwable) {
                         L.e("live netg", t)
-                    } finally { inflight.decrementAndGet() }
+                    } finally { inflight.decrementAndGet(); done?.countDown() }
                 }
+                done?.let { runCatching { it.await(3, java.util.concurrent.TimeUnit.SECONDS) } }
             } catch (t: Throwable) {
                 L.e("live feat", t)
                 inflight.decrementAndGet()
