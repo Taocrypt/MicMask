@@ -2,7 +2,7 @@ name: pages
 on:
   push:
     branches: [main]
-    paths: ["site/**", "docs/manual.md", "docs/screenshots/**", ".github/workflows/pages.yml"]
+    paths: ["site/**", "docs/manual.md", "docs/screenshots/**", "tools/site_en.py", ".github/workflows/pages.yml"]
   workflow_dispatch:
 permissions:
   contents: read
@@ -23,6 +23,7 @@ jobs:
         run: |
           mkdir -p _site/screenshots
           cp -r site/. _site/
+          python3 tools/site_en.py site/index.html _site/en.html
           cp docs/manual.md _site/manual.md
           cp docs/screenshots/0*.png _site/screenshots/
           echo "micmask.taocrypt.com" > _site/CNAME
