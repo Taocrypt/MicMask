@@ -1132,5 +1132,7 @@
   "高级 0.25s": "Pro 0.25s",
   "比标准再快约 0.1 秒：用标准档模型每 0.25 秒推一次，算力多约 20%。只建议高端旗舰；跟不上会自动退回标准 0.3s": "About 0.1 s faster than Standard: runs the standard model every 0.25 s; compute up ~20%. Recommended for high-end flagships only; falls back to Standard 0.3s automatically if the phone can't keep up",
   "手机跟不上会断音，且不会自动降档": "Audio drops out if the phone can't keep up, and it won't switch to a lighter tier automatically",
-  "音高不变，只改声音的厚薄：往右更细更亮，往左更厚更沉。按 −/+ 每次微调 0.1。实验功能，默认 0": "Keeps the pitch and only changes the timbre: right is thinner and brighter, left is thicker and deeper. Tap −/+ to fine-tune by 0.1. Experimental, default 0"
+  "音高不变，只改声音的厚薄：往右更细更亮，往左更厚更沉。按 −/+ 每次微调 0.1。实验功能，默认 0": "Keeps the pitch and only changes the timbre: right is thinner and brighter, left is thicker and deeper. Tap −/+ to fine-tune by 0.1. Experimental, default 0",
+  "（性能测试要在 Shizuku 或 ROOT 模式下进行）": " (the performance test needs Shizuku or ROOT mode)",
+  "注入服务启动失败": "Failed to start the injection service"
 }

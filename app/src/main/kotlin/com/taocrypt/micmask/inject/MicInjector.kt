@@ -525,8 +525,11 @@ object MicInjector {
     fun sendLiveModels(ctx: Context, names: List<String>): String? {
         val files = names.mapNotNull { n -> com.taocrypt.micmask.ModelStore.locate(ctx, n)?.let { n to it } }
         if (files.isEmpty()) return tr("没有模型")
+        // 没连上注入服务又没有 Shizuku / Root 权限：ensureBound 不会回调，别干等 90 s 再报「传模型超时」
+        if (binder?.pingBinder() != true && !shizukuPermitted()) return notReadyMsg() + tr("（性能测试要在 Shizuku 或 ROOT 模式下进行）")
         var err: String? = tr("未连接")
         val done = java.util.concurrent.CountDownLatch(1)
+        val ph0 = errSeq
         ensureBound(ctx.applicationContext) { Thread {
             err = runCatching {
                 val pfds = files.map { (n, f) -> n to android.os.ParcelFileDescriptor.open(f, android.os.ParcelFileDescriptor.MODE_READ_ONLY) }
@@ -538,8 +541,12 @@ object MicInjector {
             }.getOrElse { it.message ?: tr("调用失败") }
             done.countDown()
         }.start() }
-        // 首次要把约 360 MB 模型拷进 shell 目录
-        if (!done.await(90, java.util.concurrent.TimeUnit.SECONDS)) return tr("传模型超时")
+        // 首次要把约 360 MB 模型拷进 shell 目录；注入服务启动失败（报 ERROR）就立刻返回那条原因
+        val until = System.nanoTime() + 90_000_000_000L
+        while (!done.await(250, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+            if (errSeq != ph0) return lastErr.ifEmpty { tr("注入服务启动失败") }
+            if (System.nanoTime() > until) return tr("传模型超时")
+        }
         return err
     }
 
@@ -836,7 +843,11 @@ object MicInjector {
         }
     }
 
+    /** 每次进入 ERROR 加一（sendLiveModels 等阻塞调用据此提前返回） */
+    @Volatile private var errSeq = 0
+    @Volatile private var lastErr = ""
     private fun setPhase(p: Phase, msg: String) {
+        if (p == Phase.ERROR) { lastErr = msg; errSeq++ }
         phase = p
         lastMessage = msg
         L.i("MicInjector [$p] $msg")
