@@ -126,6 +126,8 @@ class InjectorService : Binder {
         const val FRAME_BYTES = 4 // 立体声 16bit
         /** 耳返目标排队（ms）：盖住注入写出 20~40 ms 的抖动，又不明显加耳返延迟（2.1.1-alpha.7） */
         const val MON_TARGET_MS = 40
+        /** AEC 参考的提前量（ms）：按时间戳取「录音时刻 + 这么多」的出声位置，让参考略早于回声（AEC3 只能消晚于参考的回声），吸收时间戳/录音时刻的小误差 */
+        const val AEC_REF_LEAD_MS = 20
         /** 每次写 10ms */
         const val CHUNK_BYTES = SR / 100 * FRAME_BYTES
         /** 目标开始录音后，先垫一小段静音再放（QQ 开头常会丢一点） */
@@ -1262,16 +1264,33 @@ class InjectorService : Binder {
         val d = aecDuck
         val duck = when {
             !aecDuckAllowed -> "不适用（${if (monTrack == null && !previewPlaying) "无外放" else "耳机"}）"
-            d.engaged -> "压低中"
+            d.engaged -> "已触发"
             else -> "未触发"
         } + (if (d.engages > 0) " 本段触发 ${d.engages} 次" else "") +
-            (if (d.duckFrames > 0) " 压低 ${d.duckFrames * 10} ms 平均 -${"%.0f".format(d.duckDbSum / d.duckFrames)} dB 最深 -${"%.0f".format(d.maxDuck)} dB" else "")
-        slog('I', "AEC${if (tag.isEmpty()) "" else "（$tag）"}：$r | 参考对齐：排队补偿 $alignQ 微调 ${aecAlign.nudges} 次 重同步 ${aecAlign.resyncs} 次 " +
-            "未写补零 ${ms(aecAlign.missing)}ms 播放头=${if (aecHeadOk) "有" else "无（退回按写入）"} | 耳返：排队 平均/最小/最大 $qs ms（目标 $MON_TARGET_MS）预填 ${q.prefills} 次 ${ms(q.prefillSamples)}ms " +
+            (if (d.engaged || d.duckFrames > 0 || d.nearCount > 0) " 压低 ${d.duckFrames * 10}ms 压低量 平均 -${if (d.duckFrames > 0) "%.1f".format(d.duckDbSum / d.duckFrames) else "0"} dB 最深 -${"%.0f".format(d.maxDuck)} dB（上限 ${"%.0f".format(d.maxDuckDb)}）" +
+                " 近端判定 ${d.nearCount} 次 未压 ${d.spareFrames * 10}ms 回声延迟≈${d.lag * 10}ms 相关 ${"%.2f".format(d.corr)} 耦合 ${if (d.couplingDb.isNaN()) "?" else "%.0f".format(d.couplingDb)}dB" else "")
+        // alpha.7 之后：出声位置来源、getTimestamp 出声延迟（写入 → 喇叭出声）及比 playbackHeadPosition 多出的 HAL/DSP 延迟
+        val srcS = when {
+            aecTsFrames > 0 && aecHeadFrames == 0 -> "时间戳"
+            aecTsFrames > 0 -> "时间戳（${aecHeadFrames * 10}ms 退回播放头）"
+            aecHeadFrames > 0 -> "播放头（时间戳不可用）"
+            else -> if (aecHeadOk) "?" else "无（退回按写入）"
+        }
+        val tsLat = if (aecTsLatN > 0) "${ms(aecTsLatSum / aecTsLatN)}/${ms(aecTsLatMin)}/${ms(aecTsLatMax)}ms（比播放头多 ${ms(aecTsDiffSum / aecTsLatN)}ms）" else "?"
+        val capS = when {
+            aecCapTsFrames > 0 && aecCapEstFrames == 0 -> "录音时间戳"
+            aecCapTsFrames > 0 -> "录音时间戳（${aecCapEstFrames * 10}ms 估计）"
+            else -> "估计"
+        }
+        slog('I', "AEC${if (tag.isEmpty()) "" else "（$tag）"}：$r | 参考对齐：出声位置=$srcS getTimestamp出声延迟 平均/最小/最大 $tsLat 录音时刻=$capS 提前 ${AEC_REF_LEAD_MS}ms " +
+            "排队补偿 $alignQ 微调 ${aecAlign.nudges} 次 重同步 ${aecAlign.resyncs} 次 补静音 ${ms(aecAlign.zeroed)}ms " +
+            "未写补零 ${ms(aecAlign.missing)}ms | 耳返：排队 平均/最小/最大 $qs ms（目标 $MON_TARGET_MS）预填 ${q.prefills} 次 ${ms(q.prefillSamples)}ms " +
             "削减 ${ms(q.trimmedSamples)}ms 欠载 ${if (dUr >= 0) "$dUr" else "?"} 次 丢写 $aecMonPartial 次 ${ms(aecMonDrop)}ms | 兜底：$duck | 输出积压 ${ms(outRing.size().toLong())}ms")
         aecMonDrop = 0L; aecMonPartial = 0
         aecAlign.clearCounters(); q.clearStats(); d.clearStats()
         aecAlignSum = 0L; aecAlignN = 0; aecAlignMin = Long.MAX_VALUE; aecAlignMax = 0L
+        aecTsFrames = 0; aecHeadFrames = 0; aecCapTsFrames = 0; aecCapEstFrames = 0
+        aecTsLatSum = 0L; aecTsLatN = 0; aecTsLatMin = Long.MAX_VALUE; aecTsLatMax = 0L; aecTsDiffSum = 0L
     }
 
     // AEC 参考链路统计（liveLoop 线程读写；随 AEC 统计行输出后清零）
@@ -1285,6 +1304,22 @@ class InjectorService : Binder {
     private var aecAlignMax = 0L
     /** 最近一帧能否取到耳返播放头 */
     private var aecHeadOk = true
+    /** 出声位置：用时间戳 / 退回播放头 的帧数；录音时刻：用 AudioRecord 时间戳 / 估计 的帧数 */
+    private var aecTsFrames = 0
+    private var aecHeadFrames = 0
+    private var aecCapTsFrames = 0
+    private var aecCapEstFrames = 0
+    /** getTimestamp 出声延迟（已写入 − 此刻出声位置，样本）累计/最小/最大，及「播放头 − 时间戳出声位置」累计 */
+    private var aecTsLatSum = 0L
+    private var aecTsLatN = 0
+    private var aecTsLatMin = Long.MAX_VALUE
+    private var aecTsLatMax = 0L
+    private var aecTsDiffSum = 0L
+    /** 耳返 AudioTrack 最近一次 getTimestamp（framePosition / nanoTime，-1 = 没有）；liveLoop 线程读写，换 monTrack 时清 */
+    private val monTs = android.media.AudioTimestamp()
+    private var monTsFrame = -1L
+    private var monTsNs = 0L
+    private var monTsPoll = 0
     /** 兜底是否适用（AEC 开 + 外放）：liveLoop 每秒评估一次 */
     private var aecDuckAllowed = false
     /** 耳返 AudioTrack 的欠载计数（系统累计值，统计时取差） */
@@ -1294,7 +1329,7 @@ class InjectorService : Binder {
     private fun tap(mono: ShortArray, n: Int) {
         monTrack?.let { t ->
             if (t !== monSeen) {
-                monSeen = t; aecAlign.reset(); monQ.reset()
+                monSeen = t; aecAlign.reset(); monQ.reset(); monTsFrame = -1L; monTsPoll = 0
                 monUnderLast = if (Build.VERSION.SDK_INT >= 24) runCatching { t.underrunCount }.getOrDefault(-1) else -1
             }
             // 2.1.1-alpha.7：耳返排队稳定——第一次写先垫 40 ms 静音，欠载后补回 40 ms；整秒都多出 25 ms 以上就少写几毫秒拉回来。
@@ -1523,7 +1558,14 @@ class InjectorService : Binder {
             aecMonDrop = 0L; aecMonPartial = 0; aecMonUnderBase = -1
             aecAlign.clearCounters(); monQ.clearStats(); aecDuck.reset(); aecDuck.clearStats()
             aecAlignSum = 0L; aecAlignN = 0; aecAlignMin = Long.MAX_VALUE; aecAlignMax = 0L
+            aecTsFrames = 0; aecHeadFrames = 0; aecCapTsFrames = 0; aecCapEstFrames = 0
+            aecTsLatSum = 0L; aecTsLatN = 0; aecTsLatMin = Long.MAX_VALUE; aecTsLatMax = 0L; aecTsDiffSum = 0L
             var duckChkT = 0L
+            // 录音时刻（AEC 参考对齐用）：AudioRecord.getTimestamp 优先，取不到用 CaptureClock 按读取时刻估
+            val capClock = com.taocrypt.micmask.CaptureClock()
+            val recTs = android.media.AudioTimestamp()
+            var recTsOwner: android.media.AudioRecord? = null
+            var recRead = 0L; var recTsFrame = -1L; var recTsNs = 0L; var recTsPoll = 0
             val outBytes = ByteArray(hop * FRAME_BYTES)
             val rnd = java.util.Random()
             val ext = ShortArray(hop)
@@ -1548,6 +1590,22 @@ class InjectorService : Binder {
                     if (r > 0) { got += r; lastReadNs = System.nanoTime() }
                 }
                 if (!running) break
+                // 录音时刻：这一帧（结尾）的录音时刻；换了录音对象就从头计
+                val nowRd = System.nanoTime()
+                if (rec !== recTsOwner) { recTsOwner = rec; recRead = 0L; recTsFrame = -1L; recTsPoll = 0; capClock.reset() }
+                recRead += hop
+                val capEst = capClock.frame(nowRd)
+                if (tuneAec != 0 && Build.VERSION.SDK_INT >= 24 && recTsPoll-- <= 0) {
+                    recTsPoll = 4
+                    val rr = rec
+                    if (rr != null && runCatching { rr.getTimestamp(recTs, android.media.AudioTimestamp.TIMEBASE_MONOTONIC) }.getOrDefault(-1) == android.media.AudioRecord.SUCCESS) {
+                        recTsFrame = recTs.framePosition; recTsNs = recTs.nanoTime
+                    }
+                }
+                val capTs = if (recTsFrame >= 0) recTsNs + (recRead - recTsFrame) * 1_000_000_000L / SR else -1L
+                // 合理性：已读到的帧不可能晚于现在，也不该早于现在 0.5 s 以上（丢帧/时间戳失效时退回估计）
+                val capOk = capTs > 0 && capTs <= nowRd + 2_000_000L && nowRd - capTs < 500_000_000L
+                val capNs = if (capOk) capTs else capEst
                 // 原始麦克风不会给出连续的纯数字 0：连续 3 s 全零 = 被系统静音或被别的录音占用。
                 // 降噪模式（VOICE_COMMUNICATION）不说话时降噪本身就会输出全 0，不能据此提示（alpha101 真机误报）
                 var allZero = liveSource != android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION
@@ -1706,7 +1764,24 @@ class InjectorService : Binder {
                         if (mt != null && mt === monSeen) {
                             val hd = monHead(mt)
                             aecHeadOk = hd >= 0
-                            aecAlign.read(aecRef, hop, hd)
+                            // alpha.7 之后：出声位置优先用 AudioTrack.getTimestamp()（含 HAL/DSP 出声延迟），外推到这帧麦克风的录音时刻 + 提前量；
+                            // 取不到再退回 playbackHeadPosition（只到混音器，AEC3 要自己估 200 ms 级的 DSP 延迟，且一跳 20~40 ms）
+                            if (monTsPoll-- <= 0) {
+                                monTsPoll = 4
+                                if (runCatching { mt.getTimestamp(monTs) }.getOrDefault(false)) { monTsFrame = monTs.framePosition; monTsNs = monTs.nanoTime }
+                            }
+                            if (capOk) aecCapTsFrames++ else aecCapEstFrames++
+                            val nowTs = System.nanoTime()
+                            val wr = aecAlign.written
+                            val tsNow = com.taocrypt.micmask.TrackClock.framesAt(monTsFrame, monTsNs, nowTs, SR, wr)
+                            val tsAt = com.taocrypt.micmask.TrackClock.framesAt(monTsFrame, monTsNs, capNs + AEC_REF_LEAD_MS * 1_000_000L, SR, wr)
+                            if (tsNow >= 0) {
+                                val lat = wr - tsNow
+                                aecTsLatSum += lat; aecTsLatN++; aecTsLatMin = minOf(aecTsLatMin, lat); aecTsLatMax = maxOf(aecTsLatMax, lat)
+                                if (hd >= 0) aecTsDiffSum += hd - tsNow
+                            }
+                            if (tsAt >= 0) { aecTsFrames++; aecAlign.read(aecRef, hop, tsAt, smooth = true) }
+                            else { aecHeadFrames++; aecAlign.read(aecRef, hop, hd) }
                             val lq = aecAlign.lastQueue
                             aecAlignSum += lq; aecAlignN++; aecAlignMin = minOf(aecAlignMin, lq); aecAlignMax = maxOf(aecAlignMax, lq)
                         } else java.util.Arrays.fill(aecRef, 0.toShort())
@@ -1716,15 +1791,17 @@ class InjectorService : Binder {
                         }
                         if (sa.render(aecRef, hop) && sa.process(inBuf, aecBuf)) {
                             mic = aecBuf
-                            // ---- 兜底（2.1.1-alpha.7）：AEC 开 + 外放时，ERLE 持续 < 3 dB 且参考有声 → 按参考电平压低麦克风（半双工）
+                            // ---- 兜底（2.1.1-alpha.7，之后改温和）：AEC 开 + 外放时，ERLE 持续 < 3 dB 且参考有声 → 触发；
+                            // 触发后只在回声主导的帧压低最多 8 dB，近端说话（麦克风明显高于预期回声）立即放开并保持 0.4 s
                             val nowD = System.nanoTime()
                             if (nowD - duckChkT >= 1_000_000_000L) { duckChkT = nowD; aecDuckAllowed = aecOnSpeaker(headsetOut()) }
                             val refDb = com.taocrypt.micmask.AecDuck.levelDb(aecRef, hop)
+                            val micDb = com.taocrypt.micmask.AecDuck.levelDb(inBuf, hop)
                             val erle = sa.lastErle.let { if (it.isNaN()) 99f else it }
                             val g0 = aecDuck.gainDb
-                            if (aecDuck.step(refDb, erle, aecDuckAllowed)) {
+                            if (aecDuck.step(refDb, micDb, erle, aecDuckAllowed)) {
                                 slog(if (aecDuck.engaged) 'W' else 'I', if (aecDuck.engaged)
-                                    "AEC 兜底：参考有声时 ERLE 持续 < 3 dB（当前 ${"%.1f".format(erle)} dB，参考 ${"%.0f".format(refDb)} dB），外放时按参考电平压低麦克风 15~25 dB（半双工），对方说话时你这边会变小"
+                                    "AEC 兜底：参考有声时 ERLE 持续 < 3 dB（当前 ${"%.1f".format(erle)} dB，参考 ${"%.0f".format(refDb)} dB），之后只在麦克风明显跟着外放走（回声主导）时压低麦克风最多 ${"%.0f".format(aecDuck.maxDuckDb)} dB；你说话时不压"
                                     else "AEC 兜底：解除（${if (!aecDuckAllowed) "已不是外放/已关" else "ERLE 回升到 ${"%.1f".format(erle)} dB"}）")
                             }
                             val g1 = aecDuck.gainDb

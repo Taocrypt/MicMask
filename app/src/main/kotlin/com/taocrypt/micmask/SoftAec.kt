@@ -21,6 +21,9 @@ import cn.enaium.webrtc.aec3.createAec3FactoryWithConfig
  *   高频带（约 7 kHz 以上）按低频带的压低比例同步压低。代价：麦克风多 [AecBandBridge.latency48] 个样本（10 ms）延迟。
  * - 样本按 int16 刻度的 float 喂给 AEC3（不是 −1..1）。
  * - [render] 喂参考信号（本机刚外放出去的声音），[process] 先 analyzeCapture 再 processCapture 处理麦克风。
+ * - AEC3 配置保持库默认（alpha.7 之后用 JVM 模拟验证过：200 ms 延迟、喇叭 DRC/限幅、双讲下，加长 refined/coarse 滤波器（13→20/30 块）
+ *   反而变差 4~10 dB，delay_headroom、has_clock_drift、ep_strength、echo_audibility、bounded_erl 的改动都在 ±1.5 dB 内；
+ *   真正决定收敛的是参考时间线是否稳定，见 [PlayoutAligner]）。
  * - 不是线程安全的：render 与 process 都在 liveLoop 线程里串行调用。
  * - 任何异常（含 .so 加载失败的 UnsatisfiedLinkError / ExceptionInInitializerError）→ 自动关闭、记一条日志，
  *   之后 [process] 一律返回 false，调用方继续用原始麦克风。
