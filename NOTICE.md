@@ -163,6 +163,10 @@ App 侧的「系统权限模式」为本仓库按现有注入服务重新实现�
 | webrtc-aec3-kmp：软件回声消除的 Kotlin/JNI 绑定（Maven 依赖，含 libwebrtc_aec3_jni.so） | MIT（POM 写 BSD-3-Clause，见上文） |
 | WebRTC AEC3（经 webrtc-aec3-kmp）及其包含的 Abseil / JsonCpp / Ooura FFT | BSD-3-Clause + 专利授权 / Apache-2.0 / MIT 或公有领域 / Ooura 许可（见上文） |
 | Alkove SDK `ai.alkove:alkove`（含 libalkove.so）与 Focus / Cue / Timbre 模型权重（声纹聚焦按需下载，不随 APK 分发） | Apache-2.0（Focus 派生自 GTCRN，MIT；文本表 Unicode License v3；见上文） |
+| Concentus `io.github.jaredmdobson:concentus:1.0.2`：「传音」MicMask 自有协议的 Opus 编解码（手机与电脑版共用） | BSD-3-Clause（libopus：Xiph.Org、Skype、CSIRO、Microsoft 等；全文见 notices/concentus-BSD-3.txt） |
+| JmDNS `org.jmdns:jmdns`：电脑版局域网发现（mDNS） | Apache-2.0 |
+| JSON-java `org.json:json`：电脑版解析 GitHub Release / Beacon 数据 | Public Domain |
+| Compose Multiplatform（JetBrains）：电脑版界面框架 | Apache-2.0 |
 
 ## 模型与声音
 
@@ -185,6 +189,7 @@ App 侧的「系统权限模式」为本仓库按现有注入服务重新实现�
 「传音」功能兼容 [MicYou](https://github.com/MicYou-Dev/MicYou) 的局域网协议（握手串、`MicY`/`MicU` 帧格式、Protobuf 消息与字段号、端口与 mDNS 服务类型、会话与心跳规则），
 协议编解码与收发逻辑（`app/src/main/kotlin/com/taocrypt/micmask/link/`）参照 MicYou 公开源码重新实现；`tools/micyou_sim.py` 内嵌的 `.proto` 消息定义取自 MicYou 的
 `tauri-app/crates/micyou-protocol/proto/network.proto`。感谢 MicYou 作者与贡献者。
+同一目录下的 `MmLink*.kt`（MicMask Link 自有协议：SPAKE2 配对、AES-GCM、Opus/PCM，规范见 `docs/link-protocol.md`）为 MicMask 自行设计实现，不含 MicYou 代码。
 
 > MicYou — Turns your Android device into a high-quality PC microphone.
 > Copyright (C) 2026 LanRhyme <https://github.com/MicYou-Dev/MicYou>
@@ -194,3 +199,18 @@ App 侧的「系统权限模式」为本仓库按现有注入服务重新实现�
 
 MicMask 整体按 GPL-3.0 发布；依 GPLv3 第 7 条，MicMask 中参照 MicYou 的部分按普通 GPL-3.0 提供，不附带其插件例外。
 「MicYou」是其作者的项目名称，MicMask 只在界面与文档中说明「兼容 MicYou 电脑端」，不用其名称和图标做宣传，也与其作者无关联。
+
+### VB-CABLE（VB-Audio Software，捐赠软件，随电脑版安装包原样附带）
+
+MicMask 电脑版（Windows）的安装包里**原样附带** VB-Audio Software 的官方驱动包 `VBCABLE_Driver_Pack46.zip`（构建时从
+https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack46.zip 下载并校验 sha256，未做任何修改），
+用户首次运行未检测到 VB-CABLE 时，可在电脑版里一键以管理员身份安装。
+
+> **VB-CABLE 由 VB-Audio Software（Vincent Burel）提供，是捐赠软件（donationware），欢迎到 [vb-cable.com](https://vb-cable.com) 支持作者。**
+> Copyright V.Burel ©2010-2024. All rights reserved.
+
+依据 VB-Audio 的分发条款（https://vb-audio.com/Services/licensing.htm 「VB-CABLE Distribution with another product」，2026-11-28 核对）：
+允许把 VB-CABLE 包原样随软件分发，并可嵌入安装程序静默安装，条件是用户能清楚识别 VB-CABLE 是 VB-Audio 的应用、并有机会捐赠；
+须写明 VB-CABLE 的来源 www.vb-cable.com 以及「VB-CABLE 是捐赠软件，欢迎参与」。若在企业、机构等专业环境分发，须按数量向 VB-Audio 购买授权。
+VB-CABLE A+B、C+D 不可分发，MicMask 不附带。VB-CABLE 不是 GPL 软件，不受 MicMask 的 GPL-3.0 约束；MicMask 与 VB-Audio 无关联。
+

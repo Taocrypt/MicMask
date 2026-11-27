@@ -146,7 +146,7 @@ class MicYouServer(
     private var server: ServerSocket? = null
     private var udp: DatagramSocket? = null
     @Volatile private var cur: Conn? = null
-    private val reorder = SeqReorder()
+    private val reorder = SeqReorder<ShortArray>()
     private val jitter = JitterMeter()
     private val rxLock = Any()
 

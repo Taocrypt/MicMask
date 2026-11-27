@@ -282,9 +282,10 @@ object MicYouCodec {
 /**
  * 接收端按序号重排：连续的直接交付；乱序的先存着，等到比缺口晚 [gapWait] 个包到了才认定丢包、跳过缺口（与桌面端 jitter_buffer 的「晚 5 个包」思路一致，这里取 3 个包 = 30 ms，延迟优先）。
  * 早于期望序号的（迟到/重复）丢弃；序号突然大跳（对端重启计数）就重新同步。
+ * 泛型 T：MicYou 兼容路径存解好的 PCM（ShortArray）；MicMask Link 存编码包，跳过缺口时经 onGap 告知丢了几帧和缺口后的第一包（Opus 用它做 FEC/PLC）。
  */
-class SeqReorder(private val gapWait: Int = 3, private val maxHold: Int = 64) {
-    private val held = java.util.TreeMap<Int, ShortArray>()
+class SeqReorder<T>(private val gapWait: Int = 3, private val maxHold: Int = 64) {
+    private val held = java.util.TreeMap<Int, T>()
     private var expected = 0
     private var maxSeen = 0
     private var init = false
@@ -296,7 +297,7 @@ class SeqReorder(private val gapWait: Int = 3, private val maxHold: Int = 64) {
 
     fun reset() { held.clear(); init = false }
 
-    fun push(seq: Int, pcm: ShortArray, out: (ShortArray) -> Unit) {
+    fun push(seq: Int, item: T, out: (T) -> Unit, onGap: (lost: Int, next: T) -> Unit = { _, _ -> }) {
         received++
         if (!init) { expected = seq; maxSeen = seq; init = true }
         if (seq < expected) {
@@ -305,16 +306,16 @@ class SeqReorder(private val gapWait: Int = 3, private val maxHold: Int = 64) {
         }
         if (seq > expected + 1000) { resyncs++; held.clear(); expected = seq; maxSeen = seq }
         if (seq < maxSeen) reordered++ else maxSeen = seq
-        held[seq] = pcm
-        drain(out)
+        held[seq] = item
+        drain(out, onGap)
     }
 
-    private fun drain(out: (ShortArray) -> Unit) {
+    private fun drain(out: (T) -> Unit, onGap: (Int, T) -> Unit) {
         while (held.isNotEmpty()) {
             val first = held.firstKey()
             if (first == expected) { out(held.remove(first)!!); expected++; continue }
             val last = held.lastKey()
-            if (last >= expected + gapWait || held.size > maxHold) { lost += (first - expected).toLong(); expected = first; continue }
+            if (last >= expected + gapWait || held.size > maxHold) { val n = first - expected; lost += n.toLong(); onGap(n, held[first]!!); expected = first; continue }
             return
         }
     }
