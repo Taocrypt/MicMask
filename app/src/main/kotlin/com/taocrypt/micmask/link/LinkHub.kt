@@ -21,7 +21,7 @@ import kotlinx.coroutines.flow.StateFlow
 import java.net.NetworkInterface
 
 /** 局域网里发现的 MicYou 协议接收端：MicYou 电脑端，或开着「接收」的 MicMask 手机 */
-data class LinkDevice(val name: String, val host: String, val port: Int, val phone: Boolean)
+data class LinkDevice(val name: String, val host: String, val port: Int, val phone: Boolean, val proto: Int = LinkHub.PROTO_MICYOU)
 
 data class LinkState(
     // 发送
@@ -45,12 +45,112 @@ data class LinkState(
     val rxLatency: Int = -1,
     val rxInjecting: Boolean = false,
     val rxPlayback: Boolean = false,
+    // 协议：0 = MicMask 自有（MicMask Link v1，加密），1 = 兼容 MicYou（明文）
+    val proto: Int = 0,
+    /** MicMask 自有协议：本机当接收端时显示的 6 位配对码 */
+    val code: String = "",
+    val txCodec: String = "",
     // 本机
     val name: String = "",
     val ips: List<String> = emptyList(),
     val devices: List<LinkDevice> = emptyList(),
     val discovering: Boolean = false,
 )
+
+/** 发送连接的统一外观：MicYou 兼容（MicYouClient）与 MicMask 自有（MmSession）各一个适配器 */
+internal interface LinkTx {
+    val closed: Boolean
+    val closeReason: String
+    val sentPackets: Long
+    val sentBytes: Long
+    val rttMs: Int
+    val peerLoss: Float?
+    val peerJitter: Float?
+    val peerLatency: Int?
+    val transport: String
+    val codec: String
+    fun send(s: ShortArray, off: Int = 0, len: Int = s.size)
+    fun close(reason: String)
+}
+
+private class MicYouTx(val c: MicYouClient) : LinkTx {
+    override val closed get() = c.closed
+    override val closeReason get() = c.closeReason
+    override val sentPackets get() = c.sentPackets
+    override val sentBytes get() = c.sentBytes
+    override val rttMs get() = c.rttMs
+    override val peerLoss get() = c.peerStats?.packetLoss
+    override val peerJitter get() = c.peerStats?.jitterMs
+    override val peerLatency get() = c.peerStats?.latencyMs
+    override val transport get() = if (c.tcpOnly) "TCP" else "UDP"
+    override val codec get() = "PCM"
+    override fun send(s: ShortArray, off: Int, len: Int) = c.send(s, off, len)
+    override fun close(reason: String) = c.close(reason)
+}
+
+private class MmTx(val s: MmSession) : LinkTx {
+    override val closed get() = s.closed
+    override val closeReason get() = s.closeReason
+    override val sentPackets get() = s.txPackets
+    override val sentBytes get() = s.txBytes
+    override val rttMs get() = s.rttMs
+    override val peerLoss get() = s.peerStats?.loss
+    override val peerJitter get() = s.peerStats?.jitterMs
+    override val peerLatency get() = s.peerStats?.latencyMs
+    override val transport get() = if (s.udpTx) "UDP" else "TCP"
+    override val codec get() = when (s.txCodec) { MmLink.CODEC_OPUS -> "Opus"; MmLink.CODEC_PCM16 -> "PCM"; else -> "?" }
+    override fun send(s: ShortArray, off: Int, len: Int) = this.s.sendPcm(s, off, len)
+    override fun close(reason: String) = s.close(reason)
+}
+
+/** 接收端的统一外观 */
+internal interface LinkRx {
+    val packets: Long
+    val lost: Long
+    val reordered: Long
+    val late: Long
+    val jitterMs: Float
+    val rttMs: Int
+    val peer: String?
+    val transport: String
+    val rejected: Long
+    /** MicYou 兼容：收到但解不了的 Opus 包数；自有协议恒 0 */
+    val opusPackets: Long
+    /** 自有协议：编码与 FEC/PLC 统计 */
+    val extra: String
+    fun stop()
+}
+
+private class MicYouRx(val s: MicYouServer) : LinkRx {
+    override val packets get() = s.packets
+    override val lost get() = s.lost
+    override val reordered get() = s.reordered
+    override val late get() = s.late
+    override val jitterMs get() = s.jitterMs
+    override val rttMs get() = s.rttMs
+    override val peer get() = s.peer
+    override val transport get() = if (s.transport == "tcp") "TCP" else "UDP"
+    override val rejected get() = s.rejected
+    override val opusPackets get() = s.opusPackets
+    override val extra get() = ""
+    override fun stop() = s.stop()
+}
+
+private class MmRx(val srv: MmLinkServer) : LinkRx {
+    private val c get() = srv.current
+    override val packets get() = c?.rxPackets ?: 0L
+    override val lost get() = c?.rxLost ?: 0L
+    override val reordered get() = c?.rxReordered ?: 0L
+    override val late get() = c?.rxLate ?: 0L
+    override val jitterMs get() = c?.jitterMs ?: 0f
+    override val rttMs get() = c?.rttMs ?: -1
+    override val peer get() = c?.let { "${it.peerName}（${it.peerIp.hostAddress}）" }
+    override val transport get() = c?.let { if (it.lastAudioMs > 0 && it.rxCodec >= 0) (if (it.udpTx) "UDP" else "TCP/UDP") else "" } ?: ""
+    override val rejected get() = c?.rxRejected ?: 0L
+    override val opusPackets get() = 0L
+    override val extra get() = c?.let { " 编码=${when (it.rxCodec) { MmLink.CODEC_OPUS -> "Opus"; MmLink.CODEC_PCM16 -> "PCM"; else -> "?" }}" + (if (it.rxCodec == MmLink.CODEC_OPUS) " FEC补 ${it.fecFrames} PLC补 ${it.plcFrames}" else "") } ?: ""
+    override fun stop() = srv.stop()
+}
 
 /**
  * 传音（2.1.1-alpha.11，MVP）：兼容 MicYou 协议的局域网音频收发。全部默认关，用户在「传音」页主动开启才运行。
@@ -71,12 +171,66 @@ object LinkHub {
 
     const val PRIME_MS = 80
     const val SR = MicYou.SR
+    const val PROTO_MM = 0
+    const val PROTO_MICYOU = 1
+
+    /** 当前协议（prefs link_proto，默认 MicMask 自有）；收发进行中不能切换 */
+    @Volatile var proto = PROTO_MM; private set
 
     fun init(ctx: Context) {
         if (app != null) return
         app = ctx.applicationContext
-        upd { it.copy(name = deviceName()) }
+        proto = prefs()?.getInt("link_proto", PROTO_MM)?.takeIf { it == PROTO_MM || it == PROTO_MICYOU } ?: PROTO_MM
+        upd { it.copy(name = deviceName(), proto = proto, code = if (proto == PROTO_MM) pairCode() else "") }
     }
+
+    private fun prefs() = app?.let { com.taocrypt.micmask.Prefs.main(it) }
+
+    /** 切换协议：收发都停着才允许 */
+    fun setProto(p: Int): Boolean {
+        if (busy || (p != PROTO_MM && p != PROTO_MICYOU)) return false
+        stopDiscovery()
+        proto = p
+        prefs()?.edit()?.putInt("link_proto", p)?.apply()
+        upd { it.copy(proto = p, devices = emptyList(), txStatus = "", rxStatus = "", code = if (p == PROTO_MM) pairCode() else "") }
+        L.i("传音：协议 → ${if (p == PROTO_MM) "MicMask 自有" else "兼容 MicYou"}")
+        return true
+    }
+
+    /** 本机设备 ID（16 字节，首次随机生成并保存） */
+    fun deviceId(): ByteArray {
+        val sp = prefs() ?: return MmCrypto.random(16)
+        val h = sp.getString("link_dev_id", null)
+        if (h != null && h.length == 32) return P256.hex(h)
+        val id = MmCrypto.random(16)
+        sp.edit().putString("link_dev_id", id.joinToString("") { "%02x".format(it) }).apply()
+        return id
+    }
+
+    /** 本机当接收端时的配对码（6 位，保存；用户可在页面上换一个） */
+    fun pairCode(): String {
+        val sp = prefs() ?: return "000000"
+        sp.getString("link_code", null)?.takeIf { it.length == 6 && it.all(Char::isDigit) }?.let { return it }
+        return MmCrypto.newPairingCode().also { sp.edit().putString("link_code", it).apply() }
+    }
+
+    fun regenCode() {
+        val c = MmCrypto.newPairingCode()
+        prefs()?.edit()?.putString("link_code", c)?.apply()
+        upd { it.copy(code = c) }
+        L.i("传音：已更换配对码")
+    }
+
+    /** 发送端记住每台接收端的配对码（按设备名），下次自动填 */
+    fun savedCode(key: String): String = prefs()?.getString("link_peer_code_$key", "") ?: ""
+    fun saveCode(key: String, code: String) { prefs()?.edit()?.putString("link_peer_code_$key", code)?.apply() }
+
+    /** MicMask 自有协议的发送编码：0 = Opus（默认，省流量、抗丢包），1 = PCM（USB/热点，少一次编解码） */
+    fun codecPref(): Int = prefs()?.getInt("link_codec", 0) ?: 0
+    fun setCodecPref(v: Int) { prefs()?.edit()?.putInt("link_codec", v)?.apply() }
+
+    private fun mmCfg(intent: Int) = MmLinkConfig(deviceId(), deviceName(), "android", intent,
+        if (codecPref() == 1) MmLink.CODEC_PCM16 else MmLink.CODEC_OPUS)
 
     fun deviceName(): String = "MicMask-" + (Build.MODEL ?: "Android").replace(Regex("[^A-Za-z0-9 _-]"), "").trim().ifEmpty { "Android" }.take(24)
 
@@ -123,7 +277,8 @@ object LinkHub {
             }
         }
         discL = l
-        runCatching { m.discoverServices(MicYou.MDNS_TYPE, NsdManager.PROTOCOL_DNS_SD, l) }
+        val p = proto
+        runCatching { m.discoverServices(if (p == PROTO_MM) MmLink.MDNS_TYPE else MicYou.MDNS_TYPE, NsdManager.PROTOCOL_DNS_SD, l) }
             .onFailure { L.w("传音：discoverServices 失败 ${it.message}"); discL = null; upd { s -> s.copy(discovering = false) } }
     }
 
@@ -139,8 +294,10 @@ object LinkHub {
                     resolving = false
                     val host = s.host?.hostAddress
                     if (host != null && host.contains('.')) {
-                        val phone = s.serviceName.startsWith("MicMask") || runCatching { s.attributes["app"]?.let { String(it) } == "micmask" }.getOrDefault(false)
-                        val d = LinkDevice(s.serviceName, host, s.port, phone)
+                        val attr = { k: String -> runCatching { s.attributes[k]?.let { String(it) } }.getOrNull() }
+                        val mm = s.serviceType?.contains("micmask") == true || attr("v") != null && attr("app") == "micmask" && attr("plat") != null
+                        val phone = if (mm) attr("plat") != "windows" else (s.serviceName.startsWith("MicMask") || attr("app") == "micmask")
+                        val d = LinkDevice(s.serviceName, host, s.port, phone, if (mm) PROTO_MM else PROTO_MICYOU)
                         if (host !in localIps()) upd { st -> st.copy(devices = (st.devices.filterNot { it.name == d.name } + d).sortedBy { it.name }) }
                     }
                     pumpResolve()
@@ -184,7 +341,7 @@ object LinkHub {
 
     @Volatile private var txThread: Thread? = null
     @Volatile private var txRun = false
-    @Volatile private var client: MicYouClient? = null
+    @Volatile private var client: LinkTx? = null
     /** 变声即将开始：先放掉 App 自己的录音，避免和 shell 抢麦（由 MainViewModel 调用） */
     @Volatile private var micYield = false
 
@@ -192,7 +349,7 @@ object LinkHub {
 
     fun hasMic(): Boolean = app?.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
-    fun startSend(host: String, port: Int, label: String) {
+    fun startSend(host: String, port: Int, label: String, code: String = "") {
         val c = app ?: return
         if (txRun) return
         val h = host.trim()
@@ -202,7 +359,9 @@ object LinkHub {
         txRun = true; micYield = false
         upd { it.copy(txOn = true, txConnected = false, txTarget = label.ifEmpty { "$h:$port" }, txStatus = tr("正在连接 {0}…", "$h:$port"), txPackets = 0, txKbps = 0, txRtt = -1, txPeerLoss = -1f, txPeerLatency = -1) }
         serviceSync()
-        txThread = Thread({ txLoop(c, h, port, tcpOnly) }, "link-tx").apply { start() }
+        val p = proto
+        if (p == PROTO_MM && code.filter(Char::isDigit).length != 6) { txRun = false; upd { it.copy(txOn = false, txStatus = tr("请输入接收端显示的 6 位配对码")) }; serviceSync(); return }
+        txThread = Thread({ txLoop(c, h, port, tcpOnly, p, code.filter(Char::isDigit), label) }, "link-tx").apply { start() }
     }
 
     fun stopSend() {
@@ -211,22 +370,37 @@ object LinkHub {
         txThread?.interrupt()
     }
 
-    private fun txLoop(c: Context, host: String, port: Int, tcpOnly: Boolean) {
+    private fun txLoop(c: Context, host: String, port: Int, tcpOnly: Boolean, p: Int, code: String, label: String) {
         runCatching { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO) }
         var rec: AudioRecord? = null
         var tapOn = false
         var endMsg = tr("已停止")
         try {
-            val cl = MicYouClient(host, port, tcpOnly) { L.i("传音：发送 $it") }
-            client = cl
-            try { cl.open() } catch (t: Throwable) {
+            val cl: LinkTx = try {
+                if (p == PROTO_MM) {
+                    val ses = MmLinkClient.connect(host, port, mmCfg(MmLink.CAP_SEND), code, tcpOnly, object : MmSessionListener {}, { L.i("传音：发送 $it") })
+                    saveCode(label.ifEmpty { host }, code)
+                    MmTx(ses)
+                } else {
+                    val mc = MicYouClient(host, port, tcpOnly) { L.i("传音：发送 $it") }
+                    mc.open(); MicYouTx(mc)
+                }
+            } catch (t: Throwable) {
                 val m = t.message ?: t.javaClass.simpleName
-                endMsg = if (m.startsWith("握手失败")) tr("连接失败：对方不是 MicYou 协议的接收端") else tr("连接失败：{0}", m)
+                endMsg = when {
+                    t is MmLinkException && t.code == MmLink.E_BAD_CODE -> tr("连接失败：配对码不对（看接收端页面上的 6 位数字）")
+                    t is MmLinkException && t.code == MmLink.E_BUSY -> tr("连接失败：配对码错误次数过多，请 1 分钟后再试")
+                    t is MmLinkException && t.code == MmLink.E_VERSION -> tr("连接失败：对方版本不兼容，请把两端都更新到最新版")
+                    t is MmLinkException -> tr("连接失败：对方不是 MicMask 自有协议的接收端（可在上方改用「兼容 MicYou」）")
+                    m.startsWith("握手失败") -> tr("连接失败：对方不是 MicYou 协议的接收端")
+                    else -> tr("连接失败：{0}", m)
+                }
                 L.w("传音：发送连接 $host:$port 失败：${t.message}")
                 return
             }
-            upd { it.copy(txConnected = true, txStatus = tr("已连接")) }
-            L.i("传音：发送开始 → $host:$port ${if (tcpOnly) "纯 TCP（USB）" else "TCP+UDP"}")
+            client = cl
+            upd { it.copy(txConnected = true, txStatus = tr("已连接"), txCodec = if (p == PROTO_MM) "" else "PCM") }
+            L.i("传音：发送开始 → $host:$port 协议=${if (p == PROTO_MM) "MicMask 自有（加密）" else "兼容 MicYou"} ${if (tcpOnly) "纯 TCP（USB）" else "TCP+UDP"}")
             val buf = ShortArray(MicYou.FRAME)
             var src = ""          // "tap" / "mic"
             var lastStat = System.currentTimeMillis(); var lastPk = 0L; var lastBytes = 0L
@@ -273,14 +447,12 @@ object LinkHub {
                 if (now - lastStat >= (if (firstLog) 5000 else 10000)) {
                     val dt = (now - lastStat).coerceAtLeast(1)
                     val kbps = ((cl.sentBytes - lastBytes) * 8 / dt).toInt()
-                    val ps = cl.peerStats
-                    upd { it.copy(txPackets = cl.sentPackets, txKbps = kbps, txRtt = cl.rttMs, txPeerLoss = ps?.packetLoss ?: -1f, txPeerLatency = ps?.latencyMs ?: -1) }
-                    L.i("传音：发送 → $host:$port（${if (tcpOnly) "TCP" else "UDP"}）音源=${if (src == "tap") "变声输出" else "原始麦克风"} 包 ${cl.sentPackets}（+${cl.sentPackets - lastPk}）" +
-                        " 码率 $kbps kbps RTT ${cl.rttMs}ms 本端丢弃积压 ${txDropped * 1000 / SR}ms" + (ps?.let { " | 对端统计 丢包 ${"%.1f".format(it.packetLoss * 100)}% 抖动 ${"%.1f".format(it.jitterMs)}ms 延迟估计 ${it.latencyMs}ms" } ?: " | 对端未回统计"))
+                    upd { it.copy(txPackets = cl.sentPackets, txKbps = kbps, txRtt = cl.rttMs, txPeerLoss = cl.peerLoss ?: -1f, txPeerLatency = cl.peerLatency ?: -1, txCodec = cl.codec) }
+                    L.i("传音：发送 → $host:$port（${cl.transport}，${if (p == PROTO_MM) "自有协议 ${cl.codec}" else "MicYou PCM"}）音源=${if (src == "tap") "变声输出" else "原始麦克风"} 包 ${cl.sentPackets}（+${cl.sentPackets - lastPk}）" +
+                        " 码率 $kbps kbps RTT ${cl.rttMs}ms 本端丢弃积压 ${txDropped * 1000 / SR}ms" + (if (cl.peerLoss != null) " | 对端统计 丢包 ${"%.1f".format(cl.peerLoss!! * 100)}% 抖动 ${"%.1f".format(cl.peerJitter ?: 0f)}ms 延迟估计 ${cl.peerLatency}ms" else " | 对端未回统计"))
                     lastStat = now; lastPk = cl.sentPackets; lastBytes = cl.sentBytes; firstLog = false
                 } else if (now - lastStat >= 1000 && cl.sentPackets - lastPk > 0) {
-                    val ps = cl.peerStats
-                    upd { it.copy(txPackets = cl.sentPackets, txRtt = cl.rttMs, txPeerLoss = ps?.packetLoss ?: -1f, txPeerLatency = ps?.latencyMs ?: -1,
+                    upd { it.copy(txPackets = cl.sentPackets, txRtt = cl.rttMs, txPeerLoss = cl.peerLoss ?: -1f, txPeerLatency = cl.peerLatency ?: -1, txCodec = cl.codec,
                         txKbps = if (it.txKbps == 0) ((cl.sentBytes - lastBytes) * 8 / (now - lastStat)).toInt() else it.txKbps) }
                 }
             }
@@ -309,10 +481,11 @@ object LinkHub {
 
     // ================================================================= 接收
 
-    @Volatile private var server: MicYouServer? = null
+    @Volatile private var server: LinkRx? = null
     @Volatile private var rxStatThread: Thread? = null
     @Volatile private var rxRun = false
     private var nsdRegL: NsdManager.RegistrationListener? = null
+    @Volatile private var rxProto = PROTO_MM
     /** 外放播放（普通模式）：抖动缓冲 + AudioTrack 线程 */
     private val playBuf = PlayoutBuffer(SR * PRIME_MS / 1000, SR * (PRIME_MS + 120) / 1000)
     @Volatile private var playThread: Thread? = null
@@ -327,19 +500,36 @@ object LinkHub {
     fun startReceive() {
         val c = app ?: return
         if (rxRun) return
-        val srv = MicYouServer(MicYou.DEFAULT_PORT, onPcm = ::onRxPcm, onPeer = ::onRxPeer, log = { L.i("传音：接收 $it") }, bufMs = { _state.value.rxBufMs })
-        try { srv.start() } catch (t: Throwable) {
-            L.w("传音：接收端口 ${MicYou.DEFAULT_PORT} 打开失败：${t.message}")
-            upd { it.copy(rxOn = false, rxStatus = tr("端口 {0} 被占用或无法监听：{1}", MicYou.DEFAULT_PORT, t.message ?: "")) }
+        val p = proto
+        val port = if (p == PROTO_MM) MmLink.DEFAULT_PORT else MicYou.DEFAULT_PORT
+        val srv: LinkRx = try {
+            if (p == PROTO_MM) {
+                val code = pairCode()
+                val ms = MmLinkServer(port, mmCfg(MmLink.CAP_RECV), { pairCode() },
+                    listenerFor = { object : MmSessionListener {
+                        override fun onPcm(s: MmSession, pcm: ShortArray) = onRxPcm(pcm)
+                        override fun onClosed(s: MmSession, reason: String) = onRxPeer(null, reason)
+                    } },
+                    onSession = { ses -> ses.localBufMs = { _state.value.rxBufMs }; onRxPeer("${ses.peerName}（${ses.peerIp.hostAddress}）", "") },
+                    log = { L.i("传音：接收 $it") })
+                ms.start(); upd { it.copy(code = code) }; MmRx(ms)
+            } else {
+                val mc = MicYouServer(port, onPcm = ::onRxPcm, onPeer = ::onRxPeer, log = { L.i("传音：接收 $it") }, bufMs = { _state.value.rxBufMs })
+                mc.start(); MicYouRx(mc)
+            }
+        } catch (t: Throwable) {
+            L.w("传音：接收端口 $port 打开失败：${t.message}")
+            upd { it.copy(rxOn = false, rxStatus = tr("端口 {0} 被占用或无法监听：{1}", port, t.message ?: "")) }
             return
         }
-        server = srv; rxRun = true
+        server = srv; rxRun = true; rxProto = p
         shizukuMode = MicInjector.shizukuGranted()
         upd { it.copy(rxOn = true, rxPeer = null, rxPackets = 0, rxLost = 0, rxBufMs = 0, rxLatency = -1, rxInjecting = false, rxPlayback = false, ips = localIps(),
             rxStatus = if (shizukuMode) tr("等待发送端连接…") else tr("等待发送端连接…（普通模式：只能外放播放，不能注入）")) }
         registerNsd(c)
         serviceSync()
-        L.i("传音：接收开启（${if (shizukuMode) "注入模式" else "普通模式，外放播放"}）本机 ${localIps().joinToString()} 端口 ${MicYou.DEFAULT_PORT}/${MicYou.DEFAULT_PORT + 1}")
+        L.i("传音：接收开启（${if (shizukuMode) "注入模式" else "普通模式，外放播放"}）协议=${if (p == PROTO_MM) "MicMask 自有（加密，配对码）" else "兼容 MicYou"} 本机 ${localIps().joinToString()} 端口 " +
+            if (p == PROTO_MM) "$port（TCP/UDP）" else "$port/${port + 1}")
         rxStatThread = Thread({ rxMonitor() }, "link-rx-stat").apply { isDaemon = true; start() }
     }
 
@@ -357,9 +547,14 @@ object LinkHub {
 
     private fun registerNsd(c: Context) {
         val m = c.getSystemService(Context.NSD_SERVICE) as? NsdManager ?: return
+        val mm = rxProto == PROTO_MM
         val si = NsdServiceInfo().apply {
-            serviceName = deviceName(); serviceType = MicYou.MDNS_TYPE; port = MicYou.DEFAULT_PORT
+            serviceName = deviceName(); serviceType = if (mm) MmLink.MDNS_TYPE else MicYou.MDNS_TYPE; port = if (mm) MmLink.DEFAULT_PORT else MicYou.DEFAULT_PORT
             runCatching { setAttribute("app", "micmask") }
+            if (mm) runCatching {
+                setAttribute("v", MmLink.VERSION.toString()); setAttribute("plat", "android")
+                setAttribute("id", deviceId().copyOf(4).joinToString("") { "%02x".format(it) })
+            }
         }
         val l = object : NsdManager.RegistrationListener {
             override fun onServiceRegistered(s: NsdServiceInfo) { myServiceName = s.serviceName; L.i("传音：mDNS 已广播「${s.serviceName}」") }
@@ -486,12 +681,12 @@ object LinkHub {
             }
             val rtt = s.rttMs
             val lat = if (s.packets > 0) bufMs + (if (rtt >= 0) rtt / 2 else 0) + 10 else -1
-            if (s.opusPackets > 0 && s.opusPackets == s.packets && s.packets % 50 == 0L)
+            if (rxProto == PROTO_MICYOU && s.opusPackets > 0 && s.opusPackets == s.packets && s.packets % 50 == 0L)
                 upd { it.copy(rxStatus = tr("对方发送的是 Opus 编码，当前版本只支持 PCM（请用 MicMask 发送）")) }
             upd { it.copy(rxPackets = s.packets, rxLost = s.lost, rxBufMs = bufMs, rxLatency = lat) }
             if (s.peer != null && now - lastLog >= (if (firstLog) 5000 else 10000)) {
                 val total = s.packets + s.lost
-                L.i("传音：接收 ← ${s.peer}（${if (s.transport == "tcp") "TCP" else "UDP"}）包 ${s.packets}（+${s.packets - lastPk}）丢包 ${s.lost}（+${s.lost - lastLost}，" +
+                L.i("传音：接收 ← ${s.peer}（${s.transport.ifEmpty { "?" }}，${if (rxProto == PROTO_MM) "自有协议" else "MicYou"}${s.extra}）包 ${s.packets}（+${s.packets - lastPk}）丢包 ${s.lost}（+${s.lost - lastLost}，" +
                     "${if (total > 0) "%.1f".format(s.lost * 100.0 / total) else "0.0"}%）乱序 ${s.reordered} 迟到 ${s.late} 抖动 ${"%.1f".format(s.jitterMs)}ms " +
                     "缓冲 ${bufMs}ms（目标 $PRIME_MS）RTT ${rtt}ms 延迟估计 ${lat}ms " +
                     (if (injected) "注入=是 断流 ${MicInjector.underNow}" else if (playThread != null) "外放 断流 ${playBuf.underruns} 裁剪 ${playBuf.trimmed * 1000 / SR}ms" else "注入=否") +

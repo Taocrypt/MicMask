@@ -38,3 +38,8 @@ captures/
 .DS_Store
 Thumbs.db
 qnntest/src/main/assets/tier/
+
+# 传音协议单测缓存（kotlinc 输出、Concentus jar）
+tools/linktest/.cache/
+# 电脑端：构建时下载的 VB-CABLE 官方包、复制进来的共享源码
+desktop/resources/windows/vbcable/*.zip

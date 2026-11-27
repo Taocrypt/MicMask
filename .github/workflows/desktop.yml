@@ -1,0 +1,102 @@
+name: Desktop (Windows)
+
+# MicMask 电脑版（desktop/，Compose Desktop）。与安卓 build.yml 完全分开：
+#   push 到 feat/desktop-windows -> 打包 MSI + EXE，上传为 workflow 产物（版本号 <appVersion>-dev.<run>）
+#   push win-v* 标签             -> 同上，再发 GitHub Release：一律 prerelease、make_latest=false，绝不顶掉安卓的 Latest
+#   workflow_dispatch            -> 手动跑一次（同分支构建）
+# 安卓 build.yml 只认 main 分支与 v* 标签，这里的分支/标签都不会触发它。
+on:
+  push:
+    branches: [feat/desktop-windows]
+    tags: ['win-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # VB-CABLE 官方包（VB-Audio Software，捐赠软件，vb-cable.com）。许可允许原样随软件分发：
+  # https://vb-audio.com/Services/licensing.htm 「VB-CABLE Distribution with another product」。只下载、校验、原样打包，不改内容。
+  VBCABLE_URL: https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack46.zip
+  VBCABLE_SHA256: bc44e8974191a5a2427d6c979e2dab08dbb09925f3f435dfa2f0ba3e45b6eb90
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        id: ver
+        run: |
+          BASE=$(sed -n 's/^appVersion=\(.*\)$/\1/p' desktop/gradle.properties | head -n1)
+          if [[ "$GITHUB_REF" == refs/tags/win-v* ]]; then
+            VER="${GITHUB_REF_NAME#win-v}"
+          else
+            VER="${BASE%-dev}-dev.${GITHUB_RUN_NUMBER}"
+          fi
+          if ! [[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then echo "::error::版本号 $VER 不是 MAJOR.MINOR.BUILD 开头"; exit 1; fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "MicMask 电脑版 $VER"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Fetch VB-CABLE (official, unmodified)
+        run: |
+          mkdir -p desktop/resources/windows/vbcable
+          curl -fsSL --retry 3 -o desktop/resources/windows/vbcable/VBCABLE_Driver_Pack46.zip "$VBCABLE_URL"
+          echo "$VBCABLE_SHA256  desktop/resources/windows/vbcable/VBCABLE_Driver_Pack46.zip" | sha256sum -c -
+
+      - name: Package MSI / EXE
+        working-directory: desktop
+        run: ./gradlew --no-daemon --stacktrace -PappVersion="${{ steps.ver.outputs.version }}" packageMsi packageExe
+
+      - name: Collect
+        run: |
+          VER="${{ steps.ver.outputs.version }}"
+          mkdir -p dist
+          MSI=$(ls desktop/build/compose/binaries/main/msi/*.msi | head -n1)
+          EXE=$(ls desktop/build/compose/binaries/main/exe/*.exe | head -n1)
+          cp "$MSI" "dist/MicMask-$VER-windows-x64.msi"
+          cp "$EXE" "dist/MicMask-$VER-windows-x64-setup.exe"
+          ( cd dist && sha256sum * > SHA256SUMS.txt )
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MicMask-desktop-${{ steps.ver.outputs.version }}-windows-x64
+          path: dist/*
+          if-no-files-found: error
+
+      # 只有 win-v* 标签才发 Release：prerelease + --latest=false
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/win-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER="${{ steps.ver.outputs.version }}"
+          TAG="$GITHUB_REF_NAME"
+          awk -v v="$VER" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' desktop/CHANGELOG.md > notes.md || true
+          [ -s notes.md ] || echo "MicMask 电脑版 $VER（测试版）" > notes.md
+          printf '\n---\nVB-CABLE 由 VB-Audio Software 提供，是捐赠软件，欢迎到 https://vb-cable.com 支持作者；安装包原样附带其官方驱动包。\n' >> notes.md
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "MicMask 电脑版 $VER" --notes-file notes.md --prerelease --latest=false
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --title "MicMask 电脑版 $VER" --notes-file notes.md --verify-tag --prerelease --latest=false
+          fi

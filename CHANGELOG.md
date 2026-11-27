@@ -6,6 +6,13 @@
 
 ## [未发布]
 
+- 传音新增「MicMask 自有」协议（MicMask Link v1，默认）：与 MicMask 电脑版或另一台 MicMask 互传，页面顶部「协议」可切回「兼容 MicYou」（原有兼容路径不变）
+  - 加密：接收端显示 6 位配对码（可「换一个」），发送端输入一次后按设备记住；配对用 SPAKE2（RFC 9382），声音和控制消息用 AES-128-GCM，配对码连续错 5 次锁 60 秒
+  - 编码可选 Opus（默认，约 45 kbps，丢包时用带内 FEC / PLC 补回）或 PCM（约 800 kbps，USB / 热点直连）；端口 47310（TCP/UDP 同号），局域网发现 `_micmask._tcp`；UDP 不通（或 USB adb reverse）时自动改走 TCP
+  - 协议双向：一条会话两端都能发也能收（手机端目前发送、接收各用一条会话；电脑版可以把电脑上的声音发到开着「接收」的手机）
+  - 协议规范见 docs/link-protocol.md；纯逻辑单测 tools/linktest（kotlinc 独立运行）
+- 日志：传音统计行注明协议与编码（自有协议 Opus/PCM 或 MicYou PCM），接收行增加「FEC补 / PLC补」帧数
+
 ## [2.1.1-alpha.11] - 2026-11-28
 
 - 新增「传音」栏（底栏第 2 栏，英文 Link，测试功能，默认全关）：兼容 MicYou 协议的局域网音频收发

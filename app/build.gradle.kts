@@ -138,6 +138,8 @@ dependencies {
     // 注意 README 写的 cn.enaium.webrtc:webrtc-aec3-kmp 坐标不存在；AAR 带 4 个 ABI 的 .so，上面 abiFilters 只留 arm64-v8a，
     // 发布的 .so 带调试段（约 12 MB），靠 CI 装了 NDK 时 AGP 的 strip 降到约 1.5 MB。许可见 NOTICE.md
     implementation("cn.enaium.webrtc.aec3:webrtc-aec3-kmp-android:1.0.3")
+    // 传音 MicMask 自有协议的 Opus 编解码：Concentus（libopus 纯 Java 移植，BSD-3-Clause），电脑版共用
+    implementation("io.github.jaredmdobson:concentus:1.0.2")
 
     // 声纹聚焦（Alkove Focus，可选功能默认关，Apache-2.0）：钉 0.5.0。AAR 带 arm64-v8a / x86_64 两个 .so，abiFilters 只留 arm64-v8a。
     // 模型（.alk）不打包，运行时按 AlkoveStore 里钉的 revision 下载；升级 SDK 时同步更新 AlkoveStore.MODELS。许可见 NOTICE.md

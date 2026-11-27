@@ -44,7 +44,7 @@ class LinkService : Service() {
         val n: Notification = Notification.Builder(this, CH)
             .setSmallIcon(R.drawable.ic_notify)
             .setContentTitle(tr("传音 {0}", what))
-            .setContentText(tr("局域网明文传输，请只在可信网络使用"))
+            .setContentText(if (LinkHub.proto == LinkHub.PROTO_MM) tr("MicMask 自有协议，已加密") else tr("局域网明文传输，请只在可信网络使用"))
             .setContentIntent(open).setOngoing(true)
             .addAction(Notification.Action.Builder(null, tr("停止"), stop).build())
             .build()
