@@ -199,6 +199,10 @@ data class UiState(
     val forceNormal: Boolean = false,
     /** 运行模式选了 ROOT（不经 Shizuku，su 执行） */
     val rootMode: Boolean = false,
+    /** 系统权限模式生效中（App 已是 priv-app 且用户选了它） */
+    val privMode: Boolean = false,
+    /** App 自身已被授予 MODIFY_AUDIO_ROUTING（装了系统权限模块）；为 false 时界面不显示系统权限模式 */
+    val privAvail: Boolean = false,
     /** 录播（外放模式）：转换中 / 进度 / 结果 */
     val clipBusy: Boolean = false,
     val clipStage: String = "",
@@ -322,11 +326,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         com.taocrypt.micmask.inject.MicInjector.forceNormal = prefs.getBoolean("force_normal", false)
         com.taocrypt.micmask.inject.MicInjector.rootMode = prefs.getBoolean("root_mode", false)
-        if (com.taocrypt.micmask.inject.MicInjector.rootMode && !com.taocrypt.micmask.inject.MicInjector.forceNormal)
+        val privAvail = com.taocrypt.micmask.inject.MicInjector.privGranted(ctx)
+        if (privAvail) {
+            // 第一次检测到系统权限（刚刷模块）且没选普通模式：自动切到系统权限模式；之后以用户选择为准
+            if (!prefs.contains("priv_mode") && !com.taocrypt.micmask.inject.MicInjector.forceNormal) {
+                prefs.edit().putBoolean("priv_mode", true).apply()
+                L.i("检测到系统权限（MODIFY_AUDIO_ROUTING 已授予），自动启用系统权限模式")
+            }
+            com.taocrypt.micmask.inject.MicInjector.privMode = prefs.getBoolean("priv_mode", false) && !com.taocrypt.micmask.inject.MicInjector.forceNormal
+        }
+        if (com.taocrypt.micmask.inject.MicInjector.rootMode && !com.taocrypt.micmask.inject.MicInjector.forceNormal && !com.taocrypt.micmask.inject.MicInjector.privMode)
             Thread { com.taocrypt.micmask.inject.MicInjector.checkRoot(); android.os.Handler(android.os.Looper.getMainLooper()).post { refreshInjectState() } }.start()
         com.taocrypt.micmask.inject.MicInjector.recCompat = prefs.getBoolean("rec_compat", false)
         com.taocrypt.micmask.inject.MicInjector.loadScope(prefs)
-        _state.value = _state.value.copy(forceNormal = com.taocrypt.micmask.inject.MicInjector.forceNormal, rootMode = com.taocrypt.micmask.inject.MicInjector.rootMode)
+        _state.value = _state.value.copy(forceNormal = com.taocrypt.micmask.inject.MicInjector.forceNormal, rootMode = com.taocrypt.micmask.inject.MicInjector.rootMode,
+            privMode = com.taocrypt.micmask.inject.MicInjector.privMode, privAvail = privAvail)
         // Toast 由 ViewModel 直接用系统 Toast 弹出：App 在后台（悬浮窗操作）时也能看到
         viewModelScope.launch {
             _state.collect { st -> st.toast?.let { msg ->
@@ -720,6 +734,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshInjectState() {
         val inj = com.taocrypt.micmask.inject.MicInjector
         val txt = when {
+            inj.privMode -> tr("系统权限模式（App 自带音频路由权限）") + (if (inj.binder != null) tr("，注入服务：") + inj.ping() else "")
             inj.rootMode -> if (inj.rootOk) tr("Root 已授权") + (if (inj.binder != null) tr("，注入服务：") + inj.ping() else "") else tr("Root 未授权（在 Magisk / KernelSU / APatch 里允许 MicMask）")
             !inj.shizukuRunning() -> tr("Shizuku 未运行（先装 Shizuku 并用无线调试启动）")
             !inj.shizukuPermitted() -> tr("Shizuku 已运行，未授权本 App")
@@ -2197,6 +2212,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setPermMode(mode: Int) {
         val inj = com.taocrypt.micmask.inject.MicInjector
         if (inj.liveOn || _state.value.liveOn) { toast(tr("请先关闭变声，再切换模式")); return }
+        // 从系统权限模式切回 Shizuku/ROOT/普通：先注销本进程里的注入服务（不在系统权限模式时不进这里）
+        if (inj.privMode) {
+            inj.resetBackend()
+            inj.privMode = false
+            prefs.edit().putBoolean("priv_mode", false).apply()
+            _state.value = _state.value.copy(privMode = false)
+            L.i("UI 关闭系统权限模式")
+        }
         val normal = mode == 2; val root = mode == 1
         if (!normal && root != inj.rootMode) inj.resetBackend()
         prefs.edit().putBoolean("force_normal", normal).apply { if (!normal) putBoolean("root_mode", root) }.apply()
@@ -2205,6 +2228,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(forceNormal = normal, rootMode = inj.rootMode)
         L.i("UI 权限模式 → ${listOf("Shizuku", "ROOT", "普通")[mode]}")
         if (!normal && !inj.shizukuPermitted()) requestShizuku() else refreshInjectState()
+    }
+
+    /** 系统权限模式开关（只有 App 被授予 MODIFY_AUDIO_ROUTING 时界面才显示）；关掉后回到之前的 Shizuku/ROOT 选择 */
+    fun setPrivMode(on: Boolean) {
+        val inj = com.taocrypt.micmask.inject.MicInjector
+        if (inj.liveOn || _state.value.liveOn) { toast(tr("请先关闭变声，再切换模式")); return }
+        if (on == inj.privMode) return
+        if (on && !inj.privGranted(ctx)) { toast(tr("系统权限不可用：请确认已刷入 MicMask 系统权限模块并重启手机")); return }
+        inj.resetBackend()
+        inj.privMode = on
+        if (on) inj.forceNormal = false
+        prefs.edit().putBoolean("priv_mode", on).apply { if (on) putBoolean("force_normal", false) }.apply()
+        _state.value = _state.value.copy(privMode = on, forceNormal = inj.forceNormal)
+        L.i("UI 系统权限模式 → ${if (on) "开" else "关"}")
+        if (!on && !inj.forceNormal && !inj.shizukuPermitted()) requestShizuku() else refreshInjectState()
     }
 
     fun requestShizuku() {

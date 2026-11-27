@@ -35,6 +35,16 @@ class InjectorService : Binder {
 
     constructor() : super() { ctx = null }
     constructor(context: Context) : super() { ctx = context }
+    /**
+     * 系统权限模式（[inApp]=true）：App 已是 priv-app、自带 MODIFY_AUDIO_ROUTING，服务直接在 App 进程里实例化。
+     * 与 shell 进程的差别只在：模型目录改到 App 私有目录、不 System.exit、不接管 App 日志、本机试听不把自己设成目标。
+     * Shizuku / ROOT 模式走上面两个构造，inApp=false，行为不变。
+     */
+    constructor(context: Context, inApp: Boolean) : super() {
+        ctx = context; this.inApp = inApp
+        if (inApp) { ShellAudioRecord.pkgOverride = context.packageName; runCatching { java.io.File(MODEL_DIR).mkdirs() } }
+    }
+    @Volatile private var inApp = false
 
     private val fx = FxChain(SR)
     @Volatile private var fxLast: FloatArray? = null
@@ -155,6 +165,8 @@ class InjectorService : Binder {
         try {
             when (code) {
                 TX_DESTROY -> {
+                    // 系统权限模式服务在 App 进程里：只停注入，不能退出进程
+                    if (inApp) { disarm("destroy"); reply?.writeNoException(); return true }
                     disarm("destroy")
                     System.exit(0)
                 }
@@ -207,6 +219,11 @@ class InjectorService : Binder {
                     val rvcHere = data.dataAvail() >= 4 && data.readInt() == 1
                     if (data.dataAvail() >= 16) readTune(data)
                     micRing.clear(); outRing.clear()
+                    // 系统权限模式：真麦录音也是 App uid，目标=自身（本机试听）会把注入声录回来，换成不存在的占位 uid
+                    if (inApp && uids.contains(Process.myUid())) {
+                        for (i in uids.indices) if (uids[i] == Process.myUid()) uids[i] = Process.LAST_APPLICATION_UID
+                        slog('I', "系统权限模式：目标是 MicMask 自身（本机试听），改用占位 uid ${Process.LAST_APPLICATION_UID}，避免录回注入声")
+                    }
                     val err = arm(uids, auto = false, tmo = 0L, live = true)
                     if (err == null && liveExternal && rvcHere) startEngine()
                     reply?.writeNoException()
@@ -749,7 +766,9 @@ class InjectorService : Binder {
 
     // ------------------------------------------------------------ shell 内推理（不受 App 后台冻结/降频影响）
 
-    private val MODEL_DIR = "/data/local/tmp/micmask-models"
+    /** shell 进程：/data/local/tmp/micmask-models；系统权限模式（App 进程）写不了那里，改用 App 的 no_backup 目录 */
+    private val MODEL_DIR: String get() =
+        if (inApp && ctx != null) java.io.File(ctx.noBackupFilesDir, "injector-models").absolutePath else "/data/local/tmp/micmask-models"
     /** 抽样指纹：在 1/4、1/2、3/4 和末尾各读 64KB 算 CRC32（不移动流位置），用来识别大小相同的不同模型 */
     private fun sampleCrc(ch: java.nio.channels.FileChannel, size: Long): Long {
         val crc = java.util.zip.CRC32(); val buf = java.nio.ByteBuffer.allocate(64 * 1024)
@@ -860,7 +879,7 @@ class InjectorService : Binder {
     }
 
     @Synchronized private fun ensureEngine(): com.taocrypt.micmask.LiveRvc {
-        com.taocrypt.micmask.L.sink = { lv, m -> slog(lv, m) }
+        if (!inApp) com.taocrypt.micmask.L.sink = { lv, m -> slog(lv, m) }   // App 进程里 L 本来就写 App 日志，不接管
         return engine ?: com.taocrypt.micmask.LiveRvc { n -> models[n]?.takeIf { it.exists() }?.also { synchronized(loadedNames) { loadedNames += n } } }.also {
             it.pickCache = java.io.File(MODEL_DIR, "pick.txt")
             it.tune(tuneTier, tuneGate, tuneFeat, tuneSyn)
@@ -868,14 +887,14 @@ class InjectorService : Binder {
             it.rmsFollow = tuneRms; it.formant = tuneFormant; it.phaseLock = tunePl; it.denoiseIn = tuneDnIn; it.denoiseOut = tuneDnOut
             it.voiceprint(tuneVpOn && tuneFocus == 0, tuneVpThr, tuneVpEmb)
             it.focus = focus
-            it.qnnDirProvider = { com.taocrypt.micmask.QnnPack.shellDir(ctx?.packageName) }
+            it.qnnDirProvider = { if (inApp) com.taocrypt.micmask.QnnPack.shellDir(ctx?.packageName, MODEL_DIR) else com.taocrypt.micmask.QnnPack.shellDir(ctx?.packageName) }
             it.onConfig = { blockMs -> tierPrimeMs = blockMs + 80; livePrimeMs = tierPrimeMs; slog('I', "预缓冲跟随档位 → ${livePrimeMs}ms") }
             engine = it
         }
     }
 
     private fun startEngine() {
-        com.taocrypt.micmask.L.sink = { lv, m -> slog(lv, m) }
+        if (!inApp) com.taocrypt.micmask.L.sink = { lv, m -> slog(lv, m) }   // App 进程里 L 本来就写 App 日志，不接管
         engine?.stop()
         val my = ++startSeq
         Thread({

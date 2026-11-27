@@ -19,6 +19,13 @@
     <!-- 悬浮小窗：让「一键播放待发语音」浮在 QQ 上面，不用来回切界面 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- 系统权限模式：只有刷了 tools/magisk-module（priv-app + privapp-permissions）才会被授予；普通安装下系统直接忽略，不影响其他模式 -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_ROUTING"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.CAPTURE_AUDIO_OUTPUT"
+        tools:ignore="ProtectedPermissions" />
+    <!-- 系统权限模式下 LiveService 以 mediaPlayback|microphone 启动（其他模式仍只传 mediaPlayback） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
     <uses-permission android:name="android.permission.INTERNET" />
@@ -114,7 +121,7 @@
         <service
             android:name=".LiveService"
             android:exported="false"
-            android:foregroundServiceType="mediaPlayback" />
+            android:foregroundServiceType="mediaPlayback|microphone" />
         <!-- Shizuku：免 root 获得 shell 身份，跑麦克风注入服务 -->
         <provider
             android:name="rikka.shizuku.ShizukuProvider"

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MicMask 系统权限模式：给 /product/priv-app/MicMask 授予音频路由/采集权限。
+  结构参照 VirtuMic systemless-overlay-module（MIT，见 NOTICE.md）。
+  注意：这里必须覆盖 MicMask 清单里申请的全部 signature|privileged 权限，
+  否则 ro.control_privapp_permissions=enforce 的机型开机时 system_server 会报错（可能卡开机）。
+  当前清单里的特权权限只有这两个；以后给 App 加特权权限时要同步加到这里。
+-->
+<permissions>
+    <privapp-permissions package="com.taocrypt.micmask">
+        <permission name="android.permission.MODIFY_AUDIO_ROUTING"/>
+        <permission name="android.permission.CAPTURE_AUDIO_OUTPUT"/>
+    </privapp-permissions>
+</permissions>

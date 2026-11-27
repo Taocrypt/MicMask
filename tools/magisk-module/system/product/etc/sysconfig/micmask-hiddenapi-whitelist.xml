@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MicMask 系统权限模式：注入服务在 App 进程里会用到少量非 SystemApi 的隐藏接口
+  （AudioSystem.setA11yServicesUids 等）。系统应用在这里登记后不受隐藏 API 限制。
+-->
+<config>
+    <hidden-api-whitelisted-app package="com.taocrypt.micmask"/>
+</config>

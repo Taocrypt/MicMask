@@ -37,6 +37,9 @@ object ShellAudioRecord {
         if (u == 0 && System.getenv("MICMASK_ROOT_ID") != "root") 2000 else u
     }
 
+    /** 系统权限模式（注入服务在 App 进程里）：录音归属用 App 自己的包名；shell/root 进程里为 null，仍用 com.android.shell */
+    @Volatile @JvmField var pkgOverride: String? = null
+
     /** 最近一次创建走的路径：builder / builder-mic / native_setup/apiNN/Np / 失败 */
     @Volatile var lastPath: String = ""
         private set
@@ -142,7 +145,7 @@ object ShellAudioRecord {
                     t == Int::class.javaPrimitiveType -> if (intArrays < 2) (preInts.removeFirstOrNull()
                         ?: throw IllegalStateException("native_setup 参数表对不上：${sig(pt)}")) else 0
                     t == Long::class.javaPrimitiveType -> 0L
-                    t == String::class.java -> SHELL_PKG
+                    t == String::class.java -> pkgOverride ?: SHELL_PKG
                     t == Parcel::class.java -> {
                         val st = attributionParcelState()
                         scoped = st
@@ -170,7 +173,7 @@ object ShellAudioRecord {
     @android.annotation.SuppressLint("NewApi")
     /** AttributionSource(uid=2000, com.android.shell).asScopedParcelState()，调用方负责 close */
     private fun attributionParcelState(): AutoCloseable {
-        val src = android.content.AttributionSource.Builder(REC_UID).setPackageName(SHELL_PKG).build()
+        val src = android.content.AttributionSource.Builder(REC_UID).setPackageName(pkgOverride ?: SHELL_PKG).build()
         return android.content.AttributionSource::class.java.getDeclaredMethod("asScopedParcelState")
             .apply { isAccessible = true }.invoke(src) as AutoCloseable
     }

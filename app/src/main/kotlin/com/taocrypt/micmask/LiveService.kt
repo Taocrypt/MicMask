@@ -110,7 +110,12 @@ class LiveService : Service() {
             }
         }
         val n = build(this)
-        if (Build.VERSION.SDK_INT >= 29) startForeground(NID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+        // 系统权限模式：真麦在 App 进程里录，切到后台要靠 microphone 类型的前台服务才不被系统静音（Android 11+）。
+        // 其他模式仍只用 mediaPlayback（录音在 shell 进程），这里不进
+        if (Build.VERSION.SDK_INT >= 30 && MicInjector.privMode && checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            runCatching { startForeground(NID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE) }
+                .onFailure { L.w("系统权限模式：麦克风前台服务启动失败（${it.message}），退回媒体播放类型，切后台后录音可能被静音"); startForeground(NID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK) }
+        } else if (Build.VERSION.SDK_INT >= 29) startForeground(NID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
         else startForeground(NID, n)
         running = true
         // 悬浮窗可能先于/后于通知创建：延迟补刷一次，按钮文字以 LiveFloatService.running 为准

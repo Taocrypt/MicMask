@@ -125,6 +125,24 @@ Alkove 的代码与模型权重均以 Apache License 2.0 发布（全文见 `not
 在 App 里用 Timbre 注册声纹后交给注入进程使用。本仓库按现有架构重新实现（模型改为运行时下载、与声纹门限并列为下拉选项、经 tune 参数传声纹）。
 感谢 Eddy Bordi 与 Alkove 项目、Rong Xiaobin（GTCRN），以及提出该提案的用户。
 
+### VirtuMic（系统权限模块，MIT）
+
+`tools/magisk-module/` 的 Magisk 安装入口（`META-INF/com/google/android/update-binary`、`updater-script`，有改动）
+以及「把 App 放进 `system/product/priv-app`、用 `system/product/etc/permissions/privapp-permissions-*.xml`
+授予 `MODIFY_AUDIO_ROUTING` / `CAPTURE_AUDIO_OUTPUT`」的模块结构参照
+[IndiTheo/VirtuMic](https://github.com/IndiTheo/VirtuMic) 的 `systemless-overlay-module`。
+App 侧的「系统权限模式」为本仓库按现有注入服务重新实现，未复制 VirtuMic 的 Kotlin 代码。全文见 `notices/VirtuMic-MIT.txt`：
+
+> MIT License, Copyright (c) 2026 IndiTheo and IndiDevs
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+感谢 IndiTheo 与 IndiDevs。
+
 感谢以上作者。
 
 | 组件 | 许可 |
@@ -133,6 +151,7 @@ Alkove 的代码与模型权重均以 Apache License 2.0 发布（全文见 `not
 | Miuix (compose-miuix-ui)：界面组件库；ui2/glass 液态玻璃组件基于其示例工程 | Apache-2.0 |
 | Kyant0/AndroidLiquidGlass（miuix 示例中液态玻璃效果的来源） | Apache-2.0 |
 | Shizuku API / Provider | Apache-2.0 |
+| VirtuMic：Magisk 系统权限模块的安装入口与 priv-app / privapp-permissions 结构（tools/magisk-module） | MIT（见上文） |
 | ONNX Runtime | MIT |
 | TorchGate（RVC WebUI，Asaf Zorea）/ noisereduce：输入/输出谱门限降噪思路（TorchGate.kt，Kotlin 重写） | MIT（见上文） |
 | mobile-rvc：原生 NEON fp16 声码器内核（app/src/main/cpp/vocoder） | MIT（见上文） |

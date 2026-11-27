@@ -378,9 +378,15 @@ class LiveRvc(private val open0: (String) -> Any?) {
             L.i("live 用首次测速结果：${chosen!!.name}（${chosen!!.ms}ms/块，块长 ${chosen!!.blockMs}ms）")
         } else {
             val cands = ArrayList<Cand>()
+            var badFile = false
             for (n in NETG_FILES) {
                 if (open(n) == null) continue
-                val s = try { load("测速 $n", n) } catch (t: Throwable) { L.e("live 加载 $n 失败", t); continue }
+                val s = try { load("测速 $n", n) } catch (t: Throwable) {
+                    L.e("live 加载 $n 失败", t)
+                    // 文件在但读不出来（protobuf 解析失败、格式不对）：多半是音色文件损坏或导入了不支持的文件
+                    if (t is ai.onnxruntime.OrtException) badFile = true
+                    continue
+                }
                 netG?.close(); netG = s
                 val ph = phFor(s)
                 runCatching {
@@ -401,7 +407,7 @@ class LiveRvc(private val open0: (String) -> Any?) {
             }.ifEmpty { if (tier != 0) L.w("live 本音色没有${if (tier == 2) "省电" else "标准"}档模型，改为自动"); cands }
             val ok = pool.filter { ratio(it) <= 0.8 }
             chosen = (if (tier != 0) pool.minByOrNull { ratio(it) } else if (ok.isNotEmpty()) ok.minWith(compareBy<Cand> { it.blockMs }.thenBy { it.ms }) else pool.minByOrNull { ratio(it) })
-                ?: throw IllegalStateException("缺流式合成器模型，请导入实时变声模型包")
+                ?: throw IllegalStateException(if (badFile) "音色文件损坏或格式不对，请删除该音色后重新下载或导入" else "缺流式合成器模型，请导入实时变声模型包")
         }
         val pick = chosen!!
         netG = load("流式合成器", pick.name)

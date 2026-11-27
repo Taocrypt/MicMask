@@ -1,0 +1,6 @@
+id=micmask_privapp
+name=MicMask 系统权限模块
+version=1.0
+versionCode=1
+author=Taocrypt
+description=把已安装的 MicMask 挂成 /product/priv-app 并授予 MODIFY_AUDIO_ROUTING / CAPTURE_AUDIO_OUTPUT，供 MicMask「系统权限模式」使用（shell 没有音频路由权限的已 ROOT 机型）。

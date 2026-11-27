@@ -265,9 +265,9 @@ object QnnPack {
      * 注入进程用：返回可加载的 QNN 目录（/data/local/tmp/micmask-models/qnn-<版本>-<架构>）。
      * 没有就从 App 外部目录复制并逐个校验；App 没下载过或本机不是已知骁龙返回 null。
      */
-    fun shellDir(pkg: String?): File? {
+    fun shellDir(pkg: String?, root: String = SHELL_ROOT): File? {
         val arch = deviceArch() ?: return null
-        val dst = File(SHELL_ROOT, dirName(arch))
+        val dst = File(root, dirName(arch))
         if (installed(dst, arch)) return dst
         val srcs = listOfNotNull(pkg, "com.taocrypt.micmask").distinct().map { File("/storage/emulated/0/Android/data/$it/files", dirName(arch)) }
         val src = srcs.firstOrNull { installed(it, arch) } ?: return null
