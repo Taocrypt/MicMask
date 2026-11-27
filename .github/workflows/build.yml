@@ -1,7 +1,7 @@
 name: Build
 
 # push 到 main      -> 构建 APK，上传为 workflow 产物
-# push v* 标签       -> 同上，再发布 GitHub Release（APK + update.json，说明取自 CHANGELOG.md）
+# push v* 标签       -> 同上，再发布 GitHub Release（APK + 系统权限模块 zip + update.json，说明取自 CHANGELOG.md）
 # pull_request      -> 只构建
 on:
   push:
@@ -97,6 +97,9 @@ jobs:
           VER=${{ steps.ver.outputs.version }}
           mkdir -p dist
           cp app/build/outputs/apk/release/app-release.apk dist/MicMask-$VER-android-arm64-v8a.apk
+          # 系统权限模块（Magisk/KernelSU/APatch）：不含 APK，刷入时复制手机上已装的 MicMask
+          bash tools/magisk-module/build.sh
+          cp build/micmask-privapp-module.zip dist/MicMask-$VER-privapp-module.zip
           BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
           "$BT/apksigner" verify --print-certs dist/*.apk | grep -E 'Signer #1 certificate (DN|SHA-256)' || true
           rm -rf "$RUNNER_TEMP/sign"
