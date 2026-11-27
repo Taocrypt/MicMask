@@ -1,8 +1,8 @@
 {
  "format": 1,
- "updated": 1795768025,
- "count": 4,
- "total": 20.0,
+ "updated": 1795814118,
+ "count": 5,
+ "total": 25.0,
  "sponsors": [
   {
    "name": "爱发电用户_b7beb",
@@ -39,6 +39,15 @@
    "last": 1795746081,
    "expire": 1798338081,
    "remark": "加油加油"
+  },
+  {
+   "name": "爱发电用户_dfd72",
+   "avatar": "https://pic1.afdiancdn.com/default/avatar/avatar-purple.png?imageView2/1/",
+   "amount": 5.0,
+   "since": 1795800002,
+   "last": 1795800002,
+   "expire": 1798392002,
+   "remark": "666"
   }
  ]
 }
