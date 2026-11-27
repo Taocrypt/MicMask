@@ -381,7 +381,13 @@ class LiveRvc(private val open0: (String) -> Any?) {
         if (rmvpe == null) rmvpe = load("RMVPE", ModelStore.RMVPE)
         var featMs = 0L
         // 预热 + 测速特征模型（换音色时特征模型没动，沿用上次结果，省半秒多）
-        if (featWarm) { featMs = benchFeatMs; L.i("live 特征模型已在内存，沿用测速 ${featMs}ms") }
+        if (featWarm) {
+            featMs = benchFeatMs
+            // 沿用测速也要跑一遍：长时间没推理（尤其进游戏后），mmap 的权重页可能被回收、大核降频，
+            // 首块会慢好几倍（实测 hubert 219 + rmvpe 362ms，丢 1 块、吞掉首句约半秒）。这里先把它跑热
+            val w = warmFeat(2)
+            L.i("live 特征模型已在内存，沿用测速 ${featMs}ms（预热 $w）")
+        }
         else runCatching {
             val z = FloatArray(16320) { (Math.random().toFloat() - 0.5f) * 0.1f }
             runHubert(z); runRmvpe(z)
@@ -394,6 +400,7 @@ class LiveRvc(private val open0: (String) -> Any?) {
             featMs = th / 3_000_000 + tr / 3_000_000 + td / 1_000_000
             benchFeatMs = featMs
             hubMs = th / 3_000_000
+            lastFeatT = System.nanoTime()
             L.i("live 测速 hubert=${th / 3_000_000}ms rmvpe=${tr / 3_000_000}ms 抽取=${td / 1_000_000}ms 特征合计≈${featMs}ms")
         }.onFailure { L.e("live 特征预热失败", it) }
         // 流式合成器：有几个版本就都测一遍，用最快的
@@ -610,6 +617,10 @@ class LiveRvc(private val open0: (String) -> Any?) {
         java.util.Arrays.fill(history, 0f); fresh = 0; sinceSub = 0; dnFresh = true; tgIn.reset(); tgOut.reset(); prevTail = null; dropped = 0; gated = 0; blkSeq = 0; synchronized(this) { wFeat.clear(); wSyn.clear(); wLag.clear(); nBlocks = 0; nOver = 0 }
         spk.reset(); focus?.reset()
         synExec.execute { outGain = 1f; hint.reset() }
+        // 停了一阵再开始（没重新 load）：首块到来前在特征线程上先跑一遍热身，与首块录音并行
+        if (hubert != null && rmvpe != null && System.nanoTime() - lastFeatT > 10_000_000_000L) featExec.execute {
+            if (running) runCatching { L.i("live 开始前预热特征模型（闲置 ${(System.nanoTime() - lastFeatT) / 1_000_000_000}s）：${warmFeat(1)}") }
+        }
         L.i("live 开始，semis=$semis" + if (spk.active) "，声纹门限 放行阈值=${"%.2f".format(spk.threshold)} 拦截阈值=${"%.2f".format(spk.blockThreshold)}" else "")
         pump = Thread({ boost(); pumpLoop() }, "live-pump").apply { start() }
     }
@@ -710,7 +721,9 @@ class LiveRvc(private val open0: (String) -> Any?) {
                 fresh -= BLOCK_S
                 // 若中途还有未处理的新样本，这一步的窗口其实"超前"了 fresh 个样本；量很小，忽略
                 val id = ++blkSeq
-                if (inflight.get() >= 2) {
+                // 开始后 2 s 内允许多 1 块在途：首块常因冷启动（页回收 / 降频 / 游戏抢核）慢，宁可晚一点也不丢首句
+                val cap = if (System.nanoTime() - startT < 2_000_000_000L) 3 else 2
+                if (inflight.get() >= cap) {
                     dropped++
                     L.w("live 块#$id 丢弃：处理跟不上（在途 ${inflight.get()}），补静音 ${BLOCK * 10}ms")
                     io?.push(ShortArray(BLOCK_S)); noteTrouble("丢块"); continue
@@ -796,6 +809,7 @@ class LiveRvc(private val open0: (String) -> Any?) {
                 val tR = System.nanoTime()
                 val f0All = runRmvpe(a16)                                 // ~103
                 val tE = System.nanoTime()
+                lastFeatT = tE
                 val ed = emb
                 val phone = FloatArray(T * ed)
                 val fOff = maxOf(0, feats.size - T)
@@ -928,6 +942,27 @@ class LiveRvc(private val open0: (String) -> Any?) {
 
     @Volatile private var hubertNpu = false
     private var hubMs = 0L
+    /** 最近一次特征模型推理（含测速 / 预热）的时间 */
+    @Volatile private var lastFeatT = 0L
+
+    /**
+     * 特征模型预热：弱噪声跑 hubert + rmvpe（不输出），最多 [maxRuns] 次；
+     * 第一次明显比测速慢（>1.5 倍）才跑第二次。返回各次耗时说明。
+     */
+    private fun warmFeat(maxRuns: Int): String {
+        val z = java.util.Random(7).let { r -> FloatArray(16320) { (r.nextFloat() - 0.5f) * 0.01f } }
+        val parts = ArrayList<String>()
+        try {
+            for (k in 0 until maxRuns) {
+                val a = System.nanoTime(); runHubert(z); val b = System.nanoTime(); runRmvpe(z); val c = System.nanoTime()
+                val h = (b - a) / 1_000_000; val r = (c - b) / 1_000_000
+                parts += "hubert=${h} rmvpe=${r}ms"
+                lastFeatT = c
+                if (benchFeatMs > 0 && h + r <= benchFeatMs * 3 / 2) break
+            }
+        } catch (t: Throwable) { L.e("live 特征预热失败", t); parts += "失败" }
+        return parts.joinToString("，")
+    }
 
     /** 骁龙 NPU 跑 HuBERT：成功就替换 CPU 会话，返回新的特征耗时 */
     private fun tryNpuHubert(featMs: Long): Long {
@@ -1078,12 +1113,17 @@ class LiveRvc(private val open0: (String) -> Any?) {
         val t = System.nanoTime()
         val (sp, pre) = splitFor(f, owner) ?: return null
         try {
-            // 前半图跑一次：拿 z 的帧数（NPU 图要固定形状）和一组真实输入做首次校验
+            // 前半图跑一次：拿 z 的帧数（NPU 图要固定形状）；首次校验用固定种子的 3 组输入（同一音色每次判定结果一致）
             val probe = VocPath(owner, pre, sp, "", "probe", { _, _, _, _ -> FloatArray(0) }, {})
-            val (z, zl, har, cond) = preRun(probe, ph, pi, pf)
+            val zl = preRun(probe, ph, pi, pf).zl
+            val samples = checkInputs(ph.size).map { (cp, cpi, cpf) ->
+                val o = preRun(probe, cp, cpi, cpf)
+                check(o.zl == zl) { "前半图 z 帧数不一致 ${o.zl} != $zl" }
+                Triple(o.z, o.har, o.cond)
+            }
             var ref: NeonVocoder.Dec? = null
             val dec = try {
-                QnnVocoder.open(env, dir, sp, zl, Triple(z, har, cond)) { a, b, c, d ->
+                QnnVocoder.open(env, dir, sp, zl, samples) { a, b, c, d ->
                     (ref ?: NeonVocoder.open(sp.blob, effS, false).also { ref = it }).run(a, b, c, d)
                 }
             } finally { runCatching { ref?.close() } }
@@ -1092,6 +1132,17 @@ class LiveRvc(private val open0: (String) -> Any?) {
             return VocPath(owner, pre, sp, dec.desc, "NPU", { a, b, c, d -> dec.run(a, b, c, d) }, { dec.close() })
         } catch (e: Throwable) { pre.close(); throw e }
     }
+
+    /** NPU 声码器校验输入：固定种子（与音色无关），3 组不同音高（约 110 / 220 / 330 Hz），可复现 */
+    private fun checkInputs(n: Int): List<Triple<FloatArray, LongArray, FloatArray>> =
+        listOf(110f, 220f, 330f).mapIndexed { k, hz ->
+            val r = java.util.Random(0x4D4D4E50L + k)
+            val coarse = (1127.0 * kotlin.math.ln(1 + hz / 700.0)).let { m ->
+                val lo = 1127.0 * kotlin.math.ln(1 + 50 / 700.0); val hi = 1127.0 * kotlin.math.ln(1 + 1100 / 700.0)
+                ((m - lo) * 254 / (hi - lo) + 1).toLong().coerceIn(1, 255)
+            }
+            Triple(FloatArray(n) { r.nextFloat() - 0.5f }, LongArray(T) { coarse }, FloatArray(T) { hz })
+        }
 
     private fun runCompat(s: OrtSession, c: Compat, phone: FloatArray, pitch: LongArray, pitchf: FloatArray): FloatArray {
         val d = (phone.size / T).toLong(); val n = T.toLong()

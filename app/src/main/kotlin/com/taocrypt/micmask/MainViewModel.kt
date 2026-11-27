@@ -1151,6 +1151,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         inj.tuneRms = aiRms(); inj.tuneFormant = aiFormant(); inj.tunePl = aiPhaseLock(); inj.tuneDnIn = aiDnIn(); inj.tuneDnOut = aiDnOut()
         inj.tuneMic = aiMic()
         inj.tuneAec = aecMode()
+        inj.tuneCallRecycle = callRecycle()
         syncVp()
     }
     // ---- 声纹门限（设置页「声纹门限」卡片）：可选，默认关；叠加在静音门限之后，只放行像本人的声音
@@ -1431,6 +1432,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (_state.value.liveOn && _state.value.liveMode == 0) Thread { com.taocrypt.micmask.inject.MicInjector.pushTune() }.start()
     }
     /** 软件回声消除（WebRTC AEC3）0=关 1=开；默认关。变声中改了即推给 shell（AI / 普通变声都生效） */
+    /** 通话时自动重新接管（默认开）：进入通话后迟迟看不到目标应用录音时，撤掉注入让它先开麦再接管 */
+    fun callRecycle(): Boolean = prefs.getBoolean("call_recycle", true)
+    fun setCallRecycle(on: Boolean) {
+        prefs.edit().putBoolean("call_recycle", on).apply()
+        com.taocrypt.micmask.inject.MicInjector.tuneCallRecycle = on
+        L.i("UI 通话时自动重新接管 → ${if (on) "开" else "关"}")
+        if (_state.value.liveOn) Thread { com.taocrypt.micmask.inject.MicInjector.pushTune() }.start()
+    }
     fun aecMode(): Int = prefs.getInt("aec_mode", 0)
     fun setAecMode(v: Int) {
         val n = v.coerceIn(0, 1)

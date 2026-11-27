@@ -132,6 +132,10 @@ class InjectorService : Binder {
         const val CHUNK_BYTES = SR / 100 * FRAME_BYTES
         /** 目标开始录音后，先垫一小段静音再放（QQ 开头常会丢一点） */
         const val LEAD_SILENCE_MS = 150
+        /** 进入通话模式后等目标应用开麦的秒数，超过才撤掉注入重新接管（alpha.3 为 2 s） */
+        const val CALL_WAIT_S = 5
+        /** 前台就是目标应用、或手动指定了目标应用时的等待秒数 */
+        const val CALL_WAIT_LONG_S = 10
     }
 
     // ------------------------------------------------------------ 状态
@@ -712,6 +716,16 @@ class InjectorService : Binder {
         list.any { val u = gu.invoke(it) as Int; u >= 10000 && u != callerUid && u != Process.myUid() && u != ShellAudioRecord.REC_UID }
     }.getOrDefault(false)
 
+    /** 前台应用是变声目标时返回包名，否则 null。手动目标：uid 在目标列表；自动识别：第三方应用（非 MicMask、非系统界面/权限弹窗/桌面） */
+    private fun fgTarget(): String? = runCatching {
+        val pkg = fgPkg().takeIf { it != "?" && it.isNotBlank() } ?: return null
+        val uid = runCatching { shellCtx?.packageManager?.getApplicationInfo(pkg, 0)?.uid }.getOrNull() ?: return null
+        if (uid < 10000 || uid == callerUid || uid == Process.myUid() || uid == ShellAudioRecord.REC_UID || pkg == ctx?.packageName) return null
+        if (!scopeAll) return if (uid in targetUids) pkg else null
+        val p = pkg.lowercase()
+        if (p.contains("systemui") || p.contains("permissioncontroller") || p.contains("packageinstaller") || p.contains("launcher")) null else pkg
+    }.getOrNull()
+
     @Volatile private var a11yThread: Thread? = null
     @Volatile private var a11yOn = false
     private var a11yLast = ""
@@ -779,7 +793,18 @@ class InjectorService : Binder {
         return "cgroup=$cg | 频率MHz(当前/上限) $freq | 温度 ${diagTemp()} | 温控状态 ${thermalStatus()} | App电池白名单 ${appWhitelisted()} | 前台 ${fgPkg()}"
     }
 
+    private val diagBusy = java.util.concurrent.atomic.AtomicBoolean(false)
+    /** 后台诊断放到单独线程跑（上一次没跑完就跳过），不占用实时读麦线程；行尾带上本次诊断耗时 */
+    private fun diagAsync() {
+        if (!diagBusy.compareAndSet(false, true)) return
+        Thread({
+            try { val t0 = System.nanoTime(); val d = bgDiag(); slog('I', "后台诊断：$d | 诊断耗时 ${(System.nanoTime() - t0) / 1_000_000}ms") }
+            catch (_: Throwable) {} finally { diagBusy.set(false) }
+        }, "micmask-diag").apply { isDaemon = true; priority = Thread.MIN_PRIORITY; start() }
+    }
+
     private var tempSrcBad = 0          // 位：1 zone 2 hal 4 battery
+    private var zoneMiss = 0
     private var dumpTempT = 0L
     private var dumpTempV = "?"
 
@@ -787,13 +812,10 @@ class InjectorService : Binder {
         fun rd(path: String) = runCatching { java.io.File(path).readText().trim() }.getOrNull()
         fun c(v: Float) = if (v > 1000f) v / 1000f else v
         if (tempSrcBad and 1 == 0) {
-            var tMax = Float.NEGATIVE_INFINITY; var tName = ""
-            java.io.File("/sys/class/thermal").listFiles { f -> f.name.startsWith("thermal_zone") }.orEmpty().forEach { z ->
-                val t = rd("${z.path}/temp")?.toFloatOrNull()?.let { c(it) } ?: return@forEach
-                if (t in 1f..150f && t > tMax) { tMax = t; tName = rd("${z.path}/type") ?: z.name }
-            }
-            if (tMax != Float.NEGATIVE_INFINITY) return "%.1f°C(%s)".format(tMax, tName)
-            tempSrcBad = tempSrcBad or 1
+            val z = zoneTemp()
+            if (z != null) return "%.1f°C(%s)".format(z.first, z.second)
+            // 有 zone 但全无效时下一次再试（可能只是暂时无效），连续 3 次都没有才放弃 zone
+            if (++zoneMiss >= 3) tempSrcBad = tempSrcBad or 1
         }
         if (tempSrcBad and 2 == 0) {
             val h = halTemps()
@@ -802,7 +824,7 @@ class InjectorService : Binder {
         }
         if (tempSrcBad and 4 == 0) {
             val b = rd("/sys/class/power_supply/battery/temp")?.toFloatOrNull()
-            if (b != null) return "电池 %.1f°C".format(b / 10f)
+            if (b != null && b / 10f in -20f..80f) return "电池 %.1f°C(battery)".format(b / 10f)
             tempSrcBad = tempSrcBad or 4
         }
         val now = System.nanoTime()
@@ -824,9 +846,10 @@ class InjectorService : Binder {
     /** 类型：0 CPU 1 GPU 2 电池 3 皮肤（android.os.Temperature） */
     private fun fmtTemps(ts: List<Triple<Float, Int, String>>): String? {
         if (ts.isEmpty()) return null
-        fun mx(type: Int) = ts.filter { it.second == type && it.first in 1f..150f }.maxByOrNull { it.first }
-        val parts = listOfNotNull(mx(0)?.let { "CPU %.1f".format(it.first) }, mx(3)?.let { "皮肤 %.1f".format(it.first) }, mx(2)?.let { "电池 %.1f".format(it.first) })
-        return if (parts.isEmpty()) ts.maxByOrNull { it.first }?.let { "%.1f°C(%s)".format(it.first, it.third) } else parts.joinToString(" ") + "°C"
+        val ok = ts.filter { tempValid(it.third, it.first) }
+        fun mx(type: Int) = ok.filter { it.second == type }.maxByOrNull { it.first }
+        val parts = listOfNotNull(mx(0)?.let { "CPU %.1f(%s)".format(it.first, it.third) }, mx(3)?.let { "皮肤 %.1f(%s)".format(it.first, it.third) }, mx(2)?.let { "电池 %.1f(%s)".format(it.first, it.third) })
+        return if (parts.isEmpty()) ok.maxByOrNull { it.first }?.let { "%.1f°C(%s)".format(it.first, it.third) } else parts.joinToString(" ") + "°C"
     }
 
     private var thermalSvc: Any? = null
@@ -957,6 +980,8 @@ class InjectorService : Binder {
     @Volatile private var tuneAec = 0
     /** 声纹聚焦（Alkove）0=关 1=开（旧版 App 不传 → 关）；接在 aecMode 之后，变声中即时生效。与声纹门限互斥：聚焦开时门限不生效 */
     @Volatile private var tuneFocus = 0
+    /** 通话时自动重新接管（cyclePolicy）开关，默认开（旧版 App 不传 → 开） */
+    @Volatile private var tuneCallRecycle = true
     /** 声纹聚焦：shell 侧处理器（模型在 MODEL_DIR，声纹持久化到 MODEL_DIR/alkove/voiceprint.json），跨引擎重建保留 */
     private val focus by lazy { com.taocrypt.micmask.AlkoveFocus(java.io.File(MODEL_DIR)) }
     /** 当前录音指定的输入设备 id（-1 = 没指定） */
@@ -998,6 +1023,12 @@ class InjectorService : Binder {
                     slog('I', "声纹聚焦参数：${if (tuneFocus != 0) "开" else "关"} 声纹=${if (json.isNullOrEmpty()) "未注册" else "${json.length} 字节"} 模型=${
                         if (com.taocrypt.micmask.AlkoveStore.FILES.all { java.io.File(MODEL_DIR, it).isFile }) "已送达" else "未送达"}" +
                         if (tuneFocus != 0 && tuneVpOn) "（与声纹门限互斥：门限本次不生效）" else "")
+                    // 通话时自动重新接管：追加在声纹聚焦之后（旧版 App 不传 → 开）
+                    if (d.dataAvail() >= 4) {
+                        val cr = d.readInt() != 0
+                        if (cr != tuneCallRecycle) slog('I', "通话时自动重新接管 → ${if (cr) "开" else "关"}")
+                        tuneCallRecycle = cr
+                    }
                 }
             }
             slog('I', "声纹门限参数：${if (tuneVpOn) "开" else "关"} 放行阈值=$tuneVpThr 拦截阈值=${"%.2f".format(com.taocrypt.micmask.VpDecision.thresholds(tuneVpThr).second)} 声纹=${tuneVpEmb?.size ?: 0} 维 模型=${if (models.containsKey(com.taocrypt.micmask.SpeakerEmbedder.MODEL)) "已送达" else "未送达"}")
@@ -1542,7 +1573,7 @@ class InjectorService : Binder {
             // 被系统静音检测（AI / 普通两种模式都查）：连续 2 s 被静音且当前不是原始麦克风 → 改用原始麦克风重建一次
             var silChkT = System.nanoTime(); var silSec = 0
             var diagSec = 0
-            var callSec = 0; var callCycled = false
+            var callSec = 0; var callCycled = false; var callOffSec = 0; var lastMode = -99
             // 0 DEFAULT、1 MIC、5 CAMCORDER、6 VOICE_RECOGNITION、9 UNPROCESSED、10 VOICE_PERFORMANCE
             val silOrder = intArrayOf(1, 6, 5, 9, 10, 0); var silTry = 0; val silTried = LinkedHashSet<Int>(); var silGood = true
             fun silWho(): String = runCatching {
@@ -1572,6 +1603,8 @@ class InjectorService : Binder {
             val tapBuf = ShortArray(hop)
             var statT = System.nanoTime(); var rdMax = 0L; var wrMax = 0L; var obMin = Int.MAX_VALUE; var obMax = 0
             var lastUnder = 0L; var lastRec = -1
+            // 输出积压裁剪（alpha.9）：当前 1 s 窗口内 / 上一个完整窗口的输出缓冲最小值（-1 = 还没有完整窗口）
+            var trimWinMin = Int.MAX_VALUE; var trimLastMin = -1; var trimWinT = System.nanoTime()
             var primed = false
             // 外部模式先攒够再开始放：App 每 300 ms 推一整块，缓冲必须 > 一块，否则每块之间都会断
             var prime = SR * livePrimeMs / 1000
@@ -1647,13 +1680,39 @@ class InjectorService : Binder {
                         am?.activeRecordingConfigurations?.firstOrNull { it.clientAudioSessionId == sid }?.isClientSilenced == true
                     }.getOrDefault(false)
                     // 诊断：每 10 s 记一次推理进程的 cgroup、大核当前频率、最高温度（只记录，不改行为）
-                    if (++diagSec >= 10) { diagSec = 0; runCatching { slog('I', "后台诊断：${bgDiag()}") } }
-                    // 2.1.1-alpha.3：进入通话模式 2 s 仍看不到别的应用录音 → 撤掉注入再重新接管（每次通话一次）
-                    val inCall = runCatching { am?.mode.let { it == android.media.AudioManager.MODE_IN_COMMUNICATION || it == android.media.AudioManager.MODE_IN_CALL } }.getOrDefault(false)
-                    if (!inCall) { callSec = 0; callCycled = false }
-                    else if (!callCycled && ++callSec >= 2) {
-                        if (appRecording()) callCycled = true
-                        else { callCycled = true; cyclePolicy() }
+                    // alpha.9：放到单独线程。TB323FU 上一次诊断（逐个读上百个 thermal_zone 等）要 80~120 ms，
+                    // 在本线程里做会让读麦停顿，随后补读把输出缓冲一下子吃掉 ~100 ms（22:11:43 断流#1 就是诊断 + 裁积压叠在一起）
+                    if (++diagSec >= 10) { diagSec = 0; diagAsync() }
+                    // 2.1.1-alpha.3：进入通话模式后仍看不到别的应用录音 → 撤掉注入再重新接管（每次通话一次）
+                    // alpha.9：等待 2 s → 5 s；前台就是目标应用 / 手动指定了目标时 10 s（QQ 外放去电：响铃期间就进通话模式，
+                    // 接通时模式会短暂离开再进入，接通后 2–3 s 才开麦，TB323FU 实测）。离开通话模式只把计时清零，
+                    // 连续离开 ≥ 3 s 才算这通电话结束（以前一离开就重置「本通已做过」，接通时模式闪一下就又撤一次）
+                    val mode = runCatching { am?.mode ?: -9 }.getOrDefault(-9)
+                    val inCall = mode == android.media.AudioManager.MODE_IN_COMMUNICATION || mode == android.media.AudioManager.MODE_IN_CALL
+                    if (mode != lastMode) {
+                        if (lastMode != -99) slog('I', "音频模式 $lastMode → $mode（${if (inCall) "通话中" else "非通话"}）${recDetail()}")
+                        lastMode = mode
+                    }
+                    if (!inCall) { callSec = 0; if (++callOffSec >= 3) callCycled = false }
+                    else {
+                        callOffSec = 0
+                        if (!callCycled) {
+                            callSec++
+                            if (appRecording()) { callCycled = true; if (callSec > 1) slog('I', "进入通话模式 ${callSec} s 后目标应用已开麦，不用重新接管") }
+                            else {
+                                // 前台判定要走 binder，只在过了短等待之后才查
+                                val fgT = if (scopeAll && callSec >= CALL_WAIT_S) fgTarget() else null
+                                val longWait = !scopeAll || fgT != null
+                                val need = if (longWait) CALL_WAIT_LONG_S else CALL_WAIT_S
+                                if (callSec >= need) {
+                                    callCycled = true
+                                    val why = "进入通话模式 $callSec s 仍没看到目标应用录音（等待上限 ${need} s：" +
+                                        (if (!scopeAll) "手动目标" else if (fgT != null) "前台为目标 $fgT" else "自动识别") + "）"
+                                    if (tuneCallRecycle) cyclePolicy(why)
+                                    else slog('W', "$why ${recDetail()}，已关闭「通话时自动重新接管」，不撤注入")
+                                }
+                            }
+                        }
                     }
                     // 我们没被静音、目标应用却被静音 2 s → 改无障碍录音；改完 3 s 输入比改前底噪低 15 dB 以上 → 判定无效，退回
                     lvlHist.addLast(liveLevelDb); while (lvlHist.size > 3) lvlHist.removeFirst()
@@ -1851,8 +1910,25 @@ class InjectorService : Binder {
                     // 积压超过「预缓冲 + 一块」就丢旧的回到预缓冲：启动时的积压不会一直挂着变成延迟（1.13 实测稳定在 0.7~1 s）
                     // alpha104：只在积压超 1 s 且最近 0.5 s 输出没有人声时才裁，裁掉的是静音而不是半句话
                     // alpha.6：阈值从「预缓冲 + 1 s」降到「预缓冲 + 一块」（至少 250 ms）。OnePlus 0.5 s 档 outBuf 长期 600–1150 ms，一直没到 1580 ms，多挂约半秒
+                    // alpha.9：以前一超过「预缓冲 + 一块」就裁到刚好预缓冲。块是整块推进来的，缓冲本来就在「谷底 ~ 谷底 + 一块」之间锯齿，
+                    // 刚推完一块时裁到预缓冲，下一块到来前只剩 预缓冲 − 块间隔（330 − 260 ≈ 70 ms），读麦稍一停顿就断流（TB323FU 22:11:43）。
+                    // 现改为：只看「谷底」——完整 1 s 窗口里缓冲的最小值仍高于 预缓冲 + 余量，才算持续积压；裁掉的量 = 谷底 − 预缓冲，
+                    // 即把谷底拉回预缓冲（平时谷底本来就在预缓冲以下），裁后至少留 预缓冲 + 余量。余量 = max(120 ms, 半块)
                     val blkS = maxOf(SR / 4, SR * (livePrimeMs - 80).coerceAtLeast(0) / 1000)
-                    if (outRing.size() > prime + blkS && System.nanoTime() - lastVoicedNs > 500_000_000L) { outRing.trimTo(prime); slog('I', "输出积压过多（静音段），丢到预缓冲 ${livePrimeMs}ms") }
+                    val trimJit = maxOf(SR * 120 / 1000, blkS / 2)
+                    val obNow = outRing.size()
+                    if (primed) trimWinMin = minOf(trimWinMin, obNow) else { trimWinMin = 0; trimLastMin = -1 }
+                    if (nowRd - trimWinT >= 1_000_000_000L) { trimWinT = nowRd; trimLastMin = trimWinMin; trimWinMin = Int.MAX_VALUE }
+                    val valley = if (trimLastMin < 0) -1 else minOf(trimLastMin, trimWinMin)
+                    if (obNow > prime + blkS && valley > prime + trimJit && System.nanoTime() - lastVoicedNs > 500_000_000L) {
+                        val keep = maxOf(prime + trimJit, obNow - (valley - prime))
+                        if (keep < obNow) {
+                            outRing.trimTo(keep)
+                            slog('I', "输出积压过多（静音段）：近 1 s 谷底 ${valley * 1000 / SR}ms > 预缓冲 ${livePrimeMs}ms + 余量 ${trimJit * 1000 / SR}ms，" +
+                                "丢掉 ${(obNow - keep) * 1000 / SR}ms，剩 ${keep * 1000 / SR}ms")
+                            trimLastMin = -1; trimWinMin = Int.MAX_VALUE; trimWinT = nowRd
+                        }
+                    }
                     var pk = 0
                     for (i in 0 until hop) { fxBuf[i] = if (i < k) ext[i] / 32768f else 0f; if (i < k) pk = maxOf(pk, kotlin.math.abs(ext[i].toInt())) }
                     if (pk > VOICED_PEAK) lastVoicedNs = System.nanoTime()
@@ -2020,7 +2096,7 @@ class InjectorService : Binder {
         val gen = armGen
         Thread({
             try {
-                slog('W', (why ?: "进入通话模式 2 s 仍没看到目标应用录音") + " ${recDetail()}，撤掉注入让对方先开麦，再重新接管")
+                slog('W', (why ?: "进入通话模式仍没看到目标应用录音") + " ${recDetail()}，撤掉注入让对方先开麦，再重新接管")
                 runCatching { track?.stop() }; runCatching { track?.release() }
                 track = null
                 unregister()
@@ -2030,9 +2106,18 @@ class InjectorService : Binder {
                 Thread.sleep(200)
                 if (!running || gen != armGen) return@Thread
                 val c = shellCtx; val m = am
-                val err = if (c == null || m == null) "没有 Context" else buildAndRegister(targetUids, c, m)
+                // alpha.9：注册失败不再立刻结束变声，间隔 0.3 s 重试 2 次（撤掉期间注入的声音是丢掉的，越快接回越好）
+                var err: String? = null
+                for (i in 0 until 3) {
+                    if (!running || gen != armGen) return@Thread
+                    err = if (c == null || m == null) "没有 Context" else buildAndRegister(targetUids, c, m)
+                    if (err == null) break
+                    slog('W', "重新接管第 ${i + 1} 次失败：$err")
+                    unregister()
+                    Thread.sleep(300)
+                }
                 if (err != null) { slog('E', "重新接管失败：$err"); lastError = err; running = false }
-                else slog('I', "已重新接管（等待 ${(System.nanoTime() - t0) / 1_000_000}ms，${if (seen) "对方已开麦" else "仍没看到对方录音"}）${recDetail()}")
+                else slog('I', "已重新接管（撤掉 ${(System.nanoTime() - t0) / 1_000_000}ms，${if (seen) "对方已开麦" else "仍没看到对方录音"}）${recDetail()}")
             } catch (t: Throwable) { slog('E', "重新接管出错", t) } finally { if (gen == armGen) cycling = false }
         }, "micmask-recycle").apply { isDaemon = true; start() }
     }
@@ -2260,17 +2345,35 @@ class InjectorService : Binder {
         cpuPrevIdle = idle; cpuPrevTotal = total
         if (dt <= 0) -1f else (100f * (dt - di) / dt)
     }.getOrDefault(-1f)
-    private val tempZones: List<java.io.File> by lazy {
-        (java.io.File("/sys/class/thermal").listFiles() ?: emptyArray()).filter { it.name.startsWith("thermal_zone") }.filter { z ->
-            val t = runCatching { java.io.File(z, "type").readText().trim().lowercase() }.getOrDefault("")
-            t.contains("cpu") || t.contains("soc") || t.contains("tsens") || t.contains("mtktscpu")
-        }.map { java.io.File(it, "temp") }
-    }
-    private fun cpuTemp(): Float {
-        var m = -1f
-        for (z in tempZones) { val v = runCatching { z.readText().trim().toFloat() }.getOrNull() ?: continue
-            val c = if (v > 1000) v / 1000f else v; if (c in 1f..150f && c > m) m = c }
-        return m
+    /** 悬浮窗用的 CPU 温度：只认有效的 CPU/SoC 传感器（见 [zoneTemp]），没有返回 -1 */
+    private fun cpuTemp(): Float = zoneTemp(cpuOnly = true)?.first ?: -1f
+
+    // ---- 温度有效性（2.1.1-alpha.9）：TB323FU 的 thermal_zone 里有 cpu-hw-trip-0=105（触发阈值）、pmih010x-ibat-lvl1=146（电流档位），
+    // 以前取所有 zone 最大值，就在 105/146 之间跳。现排除阈值/档位类节点，只认 −20~120 °C，且长期一动不动的高值当常量排除
+    private val tempBadName = Regex("trip|lvl|limit|crit|ibat|vbat|ocp|bcl|thresh|shutdown|cdev", RegexOption.IGNORE_CASE)
+    private val tempCpuName = Regex("cpu|soc|tsens|apc|cluster|gold|silver|prime|mtktscpu|aoss", RegexOption.IGNORE_CASE)
+    private fun tempValid(name: String, c: Float): Boolean = c >= -20f && c <= 120f && c != 0f && !tempBadName.containsMatchIn(name)
+    /** zone 路径 → (上次读数, 连续不变次数)；≥ 90 °C 且连续 6 次（约 1 分钟）完全不变 → 视为常量 */
+    private val zoneSame = HashMap<String, Pair<Float, Int>>()
+    /** 读 thermal_zone：CPU/SoC 类优先取最大，没有再取其他有效节点最大（cpuOnly 时不退）；返回 (°C, 来源名)，没有有效值返回 null */
+    private fun zoneTemp(cpuOnly: Boolean = false): Pair<Float, String>? {
+        fun rd(path: String) = runCatching { java.io.File(path).readText().trim() }.getOrNull()
+        var cpu: Pair<Float, String>? = null; var other: Pair<Float, String>? = null
+        java.io.File("/sys/class/thermal").listFiles { f -> f.name.startsWith("thermal_zone") }.orEmpty().forEach { z ->
+            val raw = rd("${z.path}/temp")?.toFloatOrNull() ?: return@forEach
+            val c = if (raw > 1000f || raw < -1000f) raw / 1000f else raw
+            val name = rd("${z.path}/type") ?: z.name
+            if (!tempValid(name, c)) return@forEach
+            if (!cpuOnly) synchronized(zoneSame) {
+                val prev = zoneSame[z.path]
+                val n = if (prev != null && prev.first == c) prev.second + 1 else 0
+                zoneSame[z.path] = c to n
+                if (c >= 90f && n >= 6) return@forEach
+            }
+            if (tempCpuName.containsMatchIn(name)) { if (cpu == null || c > cpu!!.first) cpu = c to name }
+            else if (other == null || c > other!!.first) other = c to name
+        }
+        return cpu ?: if (cpuOnly) null else other
     }
     private fun selfRssMb(): Int = runCatching {
         java.io.File("/proc/self/status").readLines().first { it.startsWith("VmRSS") }.filter { it.isDigit() }.toInt() / 1024

@@ -706,6 +706,8 @@ object MicInjector {
     /** 声纹聚焦（Alkove）0=关 1=开（与声纹门限互斥，App 侧保证只开一个）；声纹 JSON（null = 未注册，按就近人声） */
     @Volatile var tuneFocus = 0
     @Volatile var tuneFocusPrint: String? = null
+    /** 通话时自动重新接管（2.1.1-alpha.3 的 cyclePolicy）：默认开 */
+    @Volatile var tuneCallRecycle = true
     private fun writeTune(d: android.os.Parcel) { d.writeInt(tuneTier); d.writeFloat(tuneGate); d.writeInt(tuneFeat); d.writeInt(tuneSyn); d.writeInt(if (tunePin) 1 else 0); d.writeFloat(tuneIdx); d.writeInt(tuneVoc); d.writeFloat(tuneRms); d.writeFloat(tuneFormant); d.writeInt(if (tunePl) 1 else 0); d.writeInt(if (tuneDnIn) 1 else 0); d.writeInt(if (tuneDnOut) 1 else 0); d.writeInt(tuneMic)
         // 声纹门限（追加在末尾，旧版 shell 读到 tuneMic 就停，兼容）
         val e = tuneVpEmb
@@ -714,6 +716,8 @@ object MicInjector {
         d.writeInt(tuneAec)
         // 声纹聚焦（Alkove）：追加在 AEC 之后；旧版 shell 读完 aecMode 就停，忽略此段。JSON 每次都带（不管开关），shell 据此持久化
         d.writeInt(tuneFocus); d.writeString(tuneFocusPrint)
+        // 通话时自动重新接管：追加在声纹聚焦之后；旧版 shell 读完聚焦段就停，忽略此字段（按开处理）
+        d.writeInt(if (tuneCallRecycle) 1 else 0)
     }
     /** 变声中录入声纹门限的进度 / 结果（TX_VP_ENROLL 应答）；state 见 InjectorService.TX_VP_ENROLL */
     class VpEnroll(val state: Int, val sec: Int, val levelDb: Float, val err: Int, val detail: String,

@@ -1626,6 +1626,9 @@ private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (St
                 summary = if (aecOn) tr("实验功能，已开：消除耳返/录制预览外放进麦克风的回声；使用通话录音源（系统回声消除）或耳返关闭时自动旁路") else tr("实验功能，默认关闭。外放耳返时可打开试试"))
             SwitchPreference(checked = st.liveMonitor, onCheckedChange = { vm.setLiveMonitor(it) }, title = tr("实时耳返"),
                 summary = tr("变声后的声音送到耳机"))
+            var cr by remember { mutableStateOf(vm.callRecycle()) }
+            SwitchPreference(checked = cr, onCheckedChange = { cr = it; vm.setCallRecycle(it) }, title = tr("通话时自动重新接管"),
+                summary = if (cr) tr("已开：进入通话后迟迟看不到目标应用开麦时，暂时撤掉注入让它先开麦，再重新接管（先开变声再打电话、对方听不到时有用）") else tr("已关：通话中不撤注入。先开变声再打电话对方听不到时，可在通话中关掉再打开变声"))
             var rc by remember { mutableStateOf(vm.recCompat()) }
             SwitchPreference(checked = rc, onCheckedChange = { rc = it; vm.setRecCompat(it) }, title = tr("兼容录音"),
                 summary = tr("录音失败时自动启用，打开则始终使用"))

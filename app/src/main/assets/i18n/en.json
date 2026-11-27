@@ -1223,5 +1223,8 @@
   "注入服务版本较旧，不支持变声中录入：请停止变声后重新开始再试": "The injection service is too old for enrolling during voice changing: stop voice changing, start it again and retry",
   "注入通道不再取声音（可能被游戏或系统接管），正在重建": "The injection channel stopped taking audio (maybe taken over by a game or the system); rebuilding",
   "相似度（近两次平均）高于放行阈值判为本人；低于压低阈值（放行 − 0.07）判为旁人，变声后的声音压低 20 dB；两者之间保持上一判定，本人说完再放行 0.7 秒。本人的字被压低就调低，旁人声音漏进来就调高。默认 {0}": "Similarity (average of the last two) above the pass threshold counts as you; below the lower threshold (pass − 0.07) counts as someone else, and the changed voice is lowered by 20 dB; in between, the previous decision is kept, and your voice keeps passing for 0.7 s after you stop. Lower it if your words get quieted, raise it if other voices leak in. Default {0}",
-  "默认关闭。声纹门限：不像你的声音压低 20 dB；声纹聚焦：从混杂的声音里只留下你的声音再变声": "Off by default. Voiceprint gate: voices that don't sound like you are lowered by 20 dB; Voice focus: keeps only your voice out of the mix before changing it"
+  "默认关闭。声纹门限：不像你的声音压低 20 dB；声纹聚焦：从混杂的声音里只留下你的声音再变声": "Off by default. Voiceprint gate: voices that don't sound like you are lowered by 20 dB; Voice focus: keeps only your voice out of the mix before changing it",
+  "通话时自动重新接管": "Auto re-take over during calls",
+  "已开：进入通话后迟迟看不到目标应用开麦时，暂时撤掉注入让它先开麦，再重新接管（先开变声再打电话、对方听不到时有用）": "On: if the target app still hasn't opened the mic a while after a call starts, injection is briefly removed so the app can open it, then taken over again (helps when you start the changer before calling and the other side hears nothing)",
+  "已关：通话中不撤注入。先开变声再打电话对方听不到时，可在通话中关掉再打开变声": "Off: injection is never removed during calls. If the other side hears nothing when you start the changer before calling, turn the changer off and on again during the call"
 }

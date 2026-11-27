@@ -21,9 +21,28 @@ import java.nio.FloatBuffer
  *  - 48k 重采样尾巴不进图，在 CPU 上做多相 FIR（与 NEON 声码器同一实现）。
  * 首次为某音色 + 块长生成 QNN 上下文缓存（约 5–9 秒），之后从缓存加载（约 0.2 秒）。
  * 首次还会与 fp32 原生声码器比对输出，SNR 不够就判为不可用（回退）。
+ *
+ * 判定稳定性（2.1.1-alpha.9）：
+ *  - 校验输入改为固定种子的多组样本（调用方给），SNR 按总能量合并，同一设备 + 模型 + QNN 版本结果可复现；
+ *    以前用随机输入单次比对，同一音色在阈值附近时每次判定可能不同（实测 17.4 dB 被永久判死）。
+ *  - 滞回：≥ [CHECK_SNR_DB] 启用，< [FAIL_SNR_DB] 才禁用；中间灰区沿用该缓存之前的结论，没有之前结论按不启用。
+ *  - 结论写进 .json（rule=[RULE]），同一进程内同一缓存只判一次，不来回切。
+ *  - 旧规则（无 rule 字段）落在灰区的「不可用」结论按新规则重判一次（需重新生成上下文，约 5–9 秒，只此一次）。
  */
 object QnnVocoder {
     private const val CHECK_SNR_DB = 20.0
+    private const val FAIL_SNR_DB = 15.0
+    private const val RULE = 2
+
+    /** 本进程内已下的结论（缓存路径 → 是否可用），同一会话不重判 */
+    private val verdicts = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
+    /** 滞回判定：≥20 启用，<15 禁用，灰区沿用 prev（没有按不启用） */
+    internal fun verdict(snr: Double, prev: Boolean?): Boolean = when {
+        snr >= CHECK_SNR_DB -> true
+        snr < FAIL_SNR_DB -> false
+        else -> prev ?: false
+    }
 
     @Volatile private var loadedDir: String? = null
 
@@ -296,15 +315,23 @@ object QnnVocoder {
      * 缓存：<拆分目录>/<stem>.qnn<T>_<架构>.ctx.onnx；校验结论 .qnn<T>_<架构>.json（不通过就不再试）。
      * ref = fp32 参考实现（原生声码器），用于首次校验；为 null 时跳过校验。
      */
-    fun open(env: OrtEnvironment, dir: File, split: NeonVocoder.Split, t: Int, sample: Triple<FloatArray, FloatArray, FloatArray?>?,
+    fun open(env: OrtEnvironment, dir: File, split: NeonVocoder.Split, t: Int, samples: List<Triple<FloatArray, FloatArray, FloatArray?>>?,
              ref: ((FloatArray, Int, FloatArray, FloatArray?) -> FloatArray)?): Dec? {
         val arch = QnnPack.deviceArch() ?: return null
         val stem = split.blob.name.removeSuffix(".mmvoc")
         val base = File(split.blob.parentFile, "$stem.qnn${t}_${arch}_${QnnPack.VERSION}")
         val ctx = File(base.path + ".ctx.onnx"); val meta = File(base.path + ".json")
-        if (meta.isFile && runCatching { !org.json.JSONObject(meta.readText()).optBoolean("ok", true) }.getOrDefault(false)) {
-            L.w("NPU 声码器：之前判定不可用（${runCatching { org.json.JSONObject(meta.readText()).optString("why") }.getOrNull()}）"); return null
+        val mj = if (meta.isFile) runCatching { org.json.JSONObject(meta.readText()) }.getOrNull() else null
+        val prevOk: Boolean? = mj?.optBoolean("ok", true)
+        val prevSnr: Double? = mj?.let { j -> j.optDouble("snr").takeIf { !it.isNaN() }
+            ?: Regex("SNR (-?[0-9.]+) dB").find(j.optString("why"))?.groupValues?.get(1)?.toDoubleOrNull() }
+        // 旧规则（随机输入单次比对）落在灰区的「不可用」：按新规则重判一次
+        val recheck = mj != null && prevOk == false && mj.optInt("rule", 1) < RULE && prevSnr != null && prevSnr >= FAIL_SNR_DB
+        val sessionNo = verdicts[base.path] == false
+        if (sessionNo || (prevOk == false && !recheck)) {
+            L.w("NPU 声码器：之前判定不可用（${mj?.optString("why") ?: "本次运行已判定"}）"); return null
         }
+        if (recheck) L.i("NPU 声码器：旧结论 SNR ${"%.1f".format(prevSnr)} dB 在灰区（${FAIL_SNR_DB}–${CHECK_SNR_DB}），按新规则（固定样本 + 滞回）重判一次")
         val sp = parse(split.blob)
         val hasCond = split.cond != null
         val t0 = System.nanoTime()
@@ -329,21 +356,30 @@ object QnnVocoder {
         }
         val loadMs = (System.nanoTime() - t1) / 1_000_000
         val dec = Dec(env, s, sp, t, hasCond, "QNN HTP fp16 $arch · T=$t · 加载 ${loadMs}ms${if (genMs > 0) " · 首次编译 ${genMs}ms" else ""}")
-        if (sample != null && ref != null && !meta.isFile) {
+        if (!samples.isNullOrEmpty() && ref != null && (!meta.isFile || recheck) && verdicts[base.path] == null) {
+            val each = ArrayList<String>()
             val snr = runCatching {
-                val (z, har, cond) = sample
-                val a = ref(z, t, har, cond); val b = dec.run(z, t, har, cond)
                 var sig = 0.0; var err = 0.0
-                for (i in 0 until minOf(a.size, b.size)) { val d = (a[i] - b[i]).toDouble(); sig += a[i].toDouble() * a[i]; err += d * d }
+                for ((z, har, cond) in samples) {
+                    val a = ref(z, t, har, cond); val b = dec.run(z, t, har, cond)
+                    var s1 = 0.0; var e1 = 0.0
+                    for (i in 0 until minOf(a.size, b.size)) { val d = (a[i] - b[i]).toDouble(); s1 += a[i].toDouble() * a[i]; e1 += d * d }
+                    each += "%.1f".format(10 * kotlin.math.log10(s1 / maxOf(e1, 1e-30)))
+                    sig += s1; err += e1
+                }
                 10 * kotlin.math.log10(sig / maxOf(err, 1e-30))
             }.onFailure { L.e("NPU 声码器校验出错", it) }.getOrNull()
             if (snr == null || snr.isNaN()) { dec.close(); return null }   // 出错不记结论
-            val ok = snr >= CHECK_SNR_DB
-            val why = "与 fp32 原生声码器 SNR ${"%.1f".format(snr)} dB（阈值 $CHECK_SNR_DB）"
+            // 重判旧灰区结论时不拿旧的「不可用」当滞回前态（那是随机输入下的结论），只按新阈值判
+            val ok = verdict(snr, if (recheck) null else prevOk)
+            val why = "与 fp32 原生声码器 SNR ${"%.1f".format(snr)} dB（${samples.size} 组固定样本 ${each.joinToString("/")}；启用 ≥$CHECK_SNR_DB，禁用 <$FAIL_SNR_DB）"
             L.i("NPU 声码器校验：$why → ${if (ok) "通过" else "不通过"}")
-            meta.writeText(org.json.JSONObject().put("ok", ok).put("why", why).toString())
+            meta.writeText(org.json.JSONObject().put("ok", ok).put("why", why).put("snr", snr).put("rule", RULE)
+                .put("arch", arch).put("qnn", QnnPack.VERSION).toString())
+            verdicts[base.path] = ok
             if (!ok) { dec.close(); ctx.delete(); return null }
         }
+        verdicts.putIfAbsent(base.path, true)
         return dec
     }
 }
