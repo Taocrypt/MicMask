@@ -62,7 +62,7 @@ tasks.named("compileKotlin") { dependsOn(syncLinkShared, genBuildInfo) }
 
 dependencies {
     // Skia 本地库只带一种：在 Windows 上构建（CI）固定 x64，不随 arm64 等其它平台打包；其它系统（本地开发/自测）用当前平台
-    implementation(if (System.getProperty("os.name").startsWith("Windows")) compose.desktop.windows_x64 else compose.desktop.currentOs)
+    implementation(if (System.getProperty("os.name").startsWith("Windows")) "org.jetbrains.compose.desktop:desktop-jvm-windows-x64:1.12.2" else compose.desktop.currentOs)
     implementation("top.yukonga.miuix.kmp:miuix-ui:0.9.4")
     implementation("top.yukonga.miuix.kmp:miuix-preference:0.9.4")
     implementation("top.yukonga.miuix.kmp:miuix-icons:0.9.4")

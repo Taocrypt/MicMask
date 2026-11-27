@@ -63,6 +63,11 @@ jobs:
         working-directory: desktop
         run: ./gradlew --no-daemon --stacktrace -PappVersion="${{ steps.ver.outputs.version }}" packageReleaseMsi packageReleaseExe
 
+      - name: Packaging logs (on failure)
+        if: failure()
+        run: |
+          for f in $(find desktop/build/compose/logs -type f 2>/dev/null); do echo "===== $f"; tail -n 60 "$f"; done
+
       # 冒烟：把 MSI 管理员解包（等同安装后的文件），运行 MicMask.exe --smoke：
       # 离屏渲染整页 Compose/miuix、Skia DLL、加解密/TLS、Opus 本机回环、mDNS、声卡枚举，再真开窗口 3 秒自动关。
       - name: Smoke test (installed files)
