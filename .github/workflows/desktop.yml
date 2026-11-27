@@ -49,7 +49,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Fetch VB-CABLE (official, unmodified)
@@ -58,20 +58,53 @@ jobs:
           curl -fsSL --retry 3 -o desktop/resources/windows/vbcable/VBCABLE_Driver_Pack46.zip "$VBCABLE_URL"
           echo "$VBCABLE_SHA256  desktop/resources/windows/vbcable/VBCABLE_Driver_Pack46.zip" | sha256sum -c -
 
-      - name: Package MSI / EXE
+      # release 构建：ProGuard 摇树 + jlink 精简 JDK（只带 build.gradle.kts 里 modules(...) 列的模块）+ 只带 x64 Skia
+      - name: Package MSI / EXE (release)
         working-directory: desktop
-        run: ./gradlew --no-daemon --stacktrace -PappVersion="${{ steps.ver.outputs.version }}" packageMsi packageExe
+        run: ./gradlew --no-daemon --stacktrace -PappVersion="${{ steps.ver.outputs.version }}" packageReleaseMsi packageReleaseExe
+
+      # 冒烟：把 MSI 管理员解包（等同安装后的文件），运行 MicMask.exe --smoke：
+      # 离屏渲染整页 Compose/miuix、Skia DLL、加解密/TLS、Opus 本机回环、mDNS、声卡枚举，再真开窗口 3 秒自动关。
+      - name: Smoke test (installed files)
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem desktop/build/compose/binaries/main-release/msi/*.msi | Select-Object -First 1
+          $dst = Join-Path $env:RUNNER_TEMP 'mm-msi'
+          $p = Start-Process msiexec.exe -ArgumentList '/a', "`"$($msi.FullName)`"", '/qn', "TARGETDIR=`"$dst`"" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "msiexec /a 失败：$($p.ExitCode)" }
+          $exe = Get-ChildItem $dst -Recurse -Filter MicMask.exe | Select-Object -First 1
+          if (-not $exe) { throw '解包后没找到 MicMask.exe' }
+          Write-Host "运行 $($exe.FullName)"
+          $log = Join-Path $env:RUNNER_TEMP 'micmask-smoke.txt'
+          $app = Start-Process $exe.FullName -ArgumentList '--smoke', "--smoke-out=$log" -PassThru
+          $null = $app.Handle  # 先拿句柄，否则进程退出后 ExitCode 读不到
+          if (-not $app.WaitForExit(180000)) { $app.Kill(); throw '自测超时（180 秒）' }
+          if (Test-Path $log) { Get-Content $log -Encoding UTF8 } else { Write-Host '没有自测日志' }
+          $vb = Get-ChildItem $dst -Recurse -Filter VBCABLE_Driver_Pack46.zip | Select-Object -First 1
+          if (-not $vb) { throw '安装包里没有 VB-CABLE 包' }
+          $rt = (Get-ChildItem (Join-Path $exe.DirectoryName 'runtime') -Recurse -File | Measure-Object Length -Sum).Sum
+          $ap = (Get-ChildItem (Join-Path $exe.DirectoryName 'app') -Recurse -File | Measure-Object Length -Sum).Sum
+          Write-Host ("解包体积：runtime {0:N1} MB，app {1:N1} MB" -f ($rt/1MB), ($ap/1MB))
+          if ($app.ExitCode -ne 0) { throw "自测失败，退出码 $($app.ExitCode)" }
 
       - name: Collect
         run: |
           VER="${{ steps.ver.outputs.version }}"
           mkdir -p dist
-          MSI=$(ls desktop/build/compose/binaries/main/msi/*.msi | head -n1)
-          EXE=$(ls desktop/build/compose/binaries/main/exe/*.exe | head -n1)
+          MSI=$(ls desktop/build/compose/binaries/main-release/msi/*.msi | head -n1)
+          EXE=$(ls desktop/build/compose/binaries/main-release/exe/*.exe | head -n1)
           cp "$MSI" "dist/MicMask-$VER-windows-x64.msi"
           cp "$EXE" "dist/MicMask-$VER-windows-x64-setup.exe"
           ( cd dist && sha256sum * > SHA256SUMS.txt )
           ls -l dist
+
+      - name: Upload smoke log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test-log
+          path: ${{ runner.temp }}/micmask-smoke.txt
+          if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4
         with:

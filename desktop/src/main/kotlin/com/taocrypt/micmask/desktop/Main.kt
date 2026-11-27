@@ -59,7 +59,36 @@ import top.yukonga.miuix.kmp.theme.ThemeController
  * 第一版只有中文界面（i18n 与手机共用 en.json 放到 KMP 改造时做）。
  */
 
-fun main() = application {
+fun main(args: Array<String>) {
+    if ("--smoke" in args) smokeMain(args) else gui()
+}
+
+/** --smoke：先跑无界面自测；有桌面时再真开一次窗口（Skia 走本机 DLL/D3D）约 3 秒后自动关，期间任何未捕获异常都算失败 */
+private fun smokeMain(args: Array<String>) {
+    var code = SelfTest.run(args)
+    if (!java.awt.GraphicsEnvironment.isHeadless() && "--no-window" !in args) {
+        val err = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
+        Thread.setDefaultUncaughtExceptionHandler { _, e -> err.compareAndSet(null, e) }
+        val t0 = System.currentTimeMillis()
+        runCatching {
+            application {
+                Window(onCloseRequest = ::exitApplication, title = "MicMask 自测", state = rememberWindowState(size = DpSize(560.dp, 860.dp))) {
+                    MiuixTheme(controller = remember { ThemeController(ColorSchemeMode.System) }) { App() }
+                    LaunchedEffect(Unit) { kotlinx.coroutines.delay(3000); DeskLink.shutdown(); exitApplication() }
+                }
+            }
+        }.onFailure { err.compareAndSet(null, it) }
+        val e = err.get()
+        val msg = if (e == null) "PASS  window  (${System.currentTimeMillis() - t0} ms)" else "FAIL  window  ${e.javaClass.name}: ${e.message}"
+        println(msg)
+        val f = args.firstOrNull { it.startsWith("--smoke-out=") }?.substringAfter('=') ?: java.io.File(System.getProperty("java.io.tmpdir"), "micmask-smoke.txt").path
+        runCatching { java.io.File(f).appendText(msg + "\n" + (if (e == null && code == 0) "WINDOW OK" else "WINDOW FAILED") + "\n") }
+        if (e != null) code = 1
+    }
+    kotlin.system.exitProcess(code)
+}
+
+private fun gui() = application {
     val icon = remember { runCatching { BitmapPainter(javax.imageio.ImageIO.read(Thread.currentThread().contextClassLoader.getResourceAsStream("micmask.png")).toComposeImageBitmap()) }.getOrNull() }
     val state = rememberWindowState(size = DpSize(560.dp, 860.dp))
     Window(onCloseRequest = { DeskLink.shutdown(); DeskBeacon.flush(); exitApplication() }, state = state, title = "MicMask", icon = icon) {
@@ -70,7 +99,7 @@ fun main() = application {
 private val Pad = PaddingValues(horizontal = 12.dp)
 
 @Composable
-private fun App() {
+internal fun App() {
     LaunchedEffect(Unit) {
         DeskLink.addLog("MicMask 电脑版 ${BuildInfo.VERSION} 启动；${System.getProperty("os.name")} ${System.getProperty("os.version")}，Java ${System.getProperty("java.version")}")
         DeskLink.startDiscovery()

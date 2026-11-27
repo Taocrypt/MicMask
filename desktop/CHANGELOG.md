@@ -11,4 +11,6 @@
   - 发送：电脑所选录音设备 → 开着「接收」的手机（手机注入 QQ / 微信 / 游戏）
 - 附带 VB-CABLE 官方驱动包（VB-Audio Software，捐赠软件，vb-cable.com）：未安装时可一键以管理员身份安装
 - 检查更新（GitHub Release 的 win-v 标签）；公告 / 赞赏墙 / 使用统计接口已接好，本版未启用
+- 安装包瘦身：jlink 只带需要的 JDK 模块、release 构建开 ProGuard（只摇树不混淆）、只带 x64 Skia；改用 JDK 21 运行时（miuix 需要 Java 21）
+- 自测：`MicMask.exe --smoke`（CI 每次在解包后的安装文件上跑：界面离屏渲染、加密/TLS、Opus 回环、mDNS、声卡枚举、真开窗口 3 秒）
 - 已知限制：音频走 javax.sound（DirectSound），延迟比 WASAPI 高；还不能按进程抓声音；界面只有中文
