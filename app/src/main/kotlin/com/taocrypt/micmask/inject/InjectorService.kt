@@ -102,7 +102,7 @@ class InjectorService : Binder {
         const val TX_OUT_STATE = 23
         /** 实时 AI 高级参数：tier(int) gateDb(float) featThreads(int) synThreads(int) …（见 readTune；末尾可带声纹门限 on(int) thr(float) n(int) n×float，其后可带软件回声消除 aecMode(int 0关 1开)，再其后可带声纹聚焦 focus(int 0关 1开) printJson(String，可为 null)） */
         const val TX_LIVE_TUNE = 24
-        /** 变声中换音色：新合成器已由 TX_LIVE_MODELS 送到，重启推理（麦克风通道不断，换的这一两秒输出静音） */
+        /** 变声中换音色：新合成器已由 TX_LIVE_MODELS 送到，热切换推理：旧音色继续出声到新合成器就绪再交叉淡化换上；热切换做不了才退回停下重载（2.1.1-alpha.10） */
         const val TX_LIVE_RELOAD = 25
         /**
          * 变声中录入声纹门限（2.1.1-alpha.6）：从实时链路（与打分同一录音源 / 设备 / 系统 AEC·NS）取本人声音，在 shell 里算嵌入。
@@ -132,10 +132,8 @@ class InjectorService : Binder {
         const val CHUNK_BYTES = SR / 100 * FRAME_BYTES
         /** 目标开始录音后，先垫一小段静音再放（QQ 开头常会丢一点） */
         const val LEAD_SILENCE_MS = 150
-        /** 进入通话模式后等目标应用开麦的秒数，超过才撤掉注入重新接管（alpha.3 为 2 s） */
-        const val CALL_WAIT_S = 5
-        /** 前台就是目标应用、或手动指定了目标应用时的等待秒数 */
-        const val CALL_WAIT_LONG_S = 10
+        /** 进入通话模式后等目标应用开麦的秒数，超过才撤掉注入重新接管（alpha.3 为 2 s；alpha.9 曾改 5/10 s，alpha.10 改回 2 s） */
+        const val CALL_WAIT_S = 2
     }
 
     // ------------------------------------------------------------ 状态
@@ -388,8 +386,8 @@ class InjectorService : Binder {
                 }
                 TX_LIVE_RELOAD -> {
                     val ok = running && liveExternal && engine != null
-                    slog('I', "变声中换音色：${if (ok) "重启推理" else "未在 AI 变声，忽略"}")
-                    if (ok) startEngine()
+                    slog('I', "变声中换音色：${if (ok) "热切换（旧音色继续出声，新合成器就绪后交叉淡化换上）" else "未在 AI 变声，忽略"}")
+                    if (ok) hotSwapEngine()
                     reply?.writeNoException()
                     reply?.writeInt(if (ok) 1 else 0)
                     return true
@@ -1026,7 +1024,7 @@ class InjectorService : Binder {
                     // 通话时自动重新接管：追加在声纹聚焦之后（旧版 App 不传 → 开）
                     if (d.dataAvail() >= 4) {
                         val cr = d.readInt() != 0
-                        if (cr != tuneCallRecycle) slog('I', "通话时自动重新接管 → ${if (cr) "开" else "关"}")
+                        if (cr != tuneCallRecycle) slog('I', "通话接管 → ${if (cr) "开" else "关"}")
                         tuneCallRecycle = cr
                     }
                 }
@@ -1067,35 +1065,69 @@ class InjectorService : Binder {
             // 串行：上一次启动（比如还在加载模型时就又切了音色）做完再开始，避免两个线程同时 load 同一个引擎
             synchronized(engineLock) {
                 if (my != startSeq) return@synchronized
-                try {
-                    runCatching { android.os.Process.setThreadPriority(-16) }
-                    val e = ensureEngine().also { engine = it }
-                    if (synthDirty) { synthDirty = false; e.dropSynth() }
-                    e.semis = liveSemis.toInt()
-                    e.io = object : com.taocrypt.micmask.LiveRvc.Io {
-                        override fun pull(max: Int): ShortArray {
-                            val tmp = ShortArray(minOf(max, micRing.size()))
-                            val k = micRing.read(tmp, 0, tmp.size)
-                            return if (k == tmp.size) tmp else tmp.copyOf(k)
-                        }
-                        override fun push(pcm: ShortArray) { outRing.write(pcm, 0, pcm.size) }
-                    }
-                    engineState = "加载模型"
-                    e.load({ msg -> engineState = msg })
-                    if (!running) { engineState = ""; return@synchronized }
-                    if (my != startSeq) { slog('I', "推理启动被新的切换取代"); return@synchronized }
-                    micRing.clear()
-                    e.start()
-                    engineState = "运行"
-                    engGen++
-                    slog('I', "shell 推理已启动（进程内，不经 App）")
-                } catch (t: Throwable) {
-                    if (my != startSeq) { slog('W', "旧的推理启动失败（已被新的切换取代）：${describe(t)}"); return@synchronized }
-                    engineState = "失败：" + describe(t)
-                    slog('E', "shell 推理启动失败", t)
-                }
+                coldStart(my)
             }
         }, "engine-start").start()
+    }
+
+    /**
+     * 变声中换音色（2.1.1-alpha.10）：不停推理，旧音色一直出声到新合成器就绪（见 LiveRvc.hotSwap），输出缓冲不被读空。
+     * 引擎没在跑、维度不兼容等热切换做不了时，退回以前的「停下 → 重载 → 重启」。
+     */
+    private fun hotSwapEngine() {
+        if (!inApp) com.taocrypt.micmask.L.sink = { lv, m -> slog(lv, m) }
+        val my = ++startSeq
+        Thread({
+            synchronized(engineLock) {
+                if (my != startSeq) return@synchronized
+                val e = engine
+                if (!running) return@synchronized
+                val why = if (e == null || !e.isRunning || engineState != "运行") "推理没在运行"
+                    else try {
+                        runCatching { android.os.Process.setThreadPriority(-16) }
+                        e.hotSwap({ msg -> engineState = msg },
+                            onLive = { engineState = "运行"; engGen++; slog('I', "热切换音色：新音色已出声（引擎代数 $engGen）") },
+                            stale = { my != startSeq || !running })
+                    } catch (t: Throwable) { slog('E', "热切换音色异常", t); describe(t) }
+                if (why == null) { synthDirty = false; return@synchronized }
+                if (why.isEmpty()) { if (running && e?.isRunning == true) engineState = "运行"; return@synchronized }   // 被新的切换取代：旧音色还在跑
+                if (my != startSeq || !running) return@synchronized
+                slog('W', "热切换音色不可用（$why），改为停下重载：这段输出用静音平滑填充")
+                engine?.stop()
+                coldStart(my)
+            }
+        }, "engine-start").start()
+    }
+
+    /** 冷启动推理（在 engineLock 里调）：加载模型 → 开始；换音色时先丢掉旧合成器 */
+    private fun coldStart(my: Int) {
+        try {
+            runCatching { android.os.Process.setThreadPriority(-16) }
+            val e = ensureEngine().also { engine = it }
+            if (synthDirty) { synthDirty = false; e.dropSynth() }
+            e.semis = liveSemis.toInt()
+            e.io = object : com.taocrypt.micmask.LiveRvc.Io {
+                override fun pull(max: Int): ShortArray {
+                    val tmp = ShortArray(minOf(max, micRing.size()))
+                    val k = micRing.read(tmp, 0, tmp.size)
+                    return if (k == tmp.size) tmp else tmp.copyOf(k)
+                }
+                override fun push(pcm: ShortArray) { outRing.write(pcm, 0, pcm.size) }
+            }
+            engineState = "加载模型"
+            e.load({ msg -> engineState = msg })
+            if (!running) { engineState = ""; return }
+            if (my != startSeq) { slog('I', "推理启动被新的切换取代"); return }
+            micRing.clear()
+            e.start()
+            engineState = "运行"
+            engGen++
+            slog('I', "shell 推理已启动（进程内，不经 App）")
+        } catch (t: Throwable) {
+            if (my != startSeq) { slog('W', "旧的推理启动失败（已被新的切换取代）：${describe(t)}"); return }
+            engineState = "失败：" + describe(t)
+            slog('E', "shell 推理启动失败", t)
+        }
     }
 
     // ------------------------------------------------------------ 实时变声
@@ -1119,6 +1151,8 @@ class InjectorService : Binder {
     @Volatile private var tierPrimeMs = 0
     private val micRing = ShortRing(SR * 3)
     private val outRing = ShortRing(SR * 3)
+    /** 目标开麦（其他应用录音数 0 → ≥1）的时刻，看门狗线程置、liveLoop 取走处理；0 = 无（2.1.1：按住说话开头的旧积压裁剪） */
+    private val tgtOpenNs = java.util.concurrent.atomic.AtomicLong(0L)
     /** 外部（AI）输出里最近一次出现人声的时刻；峰值约 -30 dBFS 以上算有声 */
     @Volatile private var lastVoicedNs = 0L
     private val VOICED_PEAK = 1000
@@ -1511,10 +1545,19 @@ class InjectorService : Binder {
             curRec = rec
             micHint = ""; recRebuilds = 0
             // 看门狗：0.6 s 读不到麦克风数据（流失效、切路由、音频服务重启）就停掉当前录音，让主循环重建
+            tgtOpenNs.set(0L)
             watchdog = Thread({
                 var micChk = 0
+                var tgtPrev = -1
                 while (running) {
                     runCatching { Thread.sleep(200) }
+                    // 目标开麦检测（只 AI 外部模式用）：放在看门狗线程（每 200 ms 一次），不在读麦/写出的主循环里做 binder 调用。
+                    // 第一次只记基线：开始变声时目标已在录不算开麦
+                    if (liveExternal) {
+                        val rc = recCount()
+                        if (tgtPrev == 0 && rc > 0) tgtOpenNs.set(System.nanoTime())
+                        tgtPrev = rc
+                    } else tgtPrev = -1
                     val r = curRec ?: continue
                     // 中途插拔耳机：每 1 s 按「输入麦克风」设置重选一次，变了就改录音的首选设备（不重建录音）
                     if (++micChk >= 5) {
@@ -1600,6 +1643,12 @@ class InjectorService : Binder {
             val outBytes = ByteArray(hop * FRAME_BYTES)
             val rnd = java.util.Random()
             val ext = ShortArray(hop)
+            // 去爆音（2.1.1-alpha.10）：断流时从最后一个样本 5 ms 线性收到 0（以前是硬切成 0，咔一声）；重新起播的第一个 10 ms 余弦淡入
+            val declickN = SR / 200
+            val rampIn = FloatArray(hop) { i -> (0.5 - 0.5 * Math.cos(Math.PI * (i + 0.5) / hop)).toFloat() }
+            var lastExt = 0f; var fadeInNext = false
+            // 目标开麦裁掉旧积压后，下一帧开头 5 ms 从上一样本平滑接过去（裁剪处前后两段不连续）
+            var joinNext = false
             val tapBuf = ShortArray(hop)
             var statT = System.nanoTime(); var rdMax = 0L; var wrMax = 0L; var obMin = Int.MAX_VALUE; var obMax = 0
             var lastUnder = 0L; var lastRec = -1
@@ -1684,8 +1733,7 @@ class InjectorService : Binder {
                     // 在本线程里做会让读麦停顿，随后补读把输出缓冲一下子吃掉 ~100 ms（22:11:43 断流#1 就是诊断 + 裁积压叠在一起）
                     if (++diagSec >= 10) { diagSec = 0; diagAsync() }
                     // 2.1.1-alpha.3：进入通话模式后仍看不到别的应用录音 → 撤掉注入再重新接管（每次通话一次）
-                    // alpha.9：等待 2 s → 5 s；前台就是目标应用 / 手动指定了目标时 10 s（QQ 外放去电：响铃期间就进通话模式，
-                    // 接通时模式会短暂离开再进入，接通后 2–3 s 才开麦，TB323FU 实测）。离开通话模式只把计时清零，
+                    // QQ 外放去电：响铃期间就进通话模式，接通时模式会短暂离开再进入，接通后 2–3 s 才开麦（TB323FU 实测）。离开通话模式只把计时清零，
                     // 连续离开 ≥ 3 s 才算这通电话结束（以前一离开就重置「本通已做过」，接通时模式闪一下就又撤一次）
                     val mode = runCatching { am?.mode ?: -9 }.getOrDefault(-9)
                     val inCall = mode == android.media.AudioManager.MODE_IN_COMMUNICATION || mode == android.media.AudioManager.MODE_IN_CALL
@@ -1700,16 +1748,14 @@ class InjectorService : Binder {
                             callSec++
                             if (appRecording()) { callCycled = true; if (callSec > 1) slog('I', "进入通话模式 ${callSec} s 后目标应用已开麦，不用重新接管") }
                             else {
-                                // 前台判定要走 binder，只在过了短等待之后才查
-                                val fgT = if (scopeAll && callSec >= CALL_WAIT_S) fgTarget() else null
-                                val longWait = !scopeAll || fgT != null
-                                val need = if (longWait) CALL_WAIT_LONG_S else CALL_WAIT_S
+                                // alpha.10：等待改回 2 s（alpha.9 的 5/10 s 会让 vivo 先开变声再打微信的无声变长：微信要等我们撤了才开麦）。
+                                // TB323FU 的问题在于接通时模式闪一下又撤一次，已由「每通只撤一次 + 连续离开 ≥ 3 s 才算结束」解决，与等待长短无关
+                                val need = CALL_WAIT_S
                                 if (callSec >= need) {
                                     callCycled = true
-                                    val why = "进入通话模式 $callSec s 仍没看到目标应用录音（等待上限 ${need} s：" +
-                                        (if (!scopeAll) "手动目标" else if (fgT != null) "前台为目标 $fgT" else "自动识别") + "）"
+                                    val why = "进入通话模式 $callSec s 仍没看到目标应用录音（等待上限 ${need} s，${if (!scopeAll) "手动目标" else "自动识别"}）"
                                     if (tuneCallRecycle) cyclePolicy(why)
-                                    else slog('W', "$why ${recDetail()}，已关闭「通话时自动重新接管」，不撤注入")
+                                    else slog('W', "$why ${recDetail()}，已关闭「通话接管」，不撤注入")
                                 }
                             }
                         }
@@ -1903,7 +1949,7 @@ class InjectorService : Binder {
                     liveLevelDb = (10 * Math.log10(e2 / hop + 1e-12)).toFloat()
                     liveFrames++
                     prime = SR * livePrimeMs / 1000   // 引擎定档后会改
-                    if (!primed && outRing.size() >= prime) primed = true
+                    if (!primed && outRing.size() >= prime) { primed = true; fadeInNext = true }
                     var k = if (primed) outRing.read(ext, 0, hop) else 0
                     val ob = outRing.size(); obMin = minOf(obMin, ob); obMax = maxOf(obMax, ob)
                     if (primed && k < hop) { underruns++; primed = false; slog('W', "断流#$underruns：输出缓冲只剩 ${k * 1000 / SR}ms"); engine?.takeIf { engineState == "运行" }?.noteTrouble("断流") }
@@ -1916,11 +1962,33 @@ class InjectorService : Binder {
                     // 即把谷底拉回预缓冲（平时谷底本来就在预缓冲以下），裁后至少留 预缓冲 + 余量。余量 = max(120 ms, 半块)
                     val blkS = maxOf(SR / 4, SR * (livePrimeMs - 80).coerceAtLeast(0) / 1000)
                     val trimJit = maxOf(SR * 120 / 1000, blkS / 2)
-                    val obNow = outRing.size()
+                    var obNow = outRing.size()
                     if (primed) trimWinMin = minOf(trimWinMin, obNow) else { trimWinMin = 0; trimLastMin = -1 }
                     if (nowRd - trimWinT >= 1_000_000_000L) { trimWinT = nowRd; trimLastMin = trimWinMin; trimWinMin = Int.MAX_VALUE }
                     val valley = if (trimLastMin < 0) -1 else minOf(trimLastMin, trimWinMin)
-                    if (obNow > prime + blkS && valley > prime + trimJit && System.nanoTime() - lastVoicedNs > 500_000_000L) {
+                    // 目标开麦（按住说话 / 接通）：这一刻 outRing 里全是按下之前的旧音频（缓冲里的音频比现在晚 端到端 + 缓冲 ≈ 0.6 s 以上），
+                    // 一次性裁掉多出来的部分，让按下后的第一句早点进对方录音。下限与静音段裁剪完全相同：把近 1 s 谷底拉回预缓冲，且至少留 预缓冲 + 余量，
+                    // 不按人声与否、不要求谷底超过余量；谷底没高于预缓冲就不裁。检测晚于 0.5 s（看门狗被卡）或还没有完整 1 s 统计就不裁，避免裁到按下后的声音或在不明状态下裁
+                    var joinArm = false
+                    val openEv = tgtOpenNs.getAndSet(0L)
+                    if (openEv != 0L) {
+                        val late = (nowRd - openEv) / 1_000_000
+                        val keep = if (valley < 0) obNow else maxOf(prime + trimJit, obNow - (valley - prime))
+                        val why = when {
+                            !primed -> "未在出声（预缓冲中），不裁"
+                            late > 500 -> "检测晚了 ${late}ms，不裁（避免裁到按下后的声音）"
+                            valley < 0 -> "还没有完整 1 s 的缓冲统计，不裁"
+                            keep >= obNow -> "近 1 s 谷底 ${valley * 1000 / SR}ms 未高于预缓冲 ${livePrimeMs}ms，已在下限"
+                            else -> null
+                        }
+                        if (why == null) {
+                            outRing.trimTo(keep); joinArm = true
+                            slog('I', "目标开麦：裁掉旧积压 ${(obNow - keep) * 1000 / SR}ms，剩 ${keep * 1000 / SR}ms（近 1 s 谷底 ${valley * 1000 / SR}ms，预缓冲 ${livePrimeMs}ms + 余量 ${trimJit * 1000 / SR}ms）")
+                            trimLastMin = -1; trimWinMin = Int.MAX_VALUE; trimWinT = nowRd
+                            obNow = keep
+                        } else slog('I', "目标开麦：裁掉旧积压 0ms，剩 ${obNow * 1000 / SR}ms（$why）")
+                    }
+                    if (!joinArm && obNow > prime + blkS && valley > prime + trimJit && System.nanoTime() - lastVoicedNs > 500_000_000L) {
                         val keep = maxOf(prime + trimJit, obNow - (valley - prime))
                         if (keep < obNow) {
                             outRing.trimTo(keep)
@@ -1931,6 +1999,18 @@ class InjectorService : Binder {
                     }
                     var pk = 0
                     for (i in 0 until hop) { fxBuf[i] = if (i < k) ext[i] / 32768f else 0f; if (i < k) pk = maxOf(pk, kotlin.math.abs(ext[i].toInt())) }
+                    if (fadeInNext && k > 0) { for (i in 0 until k) fxBuf[i] *= rampIn[i]; fadeInNext = false }
+                    if (joinNext && k > 0) {
+                        val n = minOf(k, declickN)
+                        for (j in 0 until n) { val a = (j + 1f) / (n + 1); fxBuf[j] = lastExt * (1f - a) + fxBuf[j] * a }
+                        joinNext = false
+                    }
+                    if (joinArm) joinNext = true
+                    if (k < hop) {
+                        val a = if (k > 0) fxBuf[k - 1] else lastExt
+                        if (a != 0f) { val n = minOf(hop - k, declickN); for (j in 0 until n) fxBuf[k + j] = a * (n - 1 - j) / n }
+                    }
+                    lastExt = fxBuf[hop - 1]
                     if (pk > VOICED_PEAK) lastVoicedNs = System.nanoTime()
                     fx.process(fxBuf, hop); voiceTap(fxBuf, hop); mixSfx(fxBuf, hop)
                     for (i in 0 until hop) {

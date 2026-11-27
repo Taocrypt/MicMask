@@ -319,7 +319,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // 开始实时变声时引擎会测速/读缓存，把结果记到当前音色上（自动降档的临时结果不记）
         com.taocrypt.micmask.inject.MicInjector.onBench = { r ->
             val v = _state.value.liveVoice
-            if (v.isNotEmpty() && !r.contains("自动") && _state.value.voicePending.isEmpty()) {
+            // 「声码器准备中」是热切换音色后的临时摘要（ORT 整图先出声），等 NEON/NPU 换上后的最终摘要再记
+            if (v.isNotEmpty() && !r.contains("自动") && !r.contains("准备中") && _state.value.voicePending.isEmpty()) {
                 ctx.getSharedPreferences("live", 0).edit().putString("bench_$v", r).apply()
                 _state.value = _state.value.copy(liveBench = r)
             }
@@ -1437,7 +1438,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setCallRecycle(on: Boolean) {
         prefs.edit().putBoolean("call_recycle", on).apply()
         com.taocrypt.micmask.inject.MicInjector.tuneCallRecycle = on
-        L.i("UI 通话时自动重新接管 → ${if (on) "开" else "关"}")
+        L.i("UI 通话接管 → ${if (on) "开" else "关"}")
         if (_state.value.liveOn) Thread { com.taocrypt.micmask.inject.MicInjector.pushTune() }.start()
     }
     fun aecMode(): Int = prefs.getInt("aec_mode", 0)
@@ -2102,6 +2103,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         BeaconHub.event("voice_switch", mapOf("hot" to hot, "builtin" to (v == ModelStore.DEFAULT_VOICE)))
         if (!hot) { refreshVoices(); return }
         // 变声中：把新音色的合成器送给 shell，只重载合成器（HuBERT/RMVPE 不动），麦克风通道不断。
+        // 2.1.1-alpha.10 起 shell 热切换：旧音色一直出声到新合成器就绪，交叉淡化换上（不断流）；NPU/NEON 声码器之后在后台换上。
         // 状态行等引擎真正用新音色跑起来（引擎代数 gen 增加）后才换成新音色和它的测速
         voiceSwitching = true
         val label = ModelStore.voiceLabel(v)
@@ -2146,7 +2148,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 L.i("UI 热切换音色 $v 结果=${msg ?: "成功"}")
                 if (msg == null) {
                     val b = inj.benchNow
-                    if (b.isNotEmpty() && !b.contains("自动")) lp.edit().putString("bench_$v", b).apply()
+                    if (b.isNotEmpty() && !b.contains("自动") && !b.contains("准备中")) lp.edit().putString("bench_$v", b).apply()
                     _state.value = _state.value.copy(voicePending = "", voiceStage = "")
                     refreshVoices()
                     if (b.isNotEmpty()) _state.value = _state.value.copy(liveBench = b)

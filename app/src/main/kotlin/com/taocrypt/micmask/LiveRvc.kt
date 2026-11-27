@@ -96,14 +96,17 @@ class LiveRvc(private val open0: (String) -> Any?) {
         /** 门限拖尾：出现人声后至少再推理这么多块，避免句尾半块人声半块静音被整块吞掉（2410DPN6CC） */
         const val GATE_HOLD = 2
         /** 相位锁定模型多一个输入 ph0[1,1,1]；没有就原样。调用方负责 run 完关闭（这里的小张量随 GC 释放） */
-        private val phBuf: FloatBuffer = java.nio.ByteBuffer.allocateDirect(4).order(java.nio.ByteOrder.nativeOrder()).asFloatBuffer()
-        @Volatile private var phT: OnnxTensor? = null
-        /** 共用一个直接内存张量（推理在单线程里串行），改 buffer 即改值，不每块新建 */
+        /** 每个线程一个直接内存张量（推理在合成线程里串行），改 buffer 即改值，不每块新建。
+         *  按线程分开（2.1.1-alpha.10）：热切换音色时后台测速与合成线程同时跑，共用一个会互相改掉 ph0 */
+        private val phLocal = ThreadLocal<Pair<FloatBuffer, OnnxTensor>>()
         fun withPh0(env: OrtEnvironment, s: OrtSession, m: Map<String, OnnxTensor>, ph: Float): Map<String, OnnxTensor> {
             if (PhaseLock.INPUT !in s.inputNames) return m
-            val t = phT ?: synchronized(phBuf) { phT ?: OnnxTensor.createTensor(env, phBuf, longArrayOf(1, 1, 1)).also { phT = it } }
-            phBuf.put(0, ph)
-            return m + (PhaseLock.INPUT to t)
+            val p = phLocal.get() ?: run {
+                val b = java.nio.ByteBuffer.allocateDirect(4).order(java.nio.ByteOrder.nativeOrder()).asFloatBuffer()
+                (b to OnnxTensor.createTensor(env, b, longArrayOf(1, 1, 1))).also { phLocal.set(it) }
+            }
+            p.first.put(0, ph)
+            return m + (PhaseLock.INPUT to p.second)
         }
 
         fun modelPresent(ctx: Context) = ModelStore.voices(ctx).isNotEmpty()
@@ -349,6 +352,9 @@ class LiveRvc(private val open0: (String) -> Any?) {
     }
     private val fadeIn = FloatArray(XF_FR * UPP) { i -> (0.5 - 0.5 * cos(PI * (i + 0.5) / (XF_FR * UPP))).toFloat() }
 
+    /** 测速缓存的键：本音色各合成器文件 + 档位 + 线程 */
+    private fun pickKey() = NETG_FILES.joinToString(",") { n -> "$n:" + ((open(n) as? File)?.let { "${it.parentFile?.name}/${it.length()}@${it.lastModified()}" } ?: -1) } + "|t$tier f$effF s$effS"
+
     /** force=true：忽略缓存重新测速（「性能测试」按钮） */
     fun load(onLog: (String) -> Unit, force: Boolean = false) {
         if (netG != null && !force) return
@@ -412,7 +418,7 @@ class LiveRvc(private val open0: (String) -> Any?) {
             val blockMs get() = (len - XF_FR) * 10
         }
         fun ratio(c: Cand) = (if (serial) c.ms + featMs else maxOf(c.ms, featMs)).toDouble() / c.blockMs
-        val key = NETG_FILES.joinToString(",") { n -> "$n:" + ((open(n) as? File)?.let { "${it.parentFile?.name}/${it.length()}@${it.lastModified()}" } ?: -1) } + "|t$tier f$effF s$effS"
+        val key = pickKey()
         var chosen: Cand? = null
         runCatching {
             // 每个音色一条（4 行一组），换来换去不用重测
@@ -658,6 +664,148 @@ class LiveRvc(private val open0: (String) -> Any?) {
         // 流式有约一块的延迟：去掉开头的延迟段，长度对齐输入
         val lead = minOf(maxOf(0, y.size - pcm48.size), XF)
         return y.copyOfRange(minOf(lead, y.size), minOf(y.size, lead + pcm48.size))
+    }
+
+    /** 推理流水线是否在跑（热切换音色要求在跑） */
+    val isRunning get() = running
+
+    /**
+     * 变声中热切换音色（2.1.1-alpha.10）。以前换音色要先停推理再重载，停的这段输出缓冲被读空（断流、爆音），
+     * 新音色首次用 NPU 还要等编译 4–9 s 才出声。现在：
+     * 1. 旧合成器照常出声，本线程加载新合成器（测速缓存命中照用；没命中沿用当前文件名/块长，不在变声中整套测速）并试跑一次；
+     * 2. 在块边界原子换上：特征线程先切特征维度/检索索引，再在合成线程里换合成器，前后块的顺序不乱；
+     *    新音色首块与旧音色尾巴照常走 50 ms 交叉淡化。先用 ORT 整图出声，[onLive] 回调；
+     * 3. 后台按设置准备 NEON / NPU 声码器（含首次编译），好了再在合成线程换上；[stale] 为 true（又切换了 / 停了）就放弃。
+     * 返回 null = 已换上；"" = 被新的切换取代，什么都不用做；其他 = 不能热切换的原因，调用方退回「停下重载」。
+     */
+    fun hotSwap(onLog: (String) -> Unit, onLive: () -> Unit, stale: () -> Boolean): String? {
+        if (!running || netG == null || hubert == null || rmvpe == null) return "推理没在运行"
+        if (shifting) return "正在自动换档"
+        shifting = true   // 换的过程中不触发自动降档（降档也会换合成器会话）
+        try { return hotSwap0(onLog, onLive, stale) } finally { shifting = false }
+    }
+
+    private fun hotSwap0(onLog: (String) -> Unit, onLive: () -> Unit, stale: () -> Boolean): String? {
+        val t0 = System.nanoTime()
+        fun ms(t: Long) = (System.nanoTime() - t) / 1_000_000
+        fun opts() = OrtSession.SessionOptions().apply {
+            setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+            setIntraOpNumThreads(effS); setInterOpNumThreads(1)
+        }
+        val key = pickKey()
+        var name: String? = null
+        runCatching {
+            val c = pickCache?.takeIf { it.exists() }?.readText()?.split("\n").orEmpty().chunked(4).firstOrNull { it.size == 4 && it[0] == key }
+            if (c != null && open(c[1]) != null) name = c[1]
+        }
+        val cached = name != null
+        if (name == null) name = curName?.takeIf { open(it) != null }
+            ?: NETG_FILES.firstOrNull { !it.endsWith("_compat.onnx") && open(it) != null } ?: NETG_FILES.firstOrNull { open(it) != null }
+        val pick = name ?: return "缺流式合成器模型"
+        onLog("加载合成器 …")
+        val f = open(pick) ?: return "缺模型 $pick"
+        val tl = System.nanoTime()
+        val ns = try { when (f) { is File -> OrtLoad.create(env, f) { opts() }; else -> env.createSession(f.toString(), opts()) } }
+                 catch (t: Throwable) { L.e("live 热切换：加载 $pick 失败", t); return "加载 $pick 失败" }
+        var owned = false   // ns 交给流水线后由流水线负责关闭
+        try {
+            L.i("live 热切换：加载 $pick ${((f as? File)?.length() ?: 0L) shr 20}MB 用时 ${ms(tl)}ms（${if (cached) "测速缓存" else "无测速缓存，沿用当前块长对应文件"}）")
+            val ne = embOf(ns)
+            if (ne == 256 && hubert?.outputNames?.contains("feat9") == false) return "RVC v1 音色需要新版基础模型"
+            if (ne != emb && hubertNpu) return "NPU HuBERT 与新音色特征维度不同"
+            val ph = FloatArray(T * ne) { (Math.random().toFloat() - 0.5f) }
+            val pi = LongArray(T) { 120 }; val pf = FloatArray(T) { 300f }
+            val cp = compatOf(ns)
+            // 试跑：拿块长，顺便把权重页跑热（第一块不会因冷启动慢）
+            val tr = System.nanoTime()
+            val nl = runCatching { (if (cp != null) runCompat(ns, cp, ph, pi, pf) else runOrt(ns, ph, pi, pf)).size / UPP }
+                .onFailure { L.e("live 热切换：试跑 $pick 失败", it) }.getOrDefault(-1)
+            val ortMs1 = ms(tr)
+            if (nl <= XF_FR) return "试跑新合成器失败"
+            val ix = (open(ModelStore.LIVE_INDEX) as? File)?.let { fi ->
+                runCatching { micmask.core.FaissIvfIndex.load(fi) }.onFailure { L.e("live 检索索引加载失败", it) }.getOrNull()
+            }?.takeIf { x -> (x.d == ne).also { if (!it) L.w("live 检索索引维度 ${x.d} 与模型 $ne 不符，忽略") } }
+            if (stale()) { L.i("live 热切换：已被新的切换取代，不换 $pick"); return "" }
+            // 换上：特征线程先切维度/索引（之后的块按新维度抽特征），再排到合成线程（排在之前各块的合成之后）
+            val st = java.util.concurrent.atomic.AtomicInteger(0)   // 0 等待 1 已换 2 调用方已放弃等待
+            val done = java.util.concurrent.CountDownLatch(1)
+            var oldS: OrtSession? = null; var oldV: VocPath? = null
+            featExec.execute {
+                emb = ne; index = ix
+                synExec.execute {
+                    val os = netG; val ov = voc
+                    netG = ns; voc = null; curName = pick; noB50Logged = false
+                    val blk0 = BLOCK
+                    LEN = nl; CUT = if (tier == 3 && nl == 35) 5 else 0
+                    startT = System.nanoTime(); synchronized(trouble) { trouble.clear() }
+                    if (BLOCK != blk0) onConfig?.invoke(BLOCK * 10)
+                    if (st.compareAndSet(0, 1)) { oldS = os; oldV = ov } else { runCatching { ov?.close() }; runCatching { os?.close() } }
+                    done.countDown()
+                }
+            }
+            owned = true
+            if (!done.await(10, java.util.concurrent.TimeUnit.SECONDS) && st.compareAndSet(0, 2)) {
+                L.w("live 热切换：流水线 10 s 没轮到换合成器（会在轮到时换上）")
+                return null
+            }
+            runCatching { oldV?.close() }; runCatching { oldS?.close() }
+            if (index != null) L.i("live 检索索引：${ix?.ntotal} 条 × ${ix?.d} 维，${ix?.nlist} 簇，比例 $indexRate")
+            L.i("live 特征维度 $emb（${if (emb == 256) "RVC v1" else "RVC v2"}）${if (cp != null) " 兼容模式" else ""}")
+            val wantVoc = vocoder != 1 && cp == null && f is File
+            benchSummary = hotSummary(ortMs1, cp != null, "") + if (wantVoc) " · 声码器准备中" else ""
+            benchCfg = "ORT;${if (hubertNpu) 1 else 0}"
+            L.i("live 热切换：已换上 $pick（ORT 整图出声，块长 ${BLOCK * 10}ms），从开始切换到出声 ${ms(t0)}ms，旧音色一直出声到换上为止")
+            if (pinBig) CpuPin.pinSelf("热切换后")
+            onLive()
+            if (!wantVoc) return null
+            // ---- 阶段 2：后台准备 NEON / NPU 声码器（与推理并行，测速偏慢但两边同样偏慢）
+            val tv = System.nanoTime()
+            val ortMs = if (vocoder == 0 && !stale()) runCatching {
+                runOrt(ns, ph, pi, pf); val t = System.nanoTime(); repeat(3) { runOrt(ns, ph, pi, pf) }; (System.nanoTime() - t) / 3_000_000
+            }.getOrDefault(-1L) else ortMs1
+            fun bench(vp: VocPath): Long? = runCatching {
+                runSplit(vp, ph, pi, pf, rec = false)
+                val m = LongArray(2)
+                repeat(3) { runSplit(vp, ph, pi, pf, rec = false, ms = m) }
+                L.i("live 声码器测速：${vp.kind} 前半图 ${m[0] / 3}ms + 声码器 ${m[1] / 3}ms = ${(m[0] + m[1]) / 3}ms（${vp.desc}，与推理并行测）")
+                (m[0] + m[1]) / 3
+            }.onFailure { L.e("live 声码器 ${vp.kind} 试跑失败", it) }.getOrNull()
+            val cands = ArrayList<Pair<VocPath, Long>>()
+            if ((vocoder == 0 || vocoder == 2) && !stale()) runCatching { buildVoc(f, ns) }.onFailure { L.e("live NEON 声码器准备失败", it) }.getOrNull()
+                ?.let { vp -> bench(vp)?.let { cands += vp to it } ?: vp.close() }
+            if ((vocoder == 0 || vocoder == 3) && !stale()) runCatching { buildNpu(f, ns, ph, pi, pf) }.onFailure { L.e("live NPU 声码器准备失败", it) }.getOrNull()
+                ?.let { vp -> bench(vp)?.let { cands += vp to it } ?: vp.close() }
+            val forced = cands.firstOrNull { (vocoder == 2 && it.first.kind == "NEON") || (vocoder == 3 && it.first.kind == "NPU") }
+            val best = forced ?: cands.minByOrNull { it.second }?.takeIf { ortMs < 0 || it.second * 100 < ortMs * 95 }
+            for ((vp, _) in cands) if (vp !== best?.first) vp.close()
+            if (best == null || stale()) {
+                best?.first?.close()
+                benchSummary = hotSummary(ortMs, false, "")
+                L.i(if (stale()) "live 热切换：声码器准备被新的切换/停止取代，留在 ORT 整图" else "live 声码器：用 ORT 整图（${ortMs}ms）${if (cands.isNotEmpty()) "，拆分通路不更快" else ""}")
+                return null
+            }
+            val ok = java.util.concurrent.CountDownLatch(1)
+            val put = java.util.concurrent.atomic.AtomicBoolean(false)
+            synExec.execute {
+                if (netG === ns && running) { voc = best.first; startT = System.nanoTime(); synchronized(trouble) { trouble.clear() }; put.set(true) }
+                ok.countDown()
+            }
+            runCatching { ok.await(5, java.util.concurrent.TimeUnit.SECONDS) }
+            if (!put.get()) { best.first.close(); benchSummary = hotSummary(ortMs, false, ""); L.i("live 热切换：合成器已变，新声码器作废"); return null }
+            val note = if (best.first.kind == "NPU") " · NPU 声码器" else " · NEON 声码器"
+            benchSummary = hotSummary(best.second, false, note)
+            benchCfg = "${best.first.kind};${if (hubertNpu) 1 else 0}"
+            L.i("live 热切换：声码器换成 ${best.first.kind}${if (forced != null) "（设置指定）" else "（${best.second}ms，ORT 整图 ${ortMs}ms）"}，后台准备用时 ${ms(tv)}ms（期间 ORT 整图出声）")
+            if (pinBig) CpuPin.pinSelf("热切换声码器后")
+            return null
+        } finally { if (!owned) runCatching { ns.close() } }
+    }
+
+    /** 与 [load] 末尾同格式的测速摘要（热切换用；特征耗时沿用上次测速） */
+    private fun hotSummary(synMs: Long, compat: Boolean, vocNote: String): String {
+        val featMs = benchFeatMs
+        val tn = if (BLOCK <= 25) "高级" else if (BLOCK <= 30) "标准" else "省电"
+        return (if (compat) "兼容模式·" else "") + "${tn}档：每步 ${BLOCK * 10}ms · 特征 ${featMs}ms · 合成 ${synMs}ms · 负载 ${"%.0f".format((if (serial) synMs + featMs else maxOf(synMs, featMs)) * 100.0 / (BLOCK * 10))}%${if (serial) " · 串行" else ""}$vocNote"
     }
 
     fun stop() {
@@ -1066,12 +1214,15 @@ class LiveRvc(private val open0: (String) -> Any?) {
     }
 
     /** ORT 前半图（z / har / cond）→ NEON / NPU 声码器 → 48k 波形 */
-    private fun runSplit(v: VocPath, phone: FloatArray, pitch: LongArray, pitchf: FloatArray): FloatArray {
+    /** [rec]=false：测速用（热切换时与推理并行跑），不改 lastPreMs/lastDecMs、不计入统计；耗时写进 [ms]（前半图, 声码器） */
+    private fun runSplit(v: VocPath, phone: FloatArray, pitch: LongArray, pitchf: FloatArray, rec: Boolean = true, ms: LongArray? = null): FloatArray {
         val t0 = System.nanoTime()
         val p = preRun(v, phone, pitch, pitchf)
         val t1 = System.nanoTime()
         val y = v.dec(p.z, p.zl, p.har, p.cond)
         val t2 = System.nanoTime()
+        ms?.let { it[0] += (t1 - t0) / 1_000_000; it[1] += (t2 - t1) / 1_000_000 }
+        if (!rec) return y
         lastPreMs = (t1 - t0) / 1_000_000; lastDecMs = (t2 - t1) / 1_000_000
         if (running) synchronized(this) { stPre.add(lastPreMs); stDec.add(lastDecMs) }
         return y
