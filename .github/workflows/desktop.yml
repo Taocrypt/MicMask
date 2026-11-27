@@ -91,6 +91,8 @@ jobs:
           $ap = (Get-ChildItem (Join-Path $exe.DirectoryName 'app') -Recurse -File | Measure-Object Length -Sum).Sum
           Write-Host ("解包体积：runtime {0:N1} MB，app {1:N1} MB" -f ($rt/1MB), ($ap/1MB))
           if ($app.ExitCode -ne 0) { throw "自测失败，退出码 $($app.ExitCode)" }
+          if (-not (Select-String -Path $log -Pattern 'SMOKE OK' -SimpleMatch -Quiet)) { throw '无界面自测没通过' }
+          if (-not (Select-String -Path $log -Pattern 'WINDOW OK' -SimpleMatch -Quiet)) { throw '窗口自测没通过' }
 
       - name: Collect
         run: |

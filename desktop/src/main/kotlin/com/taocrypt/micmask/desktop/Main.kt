@@ -70,8 +70,16 @@ private fun smokeMain(args: Array<String>) {
         val err = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
         Thread.setDefaultUncaughtExceptionHandler { _, e -> err.compareAndSet(null, e) }
         val t0 = System.currentTimeMillis()
+        val f = args.firstOrNull { it.startsWith("--smoke-out=") }?.substringAfter('=') ?: java.io.File(System.getProperty("java.io.tmpdir"), "micmask-smoke.txt").path
+        // 看门狗：窗口 30 秒内没正常关掉（卡死/异常后挂住）就记失败并强退
+        Thread({
+            Thread.sleep(30_000)
+            runCatching { java.io.File(f).appendText("FAIL  window  timeout\nWINDOW FAILED\n") }
+            Runtime.getRuntime().halt(1)
+        }, "smoke-watchdog").apply { isDaemon = true }.start()
         runCatching {
-            application {
+            // exitProcessOnExit = false：关窗后回到这里写结果（默认会直接 exitProcess(0)，吞掉失败）
+            application(exitProcessOnExit = false) {
                 Window(onCloseRequest = ::exitApplication, title = "MicMask 自测", state = rememberWindowState(size = DpSize(560.dp, 860.dp))) {
                     MiuixTheme(controller = remember { ThemeController(ColorSchemeMode.System) }) { App() }
                     LaunchedEffect(Unit) { kotlinx.coroutines.delay(3000); DeskLink.shutdown(); exitApplication() }
@@ -81,7 +89,6 @@ private fun smokeMain(args: Array<String>) {
         val e = err.get()
         val msg = if (e == null) "PASS  window  (${System.currentTimeMillis() - t0} ms)" else "FAIL  window  ${e.javaClass.name}: ${e.message}"
         println(msg)
-        val f = args.firstOrNull { it.startsWith("--smoke-out=") }?.substringAfter('=') ?: java.io.File(System.getProperty("java.io.tmpdir"), "micmask-smoke.txt").path
         runCatching { java.io.File(f).appendText(msg + "\n" + (if (e == null && code == 0) "WINDOW OK" else "WINDOW FAILED") + "\n") }
         if (e != null) code = 1
     }
