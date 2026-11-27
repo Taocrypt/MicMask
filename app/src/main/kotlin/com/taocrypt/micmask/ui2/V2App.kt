@@ -1545,36 +1545,40 @@ private fun VoiceprintCard(vm: MainViewModel, st: UiState, mode: Int, setMode: (
     WindowDropdownPreference(items = listOf(tr("关"), tr("声纹门限"), tr("声纹聚焦（Alkove）")), selectedIndex = mode, title = tr("声纹模式"),
         summary = when (mode) {
             1 -> when {
-                data == null -> tr("未录入声纹，录入后生效。只有像你本人的声音才会被变声，旁人说话按静音处理（AI 实时变声）")
+                data == null -> tr("未录入声纹，录入后生效。像你本人的声音正常变声，旁人说话变声后压低 20 dB（AI 实时变声）")
                 !model -> tr("打开时会下载声纹模型（约 27 MB）")
-                else -> tr("只有像你本人的声音才会被变声，旁人说话按静音处理（AI 实时变声）。叠加在静音门限之后")
+                else -> tr("像你本人的声音正常变声，旁人说话变声后压低 20 dB（AI 实时变声）。叠加在静音门限之后")
             }
             2 -> when {
                 !fModel -> tr("选择时会下载声纹聚焦模型（约 4.5 MB）")
                 fTime == null -> tr("未注册声纹：按就近人声运行，保留离麦克风最近、最响的人声。注册后只保留你的声音（AI 实时变声）")
                 else -> tr("只保留你的声音，压低旁人说话和背景声后再变声（AI 实时变声）")
             }
-            else -> tr("默认关闭。声纹门限：不像你的声音按静音处理；声纹聚焦：从混杂的声音里只留下你的声音再变声")
+            else -> tr("默认关闭。声纹门限：不像你的声音压低 20 dB；声纹聚焦：从混杂的声音里只留下你的声音再变声")
         },
         enabled = !busy,
         onSelectedIndexChange = { m -> if (m != mode) vm.setVpMode(m) { r -> setMode(r); gen++ } })
     if (busy && mode == 0) Text(prog ?: "", Modifier.padding(horizontal = 16.dp, vertical = 4.dp), fontSize = 12.sp, color = Summary)
     if (mode == 1) {
+        // 2.1.1-alpha.6：变声中也能录入，走实时链路（与打分同一录音源 / 设备 / 系统处理，分数更准）；未变声时仍在 App 内用机身麦录
         ArrowPreference(title = if (data == null) tr("录入声纹") else tr("重新录入声纹"),
-            summary = prog ?: if (data == null) tr("在安静环境用平常的音量连续说约 {0} 秒", com.taocrypt.micmask.Voiceprint.ENROLL_S)
-                else tr("已录入 · {0}", fmt(data.time)),
-            enabled = !st.liveOn,
+            summary = prog ?: when {
+                data == null && st.liveOn -> tr("变声中录入（推荐）：用平常的音量连续说约 {0} 秒，直接取实时链路的声音", com.taocrypt.micmask.Voiceprint.ENROLL_S)
+                data == null -> tr("在安静环境用平常的音量连续说约 {0} 秒。建议开着变声录入，分数更准", com.taocrypt.micmask.Voiceprint.ENROLL_S)
+                data.source == com.taocrypt.micmask.Voiceprint.SRC_LIVE -> tr("已录入（变声中） · {0}", fmt(data.time))
+                else -> tr("已录入（未变声时） · {0}。开着变声重新录入，分数更准", fmt(data.time))
+            },
             onClick = {
                 if (busy) vm.vpCancelEnroll()
                 else if (!vm.hasMicPermission()) { permFor = 1; perm.launch(android.Manifest.permission.RECORD_AUDIO) }
                 else vm.vpEnroll { gen++ }
             })
-        if (st.liveOn && data == null) Text(tr("变声中不能录入，先关闭变声"), Modifier.padding(horizontal = 16.dp), fontSize = 12.sp, color = Summary)
         Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-            Row { Text(tr("相似度阈值"), Modifier.weight(1f), fontSize = 14.sp); Text("%.2f".format(thr), color = Summary) }
+            Row { Text(tr("放行阈值"), Modifier.weight(1f), fontSize = 14.sp)
+                Text(tr("放行 {0} / 压低 {1}", "%.2f".format(thr), "%.2f".format(com.taocrypt.micmask.VpDecision.thresholds(thr).second)), color = Summary) }
             Slider(value = thr, onValueChange = { thr = (it * 20).roundToInt() / 20f; vm.setVpThr(thr) }, valueRange = 0.1f..0.7f, steps = 11,
                 onValueChangeFinished = { vm.commitAiTune() })
-            Text(tr("越高越严：本人的字被吞就调低，旁人声音漏进来就调高。默认 {0}", "%.2f".format(com.taocrypt.micmask.SpeakerGate.DEFAULT_THR)), fontSize = 12.sp, color = Summary)
+            Text(tr("相似度（近两次平均）高于放行阈值判为本人；低于压低阈值（放行 − 0.07）判为旁人，变声后的声音压低 20 dB；两者之间保持上一判定，本人说完再放行 0.7 秒。本人的字被压低就调低，旁人声音漏进来就调高。默认 {0}", "%.2f".format(com.taocrypt.micmask.SpeakerGate.DEFAULT_THR)), fontSize = 12.sp, color = Summary)
         }
         if (data != null && !busy) ArrowPreference(title = tr("删除声纹"), summary = tr("删除录入的声纹并关闭声纹门限"),
             onClick = { vm.vpDelete(); setMode(0); gen++ })
@@ -1661,7 +1665,7 @@ private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (St
             ArrowPreference(title = tr("音频还原"), summary = tr("应用没声音时点这里还原"), onClick = { vm.repairAudio() })
             ArrowPreference(title = tr("使用教程"), summary = tr("安装、模式、AI 变声与常见问题"), onClick = { open("manual") })
             var bw by remember { mutableStateOf(vm.batteryWhitelisted()) }
-            ArrowPreference(title = tr("电池白名单"), summary = if (bw) tr("已加入，后台不易被系统限制") else tr("未加入，点此一键加入（切后台卡顿时试试）"),
+            ArrowPreference(title = tr("电池白名单"), summary = if (bw) tr("已加入。只影响 App 进程（界面、悬浮窗），不影响 shell 注入进程里的变声推理") else tr("未加入，点此一键加入。只影响 App 进程（界面、悬浮窗），对 shell 注入进程里的变声推理无效，切后台卡顿通常不是它造成的"),
                 onClick = { vm.addBatteryWhitelist { bw = it } })
             ArrowPreference(title = tr("关于 MicMask"), summary = tr("v{0} · 更新、反馈、赞赏", com.taocrypt.micmask.BuildConfig.VERSION_NAME), onClick = { open("about") })
         }

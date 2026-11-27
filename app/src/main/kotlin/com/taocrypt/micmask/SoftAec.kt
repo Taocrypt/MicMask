@@ -39,11 +39,13 @@ class SoftAec(private val log: (Char, String) -> Unit) {
     private val rf = FloatArray(FRAME)
     private val cf = FloatArray(FRAME)
 
-    // 统计（每 10 s 由调用方取一次 [report] 后清零）：每帧 render+analyze+process 耗时
+    // 统计（由调用方定时取一次 [report] 后清零）：每帧 render+analyze+process 耗时；参考 / 麦克风处理前后能量（int16 刻度）
     private val costs = LongArray(1200)
     private var nCost = 0
     private var maxCost = 0L
     private var pendingRenderNs = 0L
+    private var refE = 0.0; private var inE = 0.0; private var outE = 0.0
+    private var nRef = 0L; private var nCap = 0L
 
     val ready: Boolean get() = ec != null && failed == null
 
@@ -59,6 +61,16 @@ class SoftAec(private val log: (Char, String) -> Unit) {
             rBuf = createAec3AudioBuffer(SR, 1)
             cBuf = createAec3AudioBuffer(SR, 1)
             log('I', "AEC：已初始化（WebRTC AEC3，${SR / 1000} kHz 单声道，10 ms 帧）")
+            // 2.1.1-alpha.6：记录默认配置里和延迟相关的值（只记录，不改默认），排查外放大延迟时对照
+            runCatching {
+                val j = org.json.JSONObject(c.toJson())
+                val root = j.optJSONObject("aec3") ?: j
+                val d = root.optJSONObject("delay")
+                val f = root.optJSONObject("filter")
+                val b = root.optJSONObject("buffering")
+                log('I', "AEC：默认配置（未修改）delay=${d?.toString()?.take(500) ?: "?"} buffering=${b?.toString()?.take(200) ?: "?"} " +
+                    "filter.config_change_duration_blocks=${f?.opt("config_change_duration_blocks") ?: "?"} filter.initial_state_seconds=${f?.opt("initial_state_seconds") ?: "?"}")
+            }.onFailure { log('W', "AEC：读默认配置失败（${it.javaClass.simpleName}）") }
         }
     }
 
@@ -67,7 +79,9 @@ class SoftAec(private val log: (Char, String) -> Unit) {
         if (!ensure()) return false
         val t0 = System.nanoTime()
         val ok = guard("参考信号") {
-            for (i in 0 until FRAME) rf[i] = if (i < n) pcm[i].toFloat() else 0f
+            var e = 0.0
+            for (i in 0 until FRAME) { val v = if (i < n) pcm[i].toFloat() else 0f; rf[i] = v; e += v.toDouble() * v }
+            refE += e; nRef += FRAME
             rBuf!!.writeChannel(0, rf)
             ec!!.analyzeRender(rBuf!!)
         }
@@ -80,7 +94,8 @@ class SoftAec(private val log: (Char, String) -> Unit) {
         if (!ensure()) { pendingRenderNs = 0; return false }
         val t0 = System.nanoTime()
         val ok = guard("处理麦克风") {
-            for (i in 0 until FRAME) cf[i] = inp[i].toFloat()
+            var ei = 0.0
+            for (i in 0 until FRAME) { val v = inp[i].toFloat(); cf[i] = v; ei += v.toDouble() * v }
             val b = cBuf!!
             b.writeChannel(0, cf)
             ec!!.analyzeCapture(b)
@@ -89,6 +104,9 @@ class SoftAec(private val log: (Char, String) -> Unit) {
             val m = minOf(FRAME, y.size)
             for (i in 0 until m) { val v = y[i]; out[i] = (if (v >= 32767f) 32767 else if (v <= -32768f) -32768 else v.toInt()).toShort() }
             for (i in m until FRAME) out[i] = 0
+            var eo = 0.0
+            for (i in 0 until FRAME) eo += out[i].toDouble() * out[i]
+            inE += ei; outE += eo; nCap += FRAME
         }
         val dt = System.nanoTime() - t0 + pendingRenderNs
         pendingRenderNs = 0
@@ -96,7 +114,9 @@ class SoftAec(private val log: (Char, String) -> Unit) {
         return ok
     }
 
-    /** 统计行（不含前缀），并清零耗时统计；没有帧时返回 null */
+    private fun db(e: Double, n: Long) = if (n <= 0) "?" else "%.0f".format(10 * kotlin.math.log10(e / n / (32768.0 * 32768.0) + 1e-12))
+
+    /** 统计行（不含前缀），并清零统计；没有帧时返回 null。含 ERL/ERLE/估计延迟、参考电平、麦克风处理前/后电平（dBFS） */
     fun report(): String? {
         val e = ec ?: return null
         if (failed != null || nCost == 0) return null
@@ -106,9 +126,10 @@ class SoftAec(private val log: (Char, String) -> Unit) {
             val a = costs.copyOf(nCost); a.sort()
             val p50 = a[a.size / 2]
             line = "ERL=${"%.1f".format(m.echoReturnLoss)} ERLE=${"%.1f".format(m.echoReturnLossEnhancement)} 估计延迟=${m.delayMs} ms " +
+                "参考电平=${db(refE, nRef)}dB 麦克风 处理前=${db(inE, nCap)}dB 处理后=${db(outE, nCap)}dB " +
                 "耗时 p50/最大=${"%.2f".format(p50 / 1e6)}/${"%.2f".format(maxCost / 1e6)} ms（${nCost} 帧）"
         }
-        nCost = 0; maxCost = 0
+        nCost = 0; maxCost = 0; refE = 0.0; inE = 0.0; outE = 0.0; nRef = 0; nCap = 0
         return line
     }
 
@@ -118,7 +139,7 @@ class SoftAec(private val log: (Char, String) -> Unit) {
         runCatching { ec?.close() }
         runCatching { factory?.close() }; runCatching { env?.close() }; runCatching { cfg?.close() }
         rBuf = null; cBuf = null; ec = null; factory = null; env = null; cfg = null
-        nCost = 0; maxCost = 0; pendingRenderNs = 0
+        nCost = 0; maxCost = 0; pendingRenderNs = 0; refE = 0.0; inE = 0.0; outE = 0.0; nRef = 0; nCap = 0
     }
 
     private inline fun guard(what: String, block: () -> Unit): Boolean = try {

@@ -161,6 +161,50 @@ object SpeakerFbank {
         val d = sqrt(aa * bb); return if (d < 1e-12) 0f else (ab / d).toFloat()
     }
 
+    /** [voicedOnly] 的结果：只含有声段的样本、有声时长（ms）、有声段平均电平（dBFS，没有有声段为 -120） */
+    class Voiced(val x: FloatArray, val speechMs: Int, val levelDb: Float)
+
+    /**
+     * 截掉静音（2.1.1-alpha.6，声纹门限）：按 [segMs] 分段，与 [speechMs] 同一判据（≥ max([floorDb], 最响段 - [relDb])）挑出有声段，
+     * 按时间顺序拼接，只保留最后 [maxMs] 毫秒（0 = 不限）。段与段接缝处做 1 ms 线性淡入淡出，避免拼接咔嗒声影响 fbank。
+     * 录入与实时打分都用它，两边的嵌入都只看「有声」部分，有声时长要求一致。
+     */
+    fun voicedOnly(x: FloatArray, sr: Int, floorDb: Float, relDb: Float = 30f, segMs: Int = 20, maxMs: Int = 0): Voiced {
+        val seg = sr * segMs / 1000
+        if (seg <= 0 || x.size < seg) return Voiced(FloatArray(0), 0, -120f)
+        val n = x.size / seg
+        val db = FloatArray(n); val en = DoubleArray(n)
+        var top = -200f
+        for (s in 0 until n) {
+            var e = 0.0; val o = s * seg
+            for (i in o until o + seg) e += x[i].toDouble() * x[i]
+            en[s] = e / seg
+            db[s] = (10 * log10(en[s] + 1e-12)).toFloat(); if (db[s] > top) top = db[s]
+        }
+        val th = max(floorDb, top - relDb)
+        val keep = (0 until n).filter { db[it] >= th }
+        if (keep.isEmpty()) return Voiced(FloatArray(0), 0, -120f)
+        val maxSeg = if (maxMs > 0) max(1, maxMs / segMs) else keep.size
+        val use = if (keep.size > maxSeg) keep.subList(keep.size - maxSeg, keep.size) else keep
+        val y = FloatArray(use.size * seg)
+        val fade = min(seg / 2, max(1, sr / 1000))
+        var eSum = 0.0
+        for ((k, s) in use.withIndex()) {
+            System.arraycopy(x, s * seg, y, k * seg, seg)
+            eSum += en[s]
+            // 接缝（与前一段不相邻）处淡入，前一段末尾淡出
+            if (k > 0 && use[k - 1] != s - 1) {
+                for (i in 0 until fade) {
+                    val g = (i + 1).toFloat() / (fade + 1)
+                    y[k * seg + i] *= g
+                    y[k * seg - 1 - i] *= g
+                }
+            }
+        }
+        val lv = (10 * log10(eSum / use.size + 1e-12)).toFloat()
+        return Voiced(y, use.size * segMs, lv)
+    }
+
     /**
      * 有声时长（ms）：按 [segMs] 分段算能量，dBFS 不低于 max([floorDb], 窗内最响段 - [relDb]) 的段计入。
      * 用来判断窗口里人声够不够算声纹（开口第一下窗口里大半是静音，相似度会偏低）。

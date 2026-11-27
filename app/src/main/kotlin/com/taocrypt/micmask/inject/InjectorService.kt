@@ -104,6 +104,18 @@ class InjectorService : Binder {
         const val TX_LIVE_TUNE = 24
         /** 变声中换音色：新合成器已由 TX_LIVE_MODELS 送到，重启推理（麦克风通道不断，换的这一两秒输出静音） */
         const val TX_LIVE_RELOAD = 25
+        /**
+         * 变声中录入声纹门限（2.1.1-alpha.6）：从实时链路（与打分同一录音源 / 设备 / 系统 AEC·NS）取本人声音，在 shell 里算嵌入。
+         * 请求 op(int)：1 开始（其后 secs(int)）、0 取消、2 查询。应答：magic(int=[VP_ENROLL_MAGIC]) state(int) sec(int) levelDb(float) err(int) detail(String)；
+         * state=3（完成）时再跟 consistency(float) windows(int) n(int) n×float。state：0 空闲 1 录音中 2 计算中 3 完成 4 失败；
+         * err：0 无 1 未在变声 2 声纹模型未送达 3 有效语音太少 4 计算出错 5 已取消
+         */
+        const val TX_VP_ENROLL = 26
+        const val VP_ENROLL_MAGIC = 0x56504531
+        /** 实时变声写注入轨道单次最多等这么久（alpha.4 小米实测正常阻塞写 p50≈45ms、偶发 ≤ 340ms） */
+        const val WRITE_WAIT_MS = 400L
+        /** 已判定卡住后每次写只等这么久，主循环继续按麦克风节拍跑 */
+        const val STALL_WAIT_MS = 5L
         /** TX_LIVE_START 的 source 高位：强制兼容录音 */
         const val REC_COMPAT_FLAG = 0x10000
         const val TX_DESTROY = 16777115
@@ -348,6 +360,22 @@ class InjectorService : Binder {
                     val a = FloatArray(n) { data.readFloat() }
                     fx.set(a); fxLast = a
                     reply?.writeNoException()
+                    return true
+                }
+                TX_VP_ENROLL -> {
+                    val op = data.readInt()
+                    when (op) {
+                        1 -> vpEnrollStart(if (data.dataAvail() >= 4) data.readInt() else com.taocrypt.micmask.Voiceprint.ENROLL_S)
+                        0 -> vpEnrollCancel()
+                    }
+                    reply?.writeNoException()
+                    reply?.writeInt(VP_ENROLL_MAGIC)
+                    val st = vpEnState
+                    reply?.writeInt(st); reply?.writeInt(vpEnPos / SR); reply?.writeFloat(vpEnLevel); reply?.writeInt(vpEnErr); reply?.writeString(vpEnDetail)
+                    if (st == 3) {
+                        val e = vpEnEmb ?: FloatArray(0)
+                        reply?.writeFloat(vpEnCons); reply?.writeInt(vpEnWin); reply?.writeInt(e.size); e.forEach { reply?.writeFloat(it) }
+                    }
                     return true
                 }
                 TX_LIVE_RELOAD -> {
@@ -728,7 +756,12 @@ class InjectorService : Binder {
         out("ROOT audio 策略: ${sh("dumpsys media.audio_policy 2>/dev/null | grep -iE 'silenc|Capture|uid 10' | head -15")}")
     }
 
-    /** 后台诊断：cgroup（cpu/cpuset/uclamp 等）、大核当前频率/最高频、thermal zone 最高温。读不到的项跳过 */
+    /**
+     * 后台诊断（每 10 s 一次）：cgroup、大核当前频率/上限、温度、App 是否在电池白名单、前台应用。读不到的项写 ?。
+     * 2.1.1-alpha.6：shell 读不到 /sys/class/thermal（alpha.4 全是 ?），温度依次试：thermal zone → 系统温度服务（binder，
+     * IThermalService.getCurrentTemperatures）→ /sys/class/power_supply/battery/temp → dumpsys thermalservice（最多 60 s 一次，结果缓存）。
+     * 白名单状态 60 s 查一次。都是 binder / 小文件读取，dumpsys 只在前三种都不行时才用
+     */
     private fun bgDiag(): String {
         fun rd(path: String) = runCatching { java.io.File(path).readText().trim() }.getOrNull()
         val cg = rd("/proc/self/cgroup")?.lines()?.filter { it.isNotBlank() }?.joinToString(";") { it.substringAfter(':') } ?: "?"
@@ -739,13 +772,110 @@ class InjectorService : Binder {
             val mx = rd("/sys/devices/system/cpu/cpu$c/cpufreq/scaling_max_freq")?.toLongOrNull()?.div(1000)
             "cpu$c=${cur ?: "?"}/${mx ?: "?"}"
         }
-        var tMax = Int.MIN_VALUE; var tName = ""
-        java.io.File("/sys/class/thermal").listFiles { f -> f.name.startsWith("thermal_zone") }.orEmpty().forEach { z ->
-            val t = rd("${z.path}/temp")?.toIntOrNull() ?: return@forEach
-            if (t > tMax) { tMax = t; tName = rd("${z.path}/type") ?: z.name }
+        return "cgroup=$cg | 频率MHz(当前/上限) $freq | 温度 ${diagTemp()} | 温控状态 ${thermalStatus()} | App电池白名单 ${appWhitelisted()} | 前台 ${fgPkg()}"
+    }
+
+    private var tempSrcBad = 0          // 位：1 zone 2 hal 4 battery
+    private var dumpTempT = 0L
+    private var dumpTempV = "?"
+
+    private fun diagTemp(): String {
+        fun rd(path: String) = runCatching { java.io.File(path).readText().trim() }.getOrNull()
+        fun c(v: Float) = if (v > 1000f) v / 1000f else v
+        if (tempSrcBad and 1 == 0) {
+            var tMax = Float.NEGATIVE_INFINITY; var tName = ""
+            java.io.File("/sys/class/thermal").listFiles { f -> f.name.startsWith("thermal_zone") }.orEmpty().forEach { z ->
+                val t = rd("${z.path}/temp")?.toFloatOrNull()?.let { c(it) } ?: return@forEach
+                if (t in 1f..150f && t > tMax) { tMax = t; tName = rd("${z.path}/type") ?: z.name }
+            }
+            if (tMax != Float.NEGATIVE_INFINITY) return "%.1f°C(%s)".format(tMax, tName)
+            tempSrcBad = tempSrcBad or 1
         }
-        val temp = if (tMax == Int.MIN_VALUE) "?" else "%.1f°C(%s)".format(if (tMax > 1000) tMax / 1000f else tMax.toFloat(), tName)
-        return "cgroup=$cg | 频率MHz(当前/上限) $freq | 最高温 $temp"
+        if (tempSrcBad and 2 == 0) {
+            val h = halTemps()
+            if (h != null) return h
+            tempSrcBad = tempSrcBad or 2
+        }
+        if (tempSrcBad and 4 == 0) {
+            val b = rd("/sys/class/power_supply/battery/temp")?.toFloatOrNull()
+            if (b != null) return "电池 %.1f°C".format(b / 10f)
+            tempSrcBad = tempSrcBad or 4
+        }
+        val now = System.nanoTime()
+        if (dumpTempT == 0L || now - dumpTempT > 60_000_000_000L) {
+            dumpTempT = now
+            dumpTempV = runCatching {
+                val p = ProcessBuilder("dumpsys", "thermalservice").redirectErrorStream(true).start()
+                val lines = p.inputStream.bufferedReader().useLines { it.take(200).toList() }
+                p.waitFor()
+                val re = Regex("mValue=([0-9.]+), mType=(\\d+), mName=([^,]+)")
+                val ts = lines.dropWhile { !it.contains("Current temperatures from HAL") }.drop(1).takeWhile { it.contains("Temperature{") }
+                    .mapNotNull { re.find(it)?.destructured?.let { (v, t, n) -> Triple(v.toFloat(), t.toInt(), n.trim()) } }
+                fmtTemps(ts) ?: "?"
+            }.getOrDefault("?") + "(dumpsys)"
+        }
+        return dumpTempV
+    }
+
+    /** 类型：0 CPU 1 GPU 2 电池 3 皮肤（android.os.Temperature） */
+    private fun fmtTemps(ts: List<Triple<Float, Int, String>>): String? {
+        if (ts.isEmpty()) return null
+        fun mx(type: Int) = ts.filter { it.second == type && it.first in 1f..150f }.maxByOrNull { it.first }
+        val parts = listOfNotNull(mx(0)?.let { "CPU %.1f".format(it.first) }, mx(3)?.let { "皮肤 %.1f".format(it.first) }, mx(2)?.let { "电池 %.1f".format(it.first) })
+        return if (parts.isEmpty()) ts.maxByOrNull { it.first }?.let { "%.1f°C(%s)".format(it.first, it.third) } else parts.joinToString(" ") + "°C"
+    }
+
+    private var thermalSvc: Any? = null
+    /** 系统温度服务（隐藏 API IThermalService，shell 有 DEVICE_POWER）；不可用返回 null */
+    private fun halTemps(): String? = runCatching {
+        val svc = thermalSvc ?: run {
+            val b = Class.forName("android.os.ServiceManager").getMethod("getService", String::class.java).invoke(null, "thermalservice") as android.os.IBinder
+            Class.forName("android.os.IThermalService\$Stub").getMethod("asInterface", android.os.IBinder::class.java).invoke(null, b)
+        }.also { thermalSvc = it }
+        @Suppress("UNCHECKED_CAST")
+        val arr = svc!!.javaClass.getMethod("getCurrentTemperatures").invoke(svc) as Array<Any>
+        val tc = Class.forName("android.os.Temperature")
+        val ts = arr.map { t -> Triple((tc.getMethod("getValue").invoke(t) as Float), (tc.getMethod("getType").invoke(t) as Int), (tc.getMethod("getName").invoke(t) as String)) }
+        fmtTemps(ts)
+    }.getOrNull()
+
+    private fun thermalStatus(): String = runCatching {
+        if (Build.VERSION.SDK_INT < 29) return@runCatching "?"
+        val pm = shellCtx?.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager ?: return@runCatching "?"
+        val st = pm.currentThermalStatus
+        val hr = if (Build.VERSION.SDK_INT >= 30) runCatching { pm.getThermalHeadroom(10) }.getOrDefault(Float.NaN) else Float.NaN
+        "$st" + if (hr.isNaN()) "" else " 余量%.2f".format(hr)
+    }.getOrDefault("?")
+
+    private var wlT = 0L
+    private var wlV = "?"
+    /** App（不是 shell 进程）是否在电池优化白名单；60 s 查一次 */
+    private fun appWhitelisted(): String {
+        val now = System.nanoTime()
+        if (wlT != 0L && now - wlT < 60_000_000_000L) return wlV
+        wlT = now
+        wlV = runCatching {
+            val pkg = ctx?.packageName ?: return@runCatching "?"
+            val pm = (shellCtx ?: ctx)?.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager ?: return@runCatching "?"
+            if (pm.isIgnoringBatteryOptimizations(pkg)) "是" else "否"
+        }.getOrDefault("?")
+        return wlV
+    }
+
+    /** 前台应用包名：ActivityTaskManager 隐藏接口（API 31+ getFocusedRootTaskInfo / 更老 getFocusedStackInfo）→ 退回前台进程列表 */
+    private fun fgPkg(): String {
+        runCatching {
+            val atm = Class.forName("android.app.ActivityTaskManager").getMethod("getService").invoke(null)!!
+            val info = runCatching { atm.javaClass.getMethod("getFocusedRootTaskInfo").invoke(atm) }.getOrNull()
+                ?: runCatching { atm.javaClass.getMethod("getFocusedStackInfo").invoke(atm) }.getOrNull()
+            val cn = info?.let { i -> runCatching { i.javaClass.getField("topActivity").get(i) }.getOrNull() } as? android.content.ComponentName
+            if (cn != null) return cn.packageName
+        }
+        return runCatching {
+            val am2 = (shellCtx ?: ctx)?.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager ?: return@runCatching "?"
+            am2.runningAppProcesses?.firstOrNull { it.importance == android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND && it.pid != Process.myPid() }
+                ?.let { it.pkgList?.firstOrNull() ?: it.processName } ?: "?"
+        }.getOrDefault("?")
     }
 
     private fun slog(level: Char, msg: String, t: Throwable? = null) {
@@ -866,7 +996,7 @@ class InjectorService : Binder {
                         if (tuneFocus != 0 && tuneVpOn) "（与声纹门限互斥：门限本次不生效）" else "")
                 }
             }
-            slog('I', "声纹门限参数：${if (tuneVpOn) "开" else "关"} 阈值=$tuneVpThr 声纹=${tuneVpEmb?.size ?: 0} 维 模型=${if (models.containsKey(com.taocrypt.micmask.SpeakerEmbedder.MODEL)) "已送达" else "未送达"}")
+            slog('I', "声纹门限参数：${if (tuneVpOn) "开" else "关"} 放行阈值=$tuneVpThr 拦截阈值=${"%.2f".format(com.taocrypt.micmask.VpDecision.thresholds(tuneVpThr).second)} 声纹=${tuneVpEmb?.size ?: 0} 维 模型=${if (models.containsKey(com.taocrypt.micmask.SpeakerEmbedder.MODEL)) "已送达" else "未送达"}")
         }
         engine?.voiceprint(tuneVpOn && tuneFocus == 0, tuneVpThr, tuneVpEmb)
         val plChanged = engine?.let { it.phaseLock != tunePl } ?: false
@@ -887,6 +1017,7 @@ class InjectorService : Binder {
             it.rmsFollow = tuneRms; it.formant = tuneFormant; it.phaseLock = tunePl; it.denoiseIn = tuneDnIn; it.denoiseOut = tuneDnOut
             it.voiceprint(tuneVpOn && tuneFocus == 0, tuneVpThr, tuneVpEmb)
             it.focus = focus
+            it.hintCtx = { shellCtx }
             it.qnnDirProvider = { if (inApp) com.taocrypt.micmask.QnnPack.shellDir(ctx?.packageName, MODEL_DIR) else com.taocrypt.micmask.QnnPack.shellDir(ctx?.packageName) }
             it.onConfig = { blockMs -> tierPrimeMs = blockMs + 80; livePrimeMs = tierPrimeMs; slog('I', "预缓冲跟随档位 → ${livePrimeMs}ms") }
             engine = it
@@ -960,6 +1091,74 @@ class InjectorService : Binder {
     @Volatile private var liveLevelDb = -120f
     @Volatile private var liveFrames = 0L
 
+    // ------------------------------------------------------------ 变声中录入声纹门限（2.1.1-alpha.6）
+    /** 0 空闲 1 录音中 2 计算中 3 完成 4 失败（见 TX_VP_ENROLL） */
+    @Volatile private var vpEnState = 0
+    @Volatile private var vpEnErr = 0
+    @Volatile private var vpEnDetail = ""
+    @Volatile private var vpEnBuf: FloatArray? = null
+    @Volatile private var vpEnPos = 0
+    @Volatile private var vpEnLevel = -120f
+    @Volatile private var vpEnEmb: FloatArray? = null
+    @Volatile private var vpEnCons = 0f
+    @Volatile private var vpEnWin = 0
+    private var vpEnE2 = 0.0; private var vpEnN = 0
+
+    private fun vpEnrollFail(err: Int, detail: String) {
+        vpEnBuf = null; vpEnErr = err; vpEnDetail = detail; vpEnState = 4
+        slog('W', "声纹录入（变声中）失败：err=$err $detail")
+    }
+
+    private fun vpEnrollStart(secs: Int) {
+        if (vpEnState == 1 || vpEnState == 2) return
+        vpEnEmb = null; vpEnErr = 0; vpEnDetail = ""; vpEnLevel = -120f; vpEnE2 = 0.0; vpEnN = 0
+        if (!running || phase != "LIVE") { vpEnrollFail(1, ""); return }
+        if (models[com.taocrypt.micmask.SpeakerEmbedder.MODEL]?.isFile != true) { vpEnrollFail(2, ""); return }
+        val n = SR * secs.coerceIn(5, 20)
+        vpEnPos = 0; vpEnBuf = FloatArray(n); vpEnState = 1
+        slog('I', "声纹录入（变声中）：开始，从实时链路取 ${n / SR} 秒（录音源=$liveSource 路径=$recPath 系统AEC=${aec?.enabled} 系统NS=${ns?.enabled} 软件AEC=${tuneAec != 0}）")
+    }
+
+    private fun vpEnrollCancel() {
+        if (vpEnState == 1 || vpEnState == 2) { vpEnBuf = null; vpEnErr = 5; vpEnDetail = ""; vpEnState = 4; slog('I', "声纹录入（变声中）：已取消") }
+    }
+
+    /** 录音线程：把送进推理的那路声音（AEC 后、聚焦 / 降噪 / 门限之前，与打分同源）收进录入缓冲 */
+    private fun vpEnrollFeed(x: ShortArray, n: Int) {
+        val b = vpEnBuf ?: return
+        if (vpEnState != 1) return
+        val p = vpEnPos
+        val k = minOf(n, b.size - p)
+        for (i in 0 until k) { val v = x[i] / 32768f; b[p + i] = v; vpEnE2 += v.toDouble() * v }
+        vpEnN += k
+        vpEnPos = p + k
+        if (vpEnN >= SR / 5) { vpEnLevel = (10 * Math.log10(vpEnE2 / vpEnN + 1e-12)).toFloat(); vpEnE2 = 0.0; vpEnN = 0 }
+        if (vpEnPos >= b.size) {
+            vpEnState = 2
+            Thread({ vpEnrollCompute(b) }, "vp-enroll").apply { isDaemon = true; start() }
+        }
+    }
+
+    private fun vpEnrollCompute(x: FloatArray) {
+        try {
+            val f = models[com.taocrypt.micmask.SpeakerEmbedder.MODEL]
+            if (f == null || !f.isFile) { vpEnrollFail(2, ""); return }
+            val t0 = System.nanoTime()
+            val embs = com.taocrypt.micmask.SpeakerEmbedder(f, 1).use { e ->
+                com.taocrypt.micmask.SpeakerGate.enrollEmbeddings(e, x, com.taocrypt.micmask.Voiceprint.ENROLL_FLOOR_DB)
+            }
+            if (vpEnState != 2) return   // 计算期间被取消
+            slog('I', "声纹录入（变声中）：有效窗 ${embs.size} 个，用时 ${(System.nanoTime() - t0) / 1_000_000}ms")
+            if (embs.size < com.taocrypt.micmask.Voiceprint.MIN_WINDOWS) { vpEnrollFail(3, "${embs.size}"); return }
+            val (ref, cons) = com.taocrypt.micmask.SpeakerGate.meanRef(embs)
+            vpEnEmb = ref; vpEnCons = cons; vpEnWin = embs.size; vpEnBuf = null; vpEnState = 3
+            slog('I', "声纹录入（变声中）：完成 自洽度 ${"%.2f".format(cons)}，等 App 取回保存")
+        } catch (t: Throwable) {
+            slog('E', "声纹录入（变声中）计算出错", t)
+            vpEnrollFail(4, describe(t))
+        }
+    }
+
     // ------------------------------------------------------------ 耳返 / 录制预览
     @Volatile private var monTrack: AudioTrack? = null
     private val capLock = Any()
@@ -1017,11 +1216,42 @@ class InjectorService : Binder {
         tap(monBuf, n)
     }
 
+    /** 输出一行 AEC 统计（AEC3 指标 + 参考链路计数），并清零计数；liveLoop 线程调用 */
+    private fun aecReport(tag: String) {
+        val r = softAec?.report() ?: return
+        val mt = monTrack
+        val ur = if (mt != null && Build.VERSION.SDK_INT >= 24) runCatching { mt.underrunCount }.getOrDefault(-1) else -1
+        val dUr = if (ur >= 0 && aecMonUnderBase >= 0) ur - aecMonUnderBase else -1
+        if (ur >= 0) aecMonUnderBase = ur
+        slog('I', "AEC${if (tag.isEmpty()) "" else "（$tag）"}：$r | 参考链路：耳返欠载 ${if (dUr >= 0) "$dUr" else "?"} 次 耳返丢写 $aecMonPartial 次 ${aecMonDrop * 1000 / SR}ms " +
+            "参考不足补零 $aecRefUnder 帧 参考溢出 $aecRefOver 次 参考积压 ${aecMonRef.size() * 1000 / SR}ms 输出积压 ${outRing.size() * 1000 / SR}ms")
+        aecMonDrop = 0L; aecMonPartial = 0; aecRefUnder = 0; aecRefOver = 0
+    }
+
+    // AEC 参考链路统计（liveLoop 线程读写；随 AEC 统计行输出后清零）
+    /** 耳返非阻塞写没写进去、被丢掉的样本数（这些样本没外放，不进参考） */
+    private var aecMonDrop = 0L
+    private var aecMonPartial = 0
+    /** 参考环形缓冲：读时不足一帧（补零）的次数 / 写时超过上限被丢掉旧样本的次数 */
+    private var aecRefUnder = 0
+    private var aecRefOver = 0
+    /** 耳返 AudioTrack 的欠载计数（系统累计值，统计时取差） */
+    private var aecMonUnderBase = -1
+
     /** 每 10 ms 一帧变声结果都过一遍这里：耳返 + 录制预览 */
     private fun tap(mono: ShortArray, n: Int) {
         monTrack?.let { t ->
-            if (t.write(mono, 0, n, AudioTrack.WRITE_NON_BLOCKING) < 0) setMonitor(false)
-            else if (tuneAec != 0) aecMonRef.write(mono, 0, n)   // 软件 AEC 的参考：和耳返同一批样本
+            val w = t.write(mono, 0, n, AudioTrack.WRITE_NON_BLOCKING)
+            if (w < 0) setMonitor(false)
+            else {
+                // 2.1.1-alpha.6：软件 AEC 的参考只记实际写进耳返的样本（缓冲满时没写进去的不会外放，以前照记 n 个，参考与真实外放逐渐错位）
+                if (w < n) { aecMonDrop += (n - w).toLong(); aecMonPartial++ }
+                if (tuneAec != 0 && w > 0) {
+                    // 正常时环里只有约 1 帧（本轮写、下轮读）；超过 200 ms 说明读端没跟上，丢旧的并计数，避免参考越积越晚
+                    if (aecMonRef.size() + w > SR / 5) { aecRefOver++; aecMonRef.trimTo(maxOf(0, SR / 5 - w)) }
+                    aecMonRef.write(mono, 0, w)
+                }
+            }
         }
         var done: ShortArray? = null
         synchronized(capLock) {
@@ -1063,6 +1293,7 @@ class InjectorService : Binder {
         var rec: android.media.AudioRecord? = null
         var watchdog: Thread? = null
         try {
+            resetLiveWrite()
             val minBuf = android.media.AudioRecord.getMinBufferSize(SR,
                 AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
             val bufBytes = maxOf(minBuf, SR / 50 * 2 * 2)
@@ -1163,12 +1394,23 @@ class InjectorService : Binder {
                             }
                         }
                     }
-                    if (System.nanoTime() - lastReadNs > 600_000_000L) {
+                    val nowW = System.nanoTime()
+                    // 2.1.1-alpha.6：读不到 ≠ 写不出。注入写出（或重建注入轨道）正卡着时，主循环根本没去读麦克风，
+                    // 这时停录音没用（alpha.4 进游戏后 writeMax=38897ms，看门狗误报 64 次）：只记一次，不停/重建录音
+                    val wb = outBusySinceNs
+                    if (wb != 0L && nowW - wb > 500_000_000L) {
+                        if (!wdWriteLogged) {
+                            wdWriteLogged = true
+                            slog('W', "看门狗：注入写出卡住 ${(nowW - wb) / 1_000_000}ms（不是麦克风问题，不停/重建录音）${audioSnapshot()}")
+                        }
+                        lastReadNs = nowW
+                    } else if (nowW - lastReadNs > 600_000_000L) {
+                        wdWriteLogged = false
                         micHint = "没有收到麦克风数据，正在重建录音"
                         slog('W', "0.6 s 没有麦克风数据，停止当前录音以重建")
                         lastReadNs = System.nanoTime()
                         runCatching { r.stop() }
-                    }
+                    } else if (wb == 0L) wdWriteLogged = false
                 }
             }, "micmask-mic-watchdog").apply { isDaemon = true; start() }
             var rebuildWindow = System.currentTimeMillis()
@@ -1209,7 +1451,8 @@ class InjectorService : Binder {
             val inBuf = ShortArray(hop)
             // 软件 AEC：处理结果进 aecBuf；检测类逻辑（全零/数字静音/被静音/电平）继续用原始 inBuf
             val aecBuf = ShortArray(hop); val aecRef = ShortArray(hop); val aecTmp = ShortArray(hop)
-            var aecWhy: String? = "未开"; var aecStatT = System.nanoTime()
+            var aecWhy: String? = "未开"; var aecStatT = System.nanoTime(); var aecRunT = 0L
+            aecMonDrop = 0L; aecMonPartial = 0; aecRefUnder = 0; aecRefOver = 0; aecMonUnderBase = -1
             val outBytes = ByteArray(hop * FRAME_BYTES)
             val rnd = java.util.Random()
             val ext = ShortArray(hop)
@@ -1386,7 +1629,9 @@ class InjectorService : Binder {
                     }
                     if (why == null) {
                         val sa = softAec ?: com.taocrypt.micmask.SoftAec { lv, m -> slog(lv, m) }.also { softAec = it }
+                        // 参考与麦克风一对一：每读一帧麦克风（hop=480）取一帧参考；参考不足（耳返欠载/丢写）补零并计数
                         val k = aecMonRef.read(aecRef, 0, hop)
+                        if (k < hop && monTrack != null) aecRefUnder++
                         for (i in k until hop) aecRef[i] = 0
                         if (previewPlaying || aecPrevRef.size() > 0) {
                             val k2 = aecPrevRef.read(aecTmp, 0, hop)
@@ -1395,17 +1640,27 @@ class InjectorService : Binder {
                         if (sa.render(aecRef, hop) && sa.process(inBuf, aecBuf)) mic = aecBuf
                     } else { aecMonRef.clear(); aecPrevRef.clear() }
                     val st = why ?: "工作中"
-                    if (st != aecWhy) { slog('I', if (why == null) "AEC：开始处理（参考=${if (monTrack != null) "耳返" else ""}${if (previewPlaying) " 预览" else ""}）" else "AEC：旁路（$why）"); aecWhy = st }
+                    if (st != aecWhy) {
+                        // 2.1.1-alpha.6：从「工作中」切到旁路时先把这段的统计输出一次（以前不足 10 s 的会话没有任何 ERL/ERLE）
+                        if (aecWhy == "工作中") aecReport("旁路前")
+                        slog('I', if (why == null) "AEC：开始处理（参考=${if (monTrack != null) "耳返" else ""}${if (previewPlaying) " 预览" else ""}）" else "AEC：旁路（$why）")
+                        if (why == null) { aecRunT = System.nanoTime(); aecStatT = aecRunT }
+                        aecWhy = st
+                    }
                     val nowA = System.nanoTime()
-                    if (nowA - aecStatT >= 10_000_000_000L) {
+                    // 统计：开始处理后前 30 s 每 3 s 一次，之后每 10 s
+                    val every = if (why == null && nowA - aecRunT < 30_000_000_000L) 3_000_000_000L else 10_000_000_000L
+                    if (nowA - aecStatT >= every) {
                         aecStatT = nowA
-                        if (why == null) softAec?.report()?.let { slog('I', "AEC：$it") }
+                        if (why == null) aecReport("")
                         else slog('I', "AEC：旁路（$why）")
                     }
                 } else if (aecWhy != "未开") {
+                    if (aecWhy == "工作中") aecReport("关闭前")
                     softAec?.release(); softAec = null; aecMonRef.clear(); aecPrevRef.clear()
                     slog('I', "AEC：已关闭"); aecWhy = "未开"
                 }
+                if (vpEnState == 1) vpEnrollFeed(mic, hop)
                 if (liveExternal) {
                     micRing.write(mic, 0, hop)
                     var e2 = 0.0
@@ -1435,7 +1690,7 @@ class InjectorService : Binder {
                         outBytes[o] = lo; outBytes[o + 1] = hi; outBytes[o + 2] = lo; outBytes[o + 3] = hi
                     }
                     val tw0 = System.nanoTime()
-                    if (!writeOut(outBytes)) break
+                    if (!writeOutLive(outBytes)) break
                     wrMax = maxOf(wrMax, System.nanoTime() - tw0)
                     val now = System.nanoTime()
                     if (now - statT >= 1_000_000_000L) {
@@ -1468,7 +1723,7 @@ class InjectorService : Binder {
                 }
                 liveLevelDb = (10 * Math.log10(e / hop + 1e-12)).toFloat()
                 liveFrames++
-                if (!writeOut(outBytes)) break
+                if (!writeOutLive(outBytes)) break
             }
         } catch (t: Throwable) {
             lastError = describe(t)
@@ -1480,6 +1735,7 @@ class InjectorService : Binder {
             watchdog?.interrupt()
             runCatching { rec?.stop() }
             runCatching { aec?.release() }; runCatching { ns?.release() }; aec = null; ns = null
+            if (softAec?.ready == true) runCatching { aecReport("停止时") }
             runCatching { softAec?.release() }; softAec = null; aecMonRef.clear(); aecPrevRef.clear()
             runCatching { rec?.release() }
             if (running) disarm("live-end")
@@ -1582,13 +1838,13 @@ class InjectorService : Binder {
      * 通话中再开变声则 1 s 内被接管（实测）。所以进入通话模式 2 s 还看不到别的应用录音时：撤掉策略 → 等对方开麦（≤3 s）→ 重新注册。
      * 每次通话只做一次；正常机型目标录音会照常出现，不会触发
      */
-    private fun cyclePolicy() {
+    private fun cyclePolicy(why: String? = null) {
         if (cycling) return
         cycling = true
         val gen = armGen
         Thread({
             try {
-                slog('W', "进入通话模式 2 s 仍没看到目标应用录音 ${recDetail()}，撤掉注入让对方先开麦，再重新接管")
+                slog('W', (why ?: "进入通话模式 2 s 仍没看到目标应用录音") + " ${recDetail()}，撤掉注入让对方先开麦，再重新接管")
                 runCatching { track?.stop() }; runCatching { track?.release() }
                 track = null
                 unregister()
@@ -1620,6 +1876,116 @@ class InjectorService : Binder {
         }
         return true
     }
+
+    // ---- 实时变声的注入写出（2.1.1-alpha.6）：不阻塞、带超时，卡住就重建注入轨道
+    /** 非 0 = 正在写注入轨道 / 重建注入轨道的起始时刻（看门狗据此区分「写不出」与「读不到」） */
+    @Volatile private var outBusySinceNs = 0L
+    @Volatile private var wdWriteLogged = false
+    /** 给 App 状态行的提示（空 = 无）：注入通道卡住时非空 */
+    @Volatile private var outHint = ""
+    /** 本次变声是否用非阻塞写；系统不支持时退回阻塞写（旧行为） */
+    @Volatile private var nbWrite = true
+    private var stallT0 = 0L
+    private var stallDropBytes = 0L
+    private var stallActT = 0L
+    private var stallActs = 0
+    private var stallSnapLogged = false
+
+    /** 每次开始实时变声时调 */
+    private fun resetLiveWrite() {
+        nbWrite = true; stallT0 = 0L; stallDropBytes = 0L; stallActT = 0L; stallActs = 0; stallSnapLogged = false
+        outBusySinceNs = 0L; wdWriteLogged = false; outHint = ""
+    }
+
+    /**
+     * 写注入轨道（实时变声用）：WRITE_NON_BLOCKING，写不完就短暂轮询，单次最多等 [WRITE_WAIT_MS]；
+     * 仍写不完 → 丢掉这 10 ms 剩下的部分，进入「卡住」状态（之后每次只等 [STALL_WAIT_MS]，主循环照常按麦克风节拍跑）；任何一次写完整即退出卡住状态。
+     * 卡住超过 1 s → 记录音频模式 / 当前播放配置 / 前台应用，重建注入轨道；重建后 3 s 仍卡住 → 重新注册注入策略（cyclePolicy）；
+     * 之后每 5 s 再重建一次。写出恢复时记一行。返回 false = 结束变声（与旧 writeOut 一致：写错误且重建失败）。
+     * 非阻塞写不被支持（ERROR_BAD_VALUE / 不支持的模式）时本次变声退回阻塞写。
+     */
+    private fun writeOutLive(b: ByteArray): Boolean {
+        if (cycling) return true
+        if (!nbWrite) {
+            outBusySinceNs = System.nanoTime()
+            try { return writeOut(b) } finally { outBusySinceNs = 0L }
+        }
+        var t = track ?: return cycling
+        val t0 = System.nanoTime()
+        val stalled = stallT0 != 0L
+        val waitNs = (if (stalled) STALL_WAIT_MS else WRITE_WAIT_MS) * 1_000_000L
+        var off = 0
+        outBusySinceNs = t0
+        try {
+            while (off < b.size) {
+                val w = try { t.write(b, off, b.size - off, AudioTrack.WRITE_NON_BLOCKING) } catch (e: IllegalArgumentException) { AudioTrack.ERROR_BAD_VALUE }
+                if (w < 0) {
+                    if (cycling) return true
+                    if (w == AudioTrack.ERROR_BAD_VALUE && off == 0) {
+                        nbWrite = false
+                        slog('W', "注入轨道不支持非阻塞写（$w），本次变声退回阻塞写")
+                        return writeOut(b)
+                    }
+                    slog('W', "AudioTrack.write=$w，尝试重建注入轨道")
+                    if (!rebuildTrack()) { lastError = "AudioTrack.write=$w"; return false }
+                    t = track ?: return false
+                    continue
+                }
+                off += w
+                if (off >= b.size) break
+                if (System.nanoTime() - t0 >= waitNs) break
+                java.util.concurrent.locks.LockSupport.parkNanos(1_000_000L)
+            }
+        } finally { outBusySinceNs = 0L }
+        val now = System.nanoTime()
+        if (off >= b.size) {
+            if (stallT0 != 0L) {
+                slog('I', "注入写出恢复：卡了 ${(now - stallT0) / 1_000_000}ms，丢弃 ${stallDropBytes / FRAME_BYTES * 1000 / SR}ms 音频，处理 $stallActs 次")
+                stallT0 = 0L; stallDropBytes = 0L; stallActs = 0; stallActT = 0L; stallSnapLogged = false; outHint = ""
+            }
+            return true
+        }
+        // 没写完：丢掉剩下的
+        if (stallT0 == 0L) stallT0 = t0
+        stallDropBytes += (b.size - off).toLong()
+        val dur = now - stallT0
+        if (dur >= 1_000_000_000L) {
+            if (!stallSnapLogged) {
+                stallSnapLogged = true
+                slog('W', "注入写出卡住 ${dur / 1_000_000}ms（注入轨道不再取声音，不是麦克风问题）：${audioSnapshot()}")
+            }
+            val gap = if (stallActs == 0) 0L else if (stallActs == 1) 3_000_000_000L else 5_000_000_000L
+            if (now - stallActT >= gap) {
+                stallActT = now; stallActs++
+                outHint = "注入通道不再取声音（可能被游戏或系统接管），正在重建"
+                if (stallActs == 2) {
+                    slog('W', "注入写出卡住 ${dur / 1_000_000}ms，重建注入轨道后仍卡 → 重新注册注入策略")
+                    cyclePolicy("注入写出卡住，撤掉注入后重新接管")
+                } else {
+                    slog('W', "注入写出卡住 ${dur / 1_000_000}ms → 重建注入轨道（第 $stallActs 次）")
+                    outBusySinceNs = now
+                    val ok = try { rebuildTrack() } finally { outBusySinceNs = 0L }
+                    if (!ok) { slog('W', "注入轨道重建失败 → 重新注册注入策略"); cyclePolicy("注入轨道重建失败，撤掉注入后重新接管") }
+                }
+            }
+        }
+        return true
+    }
+
+    /** 卡住时的现场：音频模式、当前播放配置（usage/uid/状态）、录音会话、前台应用 */
+    private fun audioSnapshot(): String = runCatching {
+        val m = am ?: return@runCatching ""
+        val mode = runCatching { m.mode }.getOrDefault(-99)
+        val pc = android.media.AudioPlaybackConfiguration::class.java
+        fun g(o: Any, n: String) = runCatching { pc.getMethod(n).invoke(o) }.getOrNull()
+        val plays = runCatching {
+            m.activePlaybackConfigurations.take(12).joinToString(prefix = "[", postfix = "]") { c ->
+                val a = c.audioAttributes
+                "uid=${g(c, "getClientUid")} usage=${a.usage} content=${a.contentType} 状态=${g(c, "getPlayerState")} 类型=${g(c, "getPlayerType")}"
+            }
+        }.getOrDefault("?")
+        " mode=$mode 播放=$plays 录音=${recDetail()} 前台=${fgPkg()} 注入方式=${trackWay ?: "?"}"
+    }.getOrDefault("")
 
     @Synchronized
     private fun disarm(why: String) {
@@ -1757,6 +2123,7 @@ class InjectorService : Binder {
             "gen=$engGen",
             "recPath=$recPath",
             "mic=$micHint",
+            "note=${outHint.ifEmpty { if (tuneFocus != 0 && liveExternal) focus.note else "" }}",
             "err=$lastError",
         ).joinToString("|")
     }

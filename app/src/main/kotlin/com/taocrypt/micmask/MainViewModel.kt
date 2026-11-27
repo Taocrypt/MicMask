@@ -1236,15 +1236,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
-    /** 阈值：拖动时只记下，松手 commitAiTune 推给运行中的引擎 */
+    /** 放行阈值（拦截阈值 = 放行 - 0.07，shell 侧换算）：拖动时只记下，松手 commitAiTune 推给运行中的引擎 */
     fun setVpThr(v: Float) {
         prefs.edit().putFloat("vp_thr", v.coerceIn(0.1f, 0.7f)).apply()
         com.taocrypt.micmask.inject.MicInjector.tuneVpThr = vpThr()
     }
-    /** 录入声纹：录 [Voiceprint.ENROLL_S] 秒本人说话 → 算嵌入均值存私有目录。变声中不能录（麦克风被注入链路占用） */
+    /**
+     * 录入声纹：录 [Voiceprint.ENROLL_S] 秒本人说话 → 算嵌入均值存私有目录。
+     * 2.1.1-alpha.6：变声中走实时链路录入（[vpEnrollLive]，与打分同一录音源/设备/系统处理，推荐）；未变声时仍用 App 内机身麦录入
+     */
     fun vpEnroll(done: (Boolean) -> Unit) {
         if (vpBusy()) return
-        if (_state.value.liveOn) { toast(tr("变声中不能录入，先关闭变声")); done(false); return }
+        if (_state.value.liveOn) { vpEnrollLive(done); return }
         if (!hasMicPermission()) { toast(tr("需要麦克风权限才能录音")); done(false); return }
         vpCancel = false
         vpJob = viewModelScope.launch(Dispatchers.IO) {
@@ -1268,6 +1271,48 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
     fun vpCancelEnroll() { vpCancel = true }
+
+    /** 变声中录入：让 shell 从实时链路取声音、在 shell 里算嵌入，取回后保存（旧版注入服务不支持时提示重新开始变声） */
+    private fun vpEnrollLive(done: (Boolean) -> Unit) {
+        val inj = com.taocrypt.micmask.inject.MicInjector
+        vpCancel = false
+        vpJob = viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching {
+                if (!vpEnsureModel()) throw IllegalStateException(tr("声纹模型还没下载"))
+                var st = inj.vpEnroll(1, Voiceprint.ENROLL_S) ?: throw IllegalStateException(tr("注入服务版本较旧，不支持变声中录入：请停止变声后重新开始再试"))
+                if (st.state == 4 && st.err == 2) throw IllegalStateException(tr("声纹模型还没送到变声进程：请停止变声后重新开始再试"))
+                L.i("UI 声纹录入（变声中）开始")
+                while (true) {
+                    if (vpCancel) { inj.vpEnroll(0); throw IllegalStateException(tr("已取消")) }
+                    when (st.state) {
+                        1 -> vpProgress.value = tr("录音中 {0}/{1} 秒 · 电平 {2} dB：请用平常的音量连续说话（变声中，走实时链路）", st.sec, Voiceprint.ENROLL_S, st.levelDb.toInt())
+                        2 -> vpProgress.value = tr("计算声纹…")
+                        3 -> break
+                        4 -> throw IllegalStateException(when (st.err) {
+                            1 -> tr("变声已停止，录入中断")
+                            2 -> tr("声纹模型还没送到变声进程：请停止变声后重新开始再试")
+                            3 -> tr("有效语音太少：请离麦克风近一些，用平常的音量连续说话后重录")
+                            5 -> tr("已取消")
+                            else -> tr("录入失败：{0}", st.detail)
+                        })
+                        else -> throw IllegalStateException(tr("录入失败：{0}", "state=${st.state}"))
+                    }
+                    kotlinx.coroutines.delay(300)
+                    st = inj.vpEnroll(2) ?: throw IllegalStateException(tr("变声已停止，录入中断"))
+                }
+                val e = st.emb ?: throw IllegalStateException(tr("声纹维度不对，请重新录入"))
+                Voiceprint.saveComputed(ctx, e, st.consistency, st.windows)
+            }
+            vpProgress.value = null
+            r.onSuccess { d -> syncVp(); commitAiTune(); L.i("UI 声纹已录入（变声中）有效窗=${d.windows} 自洽度=${"%.2f".format(d.consistency)}") }
+                .onFailure { L.w("UI 声纹录入（变声中）失败：${it.message}") }
+            withContext(Dispatchers.Main) {
+                r.onSuccess { d -> toast(if (d.consistency < 0.6f) tr("声纹已录入，但录音里杂音或别人的声音偏多，建议安静环境重录") else tr("声纹已录入")) }
+                    .onFailure { toast(tr("录入失败：{0}", it.message ?: it.javaClass.simpleName)) }
+                done(r.isSuccess)
+            }
+        }
+    }
     /** 删除录入的声纹（并关闭声纹门限） */
     fun vpDelete() {
         Voiceprint.delete(ctx)

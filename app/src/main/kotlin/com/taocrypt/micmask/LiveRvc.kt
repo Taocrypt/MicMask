@@ -49,6 +49,8 @@ class LiveRvc(private val open0: (String) -> Any?) {
     private fun open(n: String): Any? {
         val f = open0(n)
         if (!phaseLock || f !is File || n == ModelStore.HUBERT || n == ModelStore.RMVPE) return f
+        // 只改写合成器 ONNX：检索索引（*_stream_index.bin）等非 .onnx 文件原样返回（以前每次启动都报 wire 6 并重读整文件）
+        if (!f.name.endsWith(".onnx", ignoreCase = true)) return f
         return PhaseLock.prepare(f) ?: f
     }
 
@@ -203,18 +205,54 @@ class LiveRvc(private val open0: (String) -> Any?) {
     @Volatile var synThreads = SYN_THREADS
     /** 实际用的线程数与是否串行：默认 3/4 时，若绑大核且大核只有 ≤5 个，特征+合成同时跑会抢核
      *  （MT6896 4 大核实测：合成单测 163ms，并发时均 501ms；改 2/2 并行后合成单测 358ms，仍超 500ms 档）。
-     *  这时改为串行：特征和合成轮流跑、各用满全部大核（2.1.1-alpha.2）。手动改过线程就照用户设的、仍并行 */
+     *  这时改为串行：特征和合成轮流跑、各用满全部大核（2.1.1-alpha.2）。
+     *  2.1.1-alpha.6：没绑大核时按大核数自适应（只对「默认线程 3/4」的用户）：两段并行的线程合计不超过「大核数 + 1」，
+     *  避免 7 个推理线程挤 8 核（其中 4 个小核）互相抢占（alpha.4 天玑 8200 实测 3/4 未绑大核，持续超预算）。
+     *  手动改过线程就照用户设的、仍并行 */
     @Volatile private var effF = FEAT_THREADS
     @Volatile private var effS = SYN_THREADS
     /** true = 特征与合成串行（下一块的特征等上一块合成完再开始），吞吐看两段之和 */
     @Volatile var serial = false; private set
     private fun effThreads() {
         effF = featThreads; effS = synThreads; serial = false
-        if (!pinBig || featThreads != FEAT_THREADS || synThreads != SYN_THREADS) return
+        val cores = Runtime.getRuntime().availableProcessors()
+        if (featThreads != FEAT_THREADS || synThreads != SYN_THREADS) {
+            L.i("线程：手动设置 $featThreads/$synThreads，照用（不自适应）"); return
+        }
         val n = CpuPin.bigCores().size
-        if (n < 2 || featThreads + synThreads <= n + 1) return
-        effF = n; effS = n; serial = true
-        L.i("线程 $featThreads/$synThreads 超过大核数 $n → 串行推理，特征/合成各用 $n 线程（避免抢核）")
+        if (pinBig) {
+            if (n < 2 || featThreads + synThreads <= n + 1) { L.i("线程：默认 $featThreads/$synThreads 并行（绑大核，大核 ${if (n < 2) "不可区分" else "$n 个"}，核心 $cores）"); return }
+            effF = n; effS = n; serial = true
+            L.i("线程 $featThreads/$synThreads 超过大核数 $n → 串行推理，特征/合成各用 $n 线程（避免抢核）")
+            return
+        }
+        // 未绑大核：大核可区分时以「大核 + 1」为两段合计上限；全是性能核 / 不可区分时以核心数为上限
+        val budget = if (n in 2 until cores) n + 1 else cores
+        val (f, sy) = when {
+            budget >= 7 -> FEAT_THREADS to SYN_THREADS
+            budget == 6 -> 3 to 3
+            budget == 5 -> 2 to 3
+            budget == 4 -> 2 to 2
+            budget == 3 -> 1 to 2
+            else -> 1 to 1
+        }
+        effF = f; effS = sy
+        L.i("线程自适应：默认 $featThreads/$synThreads，核心 $cores（大核 ${if (n in 2 until cores) "$n 个" else "不可区分"}），未绑大核 → 特征/合成 $f/$sy 并行" +
+            if (f != featThreads || sy != synThreads) "（两段合计 ≤ ${budget}，避免挤到小核）" else "（不变）")
+    }
+    /** ADPF（PerformanceHint）：shell 侧由 InjectorService 设 Context 提供者；没设或系统不支持就不用 */
+    @Volatile var hintCtx: (() -> Context?)? = null
+    private val hint = PerfHint { hintCtx?.invoke() }
+    /** 声纹门限判为他人时的输出增益（渐变），只在合成线程读写 */
+    private var outGain = 1f
+    private val attenGain = Math.pow(10.0, SpeakerGate.ATTEN_DB / 20.0).toFloat()
+    /** 把 y 的增益从上一块的 [outGain] 渐变到 [g]（前 100 ms 线性），合成线程里调用 */
+    private fun applyGain(y: FloatArray, g: Float) {
+        val g0 = outGain
+        if (g0 == 1f && g == 1f) return
+        val ramp = minOf(y.size, SR / 10)
+        for (i in y.indices) y[i] *= if (i < ramp) g0 + (g - g0) * (i + 1) / ramp else g
+        outGain = g
     }
     /** 检索混合比例（RVC index_rate）；0 = 不用。音色带 <音色>_stream_index.bin 才生效 */
     @Volatile var indexRate = 0.3f
@@ -242,7 +280,7 @@ class LiveRvc(private val open0: (String) -> Any?) {
     }
     @Volatile private var running = false
     private var pump: Thread? = null
-    private val featExec = Executors.newSingleThreadExecutor { r -> Thread({ boost(); r.run() }, "live-feat") }
+    private val featExec = Executors.newSingleThreadExecutor { r -> Thread({ boost(); hint.featTid = android.os.Process.myTid(); r.run() }, "live-feat") }
     private val synExec = Executors.newSingleThreadExecutor { r -> Thread({ boost(); r.run() }, "live-syn") }
     private fun boost() { runCatching { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO) }.onFailure { runCatching { android.os.Process.setThreadPriority(-10) } } }
     private val inflight = AtomicInteger(0)
@@ -279,7 +317,7 @@ class LiveRvc(private val open0: (String) -> Any?) {
         if (stLag.size >= 20) {
             L.i("live 汇总(20块) 特征 p50=${pct(stFeat, .5)} p95=${pct(stFeat, .95)} max=${stFeat.max()}ms | 合成 p50=${pct(stSyn, .5)} p95=${pct(stSyn, .95)} max=${stSyn.max()}ms | " +
                 "端到端 p50=${pct(stLag, .5)} p95=${pct(stLag, .95)}ms | 预算 ${BLOCK * 10}ms | 丢块累计 $dropped 静音块累计 $gated" +
-                (if (spk.active) " 声纹拦截累计 ${spk.blocked}" else "") +
+                (if (spk.active) " 声纹压低累计 ${spk.blocked}" else "") +
                 (if (stDec.isNotEmpty()) " | 声码器 ${voc?.kind ?: "?"} 前半图 p50=${pct(stPre, .5)} 声码器 p50=${pct(stDec, .5)} p95=${pct(stDec, .95)} max=${stDec.max()}ms" else " | 声码器 ORT 整图"))
             stFeat.clear(); stSyn.clear(); stLag.clear(); stPre.clear(); stDec.clear()
         }
@@ -571,7 +609,8 @@ class LiveRvc(private val open0: (String) -> Any?) {
         if (tier == 3 && LEN == 35 && CUT == 0 && netG != null) { CUT = 5; L.i("live 高级 0.25s：恢复每步 ${BLOCK * 10}ms"); onConfig?.invoke(BLOCK * 10) }
         java.util.Arrays.fill(history, 0f); fresh = 0; sinceSub = 0; dnFresh = true; tgIn.reset(); tgOut.reset(); prevTail = null; dropped = 0; gated = 0; blkSeq = 0; synchronized(this) { wFeat.clear(); wSyn.clear(); wLag.clear(); nBlocks = 0; nOver = 0 }
         spk.reset(); focus?.reset()
-        L.i("live 开始，semis=$semis" + if (spk.active) "，声纹门限 阈值=${"%.2f".format(spk.threshold)}" else "")
+        synExec.execute { outGain = 1f; hint.reset() }
+        L.i("live 开始，semis=$semis" + if (spk.active) "，声纹门限 放行阈值=${"%.2f".format(spk.threshold)} 拦截阈值=${"%.2f".format(spk.blockThreshold)}" else "")
         pump = Thread({ boost(); pumpLoop() }, "live-pump").apply { start() }
     }
 
@@ -611,7 +650,7 @@ class LiveRvc(private val open0: (String) -> Any?) {
     }
 
     fun stop() {
-        if (running) L.i("live 停止：共 $blkSeq 块，丢 $dropped，静音 $gated" + if (spk.blocked > 0) "，声纹拦截 ${spk.blocked}" else "")
+        if (running) L.i("live 停止：共 $blkSeq 块，丢 $dropped，静音 $gated" + if (spk.blocked > 0) "，声纹压低 ${spk.blocked}" else "")
         running = false
         pump?.interrupt(); pump = null
     }
@@ -632,6 +671,7 @@ class LiveRvc(private val open0: (String) -> Any?) {
 
     fun release() {
         stop()
+        runCatching { synExec.submit { hint.close() }.get(500, java.util.concurrent.TimeUnit.MILLISECONDS) }
         featExec.shutdownNow(); synExec.shutdownNow(); spk.close()
         runCatching { hubert?.close() }; runCatching { rmvpe?.close() }; runCatching { voc?.close() }; runCatching { netG?.close() }
         hubert = null; rmvpe = null; voc = null; netG = null; hubertNpu = false
@@ -646,15 +686,16 @@ class LiveRvc(private val open0: (String) -> Any?) {
             if (raw.isNotEmpty()) { lastPullT = tp; pulls++; pullSamples += raw.size }
             // 声纹聚焦（Alkove）：AEC 已在 shell 录音线程做完（micRing 里就是 AEC 后的声音）；这里在历史窗 / 输入降噪 /
             // 声纹门限 / RVC 之前处理。输出只含已就绪样本（开头少约一跳），出错由 AlkoveFocus 自己旁路成原始 PCM
+            // 2.1.1-alpha.6：聚焦在独立线程处理，这里只入队、取已处理好的样本，不再同步等待；关掉时把它队列里剩下的送完
             val fc = focus
-            val got = if (fc != null && fc.enabled && raw.isNotEmpty()) fc.process(raw) else raw
+            val got = if (fc != null && raw.isNotEmpty() && (fc.enabled || fc.pending())) fc.process(raw) else raw
             if (pullMs > 30) L.w("live 拉取慢：${pullMs}ms")
             if (tp - pumpStatT > 5_000_000_000L) {
                 if (pumpStatT != 0L) L.m("live 拉取/5s 次数=$pulls 样本=${pullSamples * 1000 / SR}ms 最大间隔=${pullGapMax}ms 在途=${inflight.get()}")
                 pumpStatT = tp; pulls = 0; pullSamples = 0; pullGapMax = 0
             }
             if (raw.isEmpty()) { try { Thread.sleep(15) } catch (_: InterruptedException) { return }; continue }
-            if (got.isEmpty()) continue   // 聚焦刚开始，样本还在 Alkove 的 16 ms 跳里
+            if (got.isEmpty()) continue   // 聚焦：样本还在处理线程 / Alkove 的 16 ms 跳里
             // 滚动进历史窗
             val n = got.size
             if (n >= WIN48) {
@@ -704,6 +745,7 @@ class LiveRvc(private val open0: (String) -> Any?) {
                 val target = lastLagMs
                 val waitMs = target - (System.nanoTime() - tAvail) / 1_000_000
                 if (waitMs > 0) Thread.sleep(minOf(waitMs, BLOCK * 20L))
+                outGain = 1f
                 emit(FloatArray(OUT * UPP))
             } catch (_: InterruptedException) {
             } finally { inflight.decrementAndGet() }
@@ -767,11 +809,14 @@ class LiveRvc(private val open0: (String) -> Any?) {
                 val featMs = lastFeatMs
                 val tQ = System.nanoTime()
                 val voiced = f0.count { it > 0f }
-                if (spk.active && !spk.pass(vpEnd)) {
-                    if (spk.blocked % 10 == 1L) L.m("live 块#$id 声纹不符（阈值 ${"%.2f".format(spk.threshold)}），跳过合成、输出静音")
+                // 2.1.1-alpha.6：判为他人不再整块静音，照常合成后压低 SpeakerGate.ATTEN_DB（渐变）；ATTEN_DB ≤ -60 时退回旧行为
+                val vpLow = spk.active && !spk.pass(vpEnd)
+                if (vpLow && SpeakerGate.ATTEN_DB <= -60f) {
+                    if (spk.blocked % 10 == 1L) L.m("live 块#$id 声纹不符（放行阈值 ${"%.2f".format(spk.threshold)}），跳过合成、输出静音")
                     emitSilence(tAvail)
                     return@execute
                 }
+                if (vpLow && spk.blocked % 10 == 1L) L.m("live 块#$id 声纹不符（放行阈值 ${"%.2f".format(spk.threshold)} / 拦截 ${"%.2f".format(spk.blockThreshold)}），压低 ${SpeakerGate.ATTEN_DB.toInt()}dB")
                 // 串行：等这块合成完，featExec 才接下一块，两段不同时抢大核
                 val done = if (serial) java.util.concurrent.CountDownLatch(1) else null
                 synExec.execute {
@@ -784,6 +829,7 @@ class LiveRvc(private val open0: (String) -> Any?) {
                         if (pl) { var a = phAcc.toDouble(); val o = T - y.size / UPP; for (j in 0 until BLOCK) { val r = pitchf[o + j] / 100.0 + 0.5; a += r - Math.floor(r) - 0.5 }; phAcc = (a - Math.floor(a)).toFloat() }
                         post(y, win48raw, pitchf)
                         if (denoiseOut) runCatching { System.arraycopy(tgOut.process(y), 0, y, 0, y.size) }.onFailure { L.e("输出降噪失败", it); denoiseOut = false }
+                        applyGain(y, if (vpLow) attenGain else 1f)
                         lastSynMs = (System.nanoTime() - t1) / 1_000_000
                         val vocTag = if (usedVoc && voc != null) "(前半${lastPreMs}+NEON声码器${lastDecMs})" else ""
                         val t2 = System.nanoTime()
@@ -803,6 +849,8 @@ class LiveRvc(private val open0: (String) -> Any?) {
                         }
                         lastLagMs = lag
                         record(featMs, lastSynMs, lag)
+                        // ADPF：关键路径（串行看两段之和，并行看较慢一段），目标 = 块长
+                        runCatching { hint.report(slow * 1_000_000L, BLOCK * 10_000_000L) }
                     } catch (t: Throwable) {
                         L.e("live netg", t)
                     } finally { inflight.decrementAndGet(); done?.countDown() }

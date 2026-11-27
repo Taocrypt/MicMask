@@ -555,7 +555,9 @@ object MicInjector {
                     perfOf(kv)
                     main.post { status((modeLabel ?: if (external) tr("AI 变声") else tr("普通变声")) + tr(" · 麦电平 {0} · 目标在录={1} · 缓冲 {2} ms · 断流 {3}", kv["live"], kv["recs"], (kv["outBuf"]?.toIntOrNull() ?: 0) / 48, kv["under"]) + (kv["eng"]?.takeIf { it.isNotEmpty() }?.let { " · $it" } ?: statusExtra?.invoke()?.let { " · $it" } ?: "") +
                         // shell 侧 micHint 原文（供 i18n_check）：tr("没有收到麦克风数据，正在重建录音") tr("采集到的是纯静音（麦克风可能被系统静音或被占用）") tr("麦克风被系统静音（其他应用可能占用了录音）") tr("通话占用了降噪录音，已自动改用原始麦克风") tr("麦克风只录到静音，正在换录音方式") tr("麦克风只录到静音：请检查系统的麦克风权限/隐私开关，或在设置里换录音方式")
-                        (kv["mic"]?.takeIf { it.isNotEmpty() }?.let { "\n⚠ " + tr(it) } ?: "")) }
+                        (kv["mic"]?.takeIf { it.isNotEmpty() }?.let { "\n⚠ " + tr(it) } ?: "") +
+                        // shell 侧 note 原文（2.1.1-alpha.6，供 i18n_check）：tr("注入通道不再取声音（可能被游戏或系统接管），正在重建") tr("声纹聚焦：本机性能不足，已降级")
+                        (kv["note"]?.takeIf { it.isNotEmpty() }?.let { "\n⚠ " + tr(it) } ?: "")) }
                     Thread.sleep(300)
                 }
             }.start()
@@ -713,6 +715,23 @@ object MicInjector {
         // 声纹聚焦（Alkove）：追加在 AEC 之后；旧版 shell 读完 aecMode 就停，忽略此段。JSON 每次都带（不管开关），shell 据此持久化
         d.writeInt(tuneFocus); d.writeString(tuneFocusPrint)
     }
+    /** 变声中录入声纹门限的进度 / 结果（TX_VP_ENROLL 应答）；state 见 InjectorService.TX_VP_ENROLL */
+    class VpEnroll(val state: Int, val sec: Int, val levelDb: Float, val err: Int, val detail: String,
+                   val consistency: Float = 0f, val windows: Int = 0, val emb: FloatArray? = null)
+    /** op：1 开始 0 取消 2 查询。注入服务太旧（不认识这个事务）返回 null */
+    fun vpEnroll(op: Int, secs: Int = 0): VpEnroll? = runCatching {
+        call(InjectorService.TX_VP_ENROLL, { d -> d.writeInt(op); if (op == 1) d.writeInt(secs) }) { r ->
+            if (r.dataAvail() < 4 || r.readInt() != InjectorService.VP_ENROLL_MAGIC) null
+            else {
+                val st = r.readInt(); val sec = r.readInt(); val lv = r.readFloat(); val err = r.readInt(); val det = r.readString().orEmpty()
+                if (st == 3) {
+                    val c = r.readFloat(); val w = r.readInt(); val n = r.readInt()
+                    VpEnroll(st, sec, lv, err, det, c, w, if (n in 1..1024) FloatArray(n) { r.readFloat() } else null)
+                } else VpEnroll(st, sec, lv, err, det)
+            }
+        }
+    }.getOrNull()
+
     fun pushTune() {
         if (!liveOn) return
         runCatching { call(InjectorService.TX_LIVE_TUNE, { d -> writeTune(d) }) { } }
