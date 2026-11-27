@@ -91,7 +91,8 @@ compose.desktop {
             targetFormats(TargetFormat.Msi, TargetFormat.Exe)
             packageName = "MicMask"
             packageVersion = pkgVersion
-            description = "MicMask 电脑版：与手机 MicMask 互传声音"
+            // MSI 元数据只用 ASCII：JDK 21 的 jpackage 用 en-us（代码页 1252）跑 WiX light，中文会报 LGHT0311 打包失败
+            description = "MicMask for Windows - send and receive audio with the MicMask phone app"
             vendor = "Taocrypt"
             copyright = "Copyright (C) 2026 Taocrypt. GPL-3.0"
             licenseFile.set(rootDir.resolve("../LICENSE"))
