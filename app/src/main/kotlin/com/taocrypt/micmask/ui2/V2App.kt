@@ -134,6 +134,7 @@ import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.Delete
 import top.yukonga.miuix.kmp.icon.extended.Download
 import top.yukonga.miuix.kmp.icon.extended.Edit
+import top.yukonga.miuix.kmp.icon.extended.Link
 import top.yukonga.miuix.kmp.icon.extended.Mic
 import top.yukonga.miuix.kmp.icon.extended.Music
 import top.yukonga.miuix.kmp.icon.extended.Pause
@@ -193,7 +194,7 @@ private fun OledTheme(controller: ThemeController, oled: Boolean, content: @Comp
     }
 }
 
-/** v2 界面：四栏（AI 变声 / 普通变声 / 虚拟声卡 / 设置）+ 二级页，悬浮液态玻璃底栏 */
+/** v2 界面：四栏（变声〔AI 变声 / 普通变声 / 虚拟声卡 三段〕/ 传音 / 语音 / 设置）+ 二级页，悬浮液态玻璃底栏 */
 @Composable
 fun V2App(vm: MainViewModel) {
     val ctx = LocalContext.current
@@ -290,8 +291,9 @@ fun V2App(vm: MainViewModel) {
 private val tabSpring = spring<Float>(dampingRatio = 0.86f, stiffness = 260f)
 
 private data class Tab(val title: String, val icon: ImageVector)
-private val Tabs get() = listOf(Tab(tr("变声"), MiuixIcons.Mic), Tab(tr("效果"), MiuixIcons.Tune), Tab(tr("语音"), MiuixIcons.Music), Tab(tr("设置"), MiuixIcons.Settings))
-private val TabTitles get() = listOf(tr("变声"), tr("效果"), tr("语音"), tr("设置"))
+// 2.1.1-alpha.11：原第 2 栏「效果」（虚拟声卡页）并入「变声」页第 3 段，空出的第 2 栏改为「传音」
+private val Tabs get() = listOf(Tab(tr("变声"), MiuixIcons.Mic), Tab(tr("传音"), MiuixIcons.Link), Tab(tr("语音"), MiuixIcons.Music), Tab(tr("设置"), MiuixIcons.Settings))
+private val TabTitles get() = listOf(tr("变声"), tr("传音"), tr("语音"), tr("设置"))
 
 @Composable
 private fun MainTabs(vm: MainViewModel, st: UiState, ui: UiPrefs, page0: Int, onPage: (Int) -> Unit, open: (String) -> Unit) {
@@ -329,7 +331,7 @@ private fun MainTabs(vm: MainViewModel, st: UiState, ui: UiPrefs, page0: Int, on
                     ) {
                         when (page) {
                             0 -> voicePage(vm, st, open)
-                            1 -> soundCardPage(vm, st)
+                            1 -> linkPage(vm, st)
                             2 -> soundBoardPage(vm, st, open)
                             else -> settingsPage(vm, st, open)
                         }
@@ -637,7 +639,7 @@ private fun LazyListScope.voicePage(vm: MainViewModel, st: UiState, open: (Strin
     // 推荐位 banner：复用横幅样式，排在公告横幅之后，标题前自动打「推广」
     item(key = "slot_banner") { BeaconSlotBanner(st.liveOn) }
     item(key = "mode_switch") { ModeSwitch(vm, st) }
-    if (st.voiceTab == 0) aiPage(vm, st, open) else pitchPage(vm, st)
+    when (st.voiceTab) { 0 -> aiPage(vm, st, open); 1 -> pitchPage(vm, st); else -> soundCardPage(vm, st) }
     item(key = "slot_home_bottom") { BeaconSlotCard("home_bottom", st.liveOn, Modifier.fillMaxWidth().padding(PagePad).padding(top = 12.dp)) }
 }
 
@@ -646,7 +648,8 @@ private fun ModeSwitch(vm: MainViewModel, st: UiState) {
     val primary = MiuixTheme.colorScheme.primary
     Row(Modifier.fillMaxWidth().padding(PagePad).padding(top = 4.dp, bottom = 4.dp)
         .clip(androidx.compose.foundation.shape.RoundedCornerShape(16.dp)).background(MiuixTheme.colorScheme.secondaryContainer).padding(4.dp)) {
-        listOf(tr("AI 变声"), tr("普通变声")).forEachIndexed { i, n ->
+        // 三段：英文按全称放不下，换成短写
+        (if (com.taocrypt.micmask.I18n.english) listOf("AI", "Basic", "Sound Card") else listOf(tr("AI 变声"), tr("普通变声"), tr("虚拟声卡"))).forEachIndexed { i, n ->
             val sel = st.voiceTab == i
             val bg by animateColorAsState(if (sel) primary else androidx.compose.ui.graphics.Color.Transparent, tween(260), label = "seg$i")
             Box(Modifier.weight(1f).clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp)).background(bg)
@@ -654,10 +657,11 @@ private fun ModeSwitch(vm: MainViewModel, st: UiState) {
                     if (st.voiceTab != i) {
                         vm.setVoiceTab(i)
                         // 运行中切换 = 直接切到另一种变声
-                        if (st.liveOn && st.liveMode in 0..1 && st.liveMode != i) vm.startMode(i)
+                        // 外放模式（无 Shizuku）下声卡不可用：只切页，不重启
+                        if (st.liveOn && st.liveMode in 0..2 && st.liveMode != i && !(i == 2 && st.speakerMode)) vm.startMode(i)
                     }
                 }.padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
-                Text(n, fontWeight = FontWeight.SemiBold, fontSize = 15.sp,
+                Text(n, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, maxLines = 1, softWrap = false,
                     color = if (sel) MiuixTheme.colorScheme.onPrimary else MiuixTheme.colorScheme.onSecondaryContainer)
             }
         }

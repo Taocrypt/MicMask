@@ -511,7 +511,7 @@ object MicInjector {
         private set
 
     /** 开始实时变声：真麦 → 变调 → 持续注入 [targetPkg]（逗号分隔多个）。[status] 回调运行状态文字。 */
-    fun startLive(ctx: Context, targetPkg: String, semis: Float, source: Int, external: Boolean = false, primeMs: Int = 100, rvcInShell: Boolean = false, status: (String) -> Unit) {
+    fun startLive(ctx: Context, targetPkg: String, semis: Float, source: Int, external: Boolean = false, primeMs: Int = 100, rvcInShell: Boolean = false, linkRx: Boolean = false, status: (String) -> Unit) {
         val app = ctx.applicationContext
         val uids = targetPkg.split(',', ' ', ';').map { it.trim() }.filter { it.isNotEmpty() }
             .map { uidOf(app, it) }.filter { it >= 0 }.distinct().toIntArray().let { if (scopeAuto) IntArray(0) else it }
@@ -523,6 +523,8 @@ object MicInjector {
         }
         ensureBound(app) {
             Thread {
+                // 传音接收模式开关每次都下发（旧 shell 不认识就忽略），保证普通变声/AI 变声不会沿用上一次接收的设置
+                runCatching { call(InjectorService.TX_LINK, { it.writeInt(1); it.writeInt(if (linkRx) 1 else 0) }) { } }
                 val err = runCatching {
                     call(InjectorService.TX_LIVE_START, {
                         it.writeInt(uids.size); uids.forEach { u -> it.writeInt(u) }
@@ -653,6 +655,19 @@ object MicInjector {
         for (i in pcm.indices) { val v = pcm[i].toInt(); bytes[2 * i] = v.toByte(); bytes[2 * i + 1] = (v shr 8).toByte() }
         runCatching { call(InjectorService.TX_LIVE_PUSH, { it.writeByteArray(bytes) }) { } }
     }
+
+    /** 传音发送取点开关（shell 把注入前的 tapBuf 复制一份）；返回 shell 是否支持 */
+    fun linkTap(on: Boolean): Boolean = runCatching {
+        call(InjectorService.TX_LINK, { it.writeInt(2); it.writeInt(if (on) 1 else 0) }) { r -> r.dataAvail() >= 4 && r.readInt() == InjectorService.LINK_MAGIC }
+    }.getOrDefault(false)
+
+    /** 传音：拉取取点 PCM（48k 单声道）；不支持/未连接返回 null，暂无数据返回空数组 */
+    fun linkPull(max: Int): ShortArray? = runCatching {
+        call(InjectorService.TX_LINK, { it.writeInt(3); it.writeInt(max) }) { r ->
+            if (r.dataAvail() < 4 || r.readInt() != InjectorService.LINK_MAGIC) null
+            else { val b = r.createByteArray() ?: ByteArray(0); ShortArray(b.size / 2) { i -> ((b[2 * i].toInt() and 0xff) or (b[2 * i + 1].toInt() shl 8)).toShort() } }
+        }
+    }.getOrNull()
 
     /** 变声中换音色：先 [sendLiveModels] 送新合成器，再调这个让 shell 重启推理；返回是否生效 */
     /** 当前引擎代数：直接问一次状态，不等轮询 */

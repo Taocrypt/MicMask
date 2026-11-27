@@ -122,6 +122,11 @@
             android:name=".LiveService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback|microphone" />
+        <!-- 传音：局域网音频收发（App 进程里做网络），用户在「传音」页开启才启动 -->
+        <service
+            android:name=".link.LinkService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback|microphone" />
         <!-- Shizuku：免 root 获得 shell 身份，跑麦克风注入服务 -->
         <provider
             android:name="rikka.shizuku.ShizukuProvider"

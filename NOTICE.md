@@ -179,3 +179,18 @@ App 侧的「系统权限模式」为本仓库按现有注入服务重新实现�
 
 > liquid-glass — https://github.com/deepika-builds/liquid-glass
 > MIT License, Copyright (c) 2026 Deepika Rao
+
+### MicYou（GPL-3.0-or-later + MicYou Plugin Exception 1.0）
+
+「传音」功能兼容 [MicYou](https://github.com/MicYou-Dev/MicYou) 的局域网协议（握手串、`MicY`/`MicU` 帧格式、Protobuf 消息与字段号、端口与 mDNS 服务类型、会话与心跳规则），
+协议编解码与收发逻辑（`app/src/main/kotlin/com/taocrypt/micmask/link/`）参照 MicYou 公开源码重新实现；`tools/micyou_sim.py` 内嵌的 `.proto` 消息定义取自 MicYou 的
+`tauri-app/crates/micyou-protocol/proto/network.proto`。感谢 MicYou 作者与贡献者。
+
+> MicYou — Turns your Android device into a high-quality PC microphone.
+> Copyright (C) 2026 LanRhyme <https://github.com/MicYou-Dev/MicYou>
+>
+> This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by
+> the Free Software Foundation, either version 3 of the License, or (at your option) any later version, with the MicYou Plugin Exception.
+
+MicMask 整体按 GPL-3.0 发布；依 GPLv3 第 7 条，MicMask 中参照 MicYou 的部分按普通 GPL-3.0 提供，不附带其插件例外。
+「MicYou」是其作者的项目名称，MicMask 只在界面与文档中说明「兼容 MicYou 电脑端」，不用其名称和图标做宣传，也与其作者无关联。

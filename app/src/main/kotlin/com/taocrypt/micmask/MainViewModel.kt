@@ -316,6 +316,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val prefs = Prefs.main(ctx)
 
     init {
+        // 传音：接收端注入沿用实时变声的目标应用与录音源
+        com.taocrypt.micmask.link.LinkHub.init(ctx)
+        com.taocrypt.micmask.link.LinkHub.targetProvider = {
+            liveTarget() to (if (_state.value.liveAec) android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION else android.media.MediaRecorder.AudioSource.MIC)
+        }
         // 开始实时变声时引擎会测速/读缓存，把结果记到当前音色上（自动降档的临时结果不记）
         com.taocrypt.micmask.inject.MicInjector.onBench = { r ->
             val v = _state.value.liveVoice
@@ -959,6 +964,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun toggleLive() {
         val inj = com.taocrypt.micmask.inject.MicInjector
+        // 传音接收正在注入时麦克风被它占用（MicInjector.liveOn 也是 true），不能当成「停止变声」处理
+        if (com.taocrypt.micmask.link.LinkHub.rxInjecting && !_state.value.liveOn) {
+            _state.value = _state.value.copy(toast = tr("传音接收正在注入，请先在「传音」页关闭接收"))
+            return
+        }
         if (!inj.liveOn && !_state.value.liveOn && speakerMode()) {
             _state.value = _state.value.copy(toast = if (_state.value.liveMode == 2) tr("外放模式下声卡不可用（需要 Shizuku）") else tr("未授权 Shizuku：当前为录播模式，在变声页按住按钮录一句"))
             return
@@ -979,6 +989,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         val src = if (_state.value.liveAec) android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION else android.media.MediaRecorder.AudioSource.MIC
+        // 传音发送中用的是 App 自己录的麦：先放掉，变声起来后改从 shell 取点
+        com.taocrypt.micmask.link.LinkHub.onLiveStarting()
         if (!scopeAuto() && whitelist().isEmpty()) L.i("UI 白名单为空：只做本机试听（目标=自身）")
         Thread { runCatching { com.taocrypt.micmask.inject.MicInjector.auditPlayAudio() } }.start()
         com.taocrypt.micmask.inject.MicInjector.modeLabel = listOf(tr("AI 变声"), tr("普通变声"), tr("虚拟声卡")).getOrNull(_state.value.liveMode)
@@ -1475,6 +1487,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
     /** 按模式开始/停止；运行中切到别的模式会先停再按新模式重启 */
     fun startMode(mode: Int) {
+        if (com.taocrypt.micmask.link.LinkHub.rxInjecting && !_state.value.liveOn) { _state.value = _state.value.copy(toast = tr("传音接收正在注入，请先在「传音」页关闭接收")); return }
         if (mode == 2 && !com.taocrypt.micmask.inject.MicInjector.liveOn && speakerMode()) { _state.value = _state.value.copy(toast = tr("外放模式下声卡不可用（需要 Shizuku）")); return }
         val st = _state.value
         if (st.liveOn) {

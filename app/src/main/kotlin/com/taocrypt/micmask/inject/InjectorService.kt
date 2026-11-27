@@ -112,6 +112,13 @@ class InjectorService : Binder {
          */
         const val TX_VP_ENROLL = 26
         const val VP_ENROLL_MAGIC = 0x56504531
+        /**
+         * 传音（2.1.1-alpha.11）：op(int) 1 = 接收模式开关 on(int)（在 TX_LIVE_START 之前设，影响预缓冲与积压裁剪）；
+         * 2 = 发送取点开关 on(int)（把写进注入轨道前的 tapBuf 复制进 linkRing）；3 = 拉取取点 PCM max(int) → byte[]（48k 单声道 s16le）。
+         * 应答先写 [LINK_MAGIC]，App 据此判断 shell 是否支持（旧服务不认识这个事务码，应答为空）。
+         */
+        const val TX_LINK = 27
+        const val LINK_MAGIC = 0x4C4E4B31
         /** 实时变声写注入轨道单次最多等这么久（alpha.4 小米实测正常阻塞写 p50≈45ms、偶发 ≤ 340ms） */
         const val WRITE_WAIT_MS = 400L
         /** 已判定卡住后每次写只等这么久，主循环继续按麦克风节拍跑 */
@@ -225,6 +232,23 @@ class InjectorService : Binder {
                     reply?.writeNoException()
                     return true
                 }
+                TX_LINK -> {
+                    reply?.writeNoException()
+                    reply?.writeInt(LINK_MAGIC)
+                    when (data.readInt()) {
+                        1 -> { linkRx = data.readInt() == 1 }
+                        2 -> { val on = data.readInt() == 1; linkRing.clear(); if (on != linkTap) slog('I', "传音：发送取点 ${if (on) "开" else "关"}"); linkTap = on }
+                        3 -> {
+                            val max = data.readInt().coerceIn(0, SR)
+                            val tmp = ShortArray(minOf(max, linkRing.size()))
+                            val k = linkRing.read(tmp, 0, tmp.size)
+                            val bytes = ByteArray(k * 2)
+                            for (i in 0 until k) { val v = tmp[i].toInt(); bytes[2 * i] = v.toByte(); bytes[2 * i + 1] = (v shr 8).toByte() }
+                            reply?.writeByteArray(bytes)
+                        }
+                    }
+                    return true
+                }
                 TX_LIVE_START -> {
                     val n = data.readInt().coerceIn(0, 16)
                     val uids = IntArray(n) { data.readInt() }
@@ -233,7 +257,9 @@ class InjectorService : Binder {
                     liveSource = srcRaw and 0xffff
                     recCompat = (srcRaw and REC_COMPAT_FLAG) != 0
                     liveExternal = data.dataAvail() >= 4 && data.readInt() == 1
-                    livePrimeMs = maxOf(if (data.dataAvail() >= 4) data.readInt().coerceIn(20, 1500) else 100, tierPrimeMs)
+                    val primeReq = if (data.dataAvail() >= 4) data.readInt().coerceIn(20, 1500) else 100
+                    // 传音接收：音源是远端音频，不沿用 AI 引擎定档的预缓冲（tierPrimeMs 可能是上一次 AI 变声留下的 330 ms+）
+                    livePrimeMs = if (linkRx) primeReq else maxOf(primeReq, tierPrimeMs)
                     val rvcHere = data.dataAvail() >= 4 && data.readInt() == 1
                     if (data.dataAvail() >= 16) readTune(data)
                     micRing.clear(); outRing.clear()
@@ -1151,6 +1177,11 @@ class InjectorService : Binder {
     @Volatile private var tierPrimeMs = 0
     private val micRing = ShortRing(SR * 3)
     private val outRing = ShortRing(SR * 3)
+    /** 传音接收模式：outRing 里是远端音频（App 经 TX_LIVE_PUSH 逐包推入），积压裁剪改用更紧的阈值做漂移校正 */
+    @Volatile private var linkRx = false
+    /** 传音发送取点：tapBuf（目标 App 实际听到的声音）复制一份给 App 拉走发出去；最多攒 0.5 s，App 被冻结时丢最旧的 */
+    @Volatile private var linkTap = false
+    private val linkRing = ShortRing(SR / 2)
     /** 目标开麦（其他应用录音数 0 → ≥1）的时刻，看门狗线程置、liveLoop 取走处理；0 = 无（2.1.1：按住说话开头的旧积压裁剪） */
     private val tgtOpenNs = java.util.concurrent.atomic.AtomicLong(0L)
     /** 外部（AI）输出里最近一次出现人声的时刻；峰值约 -30 dBFS 以上算有声 */
@@ -1960,8 +1991,9 @@ class InjectorService : Binder {
                     // 刚推完一块时裁到预缓冲，下一块到来前只剩 预缓冲 − 块间隔（330 − 260 ≈ 70 ms），读麦稍一停顿就断流（TB323FU 22:11:43）。
                     // 现改为：只看「谷底」——完整 1 s 窗口里缓冲的最小值仍高于 预缓冲 + 余量，才算持续积压；裁掉的量 = 谷底 − 预缓冲，
                     // 即把谷底拉回预缓冲（平时谷底本来就在预缓冲以下），裁后至少留 预缓冲 + 余量。余量 = max(120 ms, 半块)
-                    val blkS = maxOf(SR / 4, SR * (livePrimeMs - 80).coerceAtLeast(0) / 1000)
-                    val trimJit = maxOf(SR * 120 / 1000, blkS / 2)
+                    // 传音接收（远端逐包推入，没有「整块」）：块按 40 ms、余量 30 ms 算，且不要求静音段——用于吸收两台设备的时钟漂移和 Wi-Fi 突发后的积压
+                    val blkS = if (linkRx) SR * 40 / 1000 else maxOf(SR / 4, SR * (livePrimeMs - 80).coerceAtLeast(0) / 1000)
+                    val trimJit = if (linkRx) SR * 30 / 1000 else maxOf(SR * 120 / 1000, blkS / 2)
                     var obNow = outRing.size()
                     if (primed) trimWinMin = minOf(trimWinMin, obNow) else { trimWinMin = 0; trimLastMin = -1 }
                     if (nowRd - trimWinT >= 1_000_000_000L) { trimWinT = nowRd; trimLastMin = trimWinMin; trimWinMin = Int.MAX_VALUE }
@@ -1988,11 +2020,12 @@ class InjectorService : Binder {
                             obNow = keep
                         } else slog('I', "目标开麦：裁掉旧积压 0ms，剩 ${obNow * 1000 / SR}ms（$why）")
                     }
-                    if (!joinArm && obNow > prime + blkS && valley > prime + trimJit && System.nanoTime() - lastVoicedNs > 500_000_000L) {
+                    if (!joinArm && obNow > prime + blkS && valley > prime + trimJit && (linkRx || System.nanoTime() - lastVoicedNs > 500_000_000L)) {
                         val keep = maxOf(prime + trimJit, obNow - (valley - prime))
                         if (keep < obNow) {
                             outRing.trimTo(keep)
-                            slog('I', "输出积压过多（静音段）：近 1 s 谷底 ${valley * 1000 / SR}ms > 预缓冲 ${livePrimeMs}ms + 余量 ${trimJit * 1000 / SR}ms，" +
+                            if (linkRx) joinArm = true   // 有声段也会裁：下一帧开头 5 ms 平滑接上
+                            slog('I', (if (linkRx) "传音：接收缓冲偏高（漂移/突发）" else "输出积压过多（静音段）") + "：近 1 s 谷底 ${valley * 1000 / SR}ms > 预缓冲 ${livePrimeMs}ms + 余量 ${trimJit * 1000 / SR}ms，" +
                                 "丢掉 ${(obNow - keep) * 1000 / SR}ms，剩 ${keep * 1000 / SR}ms")
                             trimLastMin = -1; trimWinMin = Int.MAX_VALUE; trimWinT = nowRd
                         }
@@ -2021,6 +2054,7 @@ class InjectorService : Binder {
                         val o = i * FRAME_BYTES
                         outBytes[o] = lo; outBytes[o + 1] = hi; outBytes[o + 2] = lo; outBytes[o + 3] = hi
                     }
+                    if (linkTap) linkRing.write(tapBuf, 0, hop)
                     val tw0 = System.nanoTime()
                     if (!writeOutLive(outBytes)) break
                     wrMax = maxOf(wrMax, System.nanoTime() - tw0)
@@ -2053,6 +2087,7 @@ class InjectorService : Binder {
                     val o = i * FRAME_BYTES
                     outBytes[o] = lo; outBytes[o + 1] = hi; outBytes[o + 2] = lo; outBytes[o + 3] = hi
                 }
+                if (linkTap) linkRing.write(tapBuf, 0, hop)
                 liveLevelDb = (10 * Math.log10(e / hop + 1e-12)).toFloat()
                 liveFrames++
                 if (!writeOutLive(outBytes)) break
