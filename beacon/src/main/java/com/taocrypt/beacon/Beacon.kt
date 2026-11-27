@@ -41,6 +41,8 @@ object Beacon {
         val debug: Boolean = false,
         /** 赞助状态验签公钥（SPKI DER base64），默认为 Beacon 服务端公钥 */
         val sponsorPublicKey: String = SponsorSig.DEFAULT_KEY,
+        /** versionName，只用于后台统计显示真实版本号；为空时自动读 PackageInfo.versionName */
+        val versionName: String? = null,
     )
 
     private const val TAG = "Beacon"
@@ -453,6 +455,11 @@ object Beacon {
         lastActive = now
     }
 
+    private var vnCache: String? = null
+    private fun versionName(o: Options): String = o.versionName?.takeIf { it.isNotBlank() } ?: vnCache ?: runCatching {
+        @Suppress("DEPRECATION") app.packageManager.getPackageInfo(app.packageName, 0).versionName
+    }.getOrNull().orEmpty().also { vnCache = it }
+
     private fun flushNow() {
         val o = opts ?: return
         val full = isAnalyticsEnabled()
@@ -463,7 +470,7 @@ object Beacon {
             if (batch.isEmpty()) return
             val body = JSONObject()
                 .put("iid", installId()).put("sid", sessionId.ifEmpty { "s" + installId() })
-                .put("ver", o.versionCode).put("ch", o.channel)
+                .put("ver", o.versionCode).put("vn", versionName(o)).put("ch", o.channel)
                 .put("os", if (full) Build.VERSION.RELEASE ?: "" else "").put("dev", if (full) Build.MODEL ?: "" else "")
                 .put("lang", Locale.getDefault().toLanguageTag())
                 .put("ev", JSONArray(batch))

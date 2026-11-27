@@ -12,6 +12,8 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // Alkove 端侧声纹聚焦 SDK（Apache-2.0）：只从这里取 ai.alkove，其它依赖不查这个仓库
+        maven("https://maven.alkove.ai") { content { includeGroup("ai.alkove") } }
     }
 }
 

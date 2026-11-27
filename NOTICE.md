@@ -51,6 +51,80 @@ mobile-rvc 的解码器结构又移植自 RVC（mobile-rvc 的 THIRD_PARTY_NOTIC
 >
 > （许可条款与上文 MIT 相同）
 
+### 3D-Speaker CAM++ 说话人嵌入模型（Apache-2.0，按需下载，不随 APK 分发）
+
+可选功能「声纹门限」使用 3D-Speaker 的 CAM++ 中文通用说话人确认模型（`speech_campplus_sv_zh-cn_16k-common`，约 20 万说话人训练，输出 192 维嵌入），
+ONNX 版本由 k2-fsa/sherpa-onnx 导出。模型文件 `3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx`（28,281,139 字节，
+sha256 `e6af4d4c444f3dab01d991bb9b7d5af98eb979e329f6c8880a19d5553561ed25`）只在用户打开该功能或录入声纹时从原发布地址下载，
+不包含在本仓库与 APK 中。fbank 前处理（`SpeakerFbank.kt`）按 3D-Speaker / torchaudio Kaldi fbank 的参数用 Kotlin 重写。
+Apache-2.0 全文见 notices/Apache-2.0.txt。
+
+> 3D-Speaker — https://github.com/modelscope/3D-Speaker
+> Copyright 3D-Speaker (https://github.com/alibaba-damo-academy/3D-Speaker). All Rights Reserved.
+> Licensed under the Apache License, Version 2.0
+>
+> 模型：ModelScope iic/speech_campplus_sv_zh-cn_16k-common — https://www.modelscope.cn/models/iic/speech_campplus_sv_zh-cn_16k-common （Apache License 2.0）
+> 论文：Hui Wang, Siqi Zheng, Yafeng Chen, Luyao Cheng, Qian Chen. CAM++: A Fast and Efficient Network for Speaker Verification Using Context-Aware Masking. arXiv:2303.00332
+>
+> ONNX 导出：k2-fsa/sherpa-onnx — https://github.com/k2-fsa/sherpa-onnx （Apache-2.0），
+> 发布页 https://github.com/k2-fsa/sherpa-onnx/releases/tag/speaker-recongition-models ，
+> 镜像 https://huggingface.co/csukuangfj/speaker-embedding-models
+
+### WebRTC AEC3 / webrtc-aec3-kmp（软件回声消除，MIT + BSD-3-Clause）
+
+可选功能「软件回声消除（实验）」（`SoftAec.kt`，默认关闭）通过 Maven 依赖 `cn.enaium.webrtc.aec3:webrtc-aec3-kmp-android:1.0.3`
+调用 WebRTC 的 AEC3 回声消除器，APK 中包含其原生库 `libwebrtc_aec3_jni.so`（仅 arm64-v8a）。
+
+> webrtc-aec3-kmp（Kotlin 绑定与 JNI 层）— https://github.com/Enaium/webrtc-aec3-kmp
+> 仓库 LICENSE 为 MIT License, Copyright (c) 2026 Enaium（全文见 `notices/webrtc-aec3-kmp-MIT.txt`）；
+> 注意：该库发布到 Maven Central 的 POM 中声明的许可为 BSD-3-Clause，与仓库 LICENSE 不一致，此处两者一并保留。
+>
+> webrtc-aec3（从 WebRTC 抽出的 AEC3 源码，作为上述库的子模块编译进 .so）— https://github.com/Enaium/webrtc-aec3
+> WebRTC — https://webrtc.googlesource.com/src
+> BSD 3-Clause License, Copyright (c) 2011, The WebRTC project authors. All rights reserved.（全文见 `notices/WebRTC-BSD-3.txt`）
+> WebRTC 另附「Additional IP Rights Grant (Patents)」专利授权声明：上游 webrtc-aec3 子模块未附带该文件，
+> 本项目从 WebRTC 官方仓库取得原文收录于 `notices/WebRTC-PATENTS.txt`，适用于 Google 作为 WebRTC 代码包分发的部分。
+
+该原生库中还静态包含以下第三方代码（随 WebRTC 源码一起编译）：
+
+> Abseil C++（`absl/`）— https://github.com/abseil/abseil-cpp
+> Apache License 2.0, Copyright The Abseil Authors（全文见 `notices/Apache-2.0.txt`）
+>
+> JsonCpp（`base/jsoncpp/`，AEC3 用于解析配置 JSON）— https://github.com/open-source-parsers/jsoncpp
+> Copyright 2007-2011 Baptiste Lepilleur and The JsonCpp Authors；在承认公有领域的司法辖区为公有领域，其余辖区以 MIT License 发布（全文见 `notices/jsoncpp-LICENSE.txt`）
+>
+> Ooura FFT（`common_audio/third_party/ooura/fft_size_128/ooura_fft.cc`）— http://www.kurims.kyoto-u.ac.jp/~ooura/fft.html
+> Copyright Takuya OOURA, 1996-2001.
+> "You may use, copy, modify and distribute this code for any purpose (include commercial use) and without fee. Please refer to this package when you modify this code."
+> WebRTC 作者的改动适用上文 WebRTC 许可与专利授权。
+
+感谢 Enaium、WebRTC 项目作者、Abseil 作者、Baptiste Lepilleur 与 JsonCpp 作者、大浦拓哉（Takuya OOURA）。
+
+### Alkove（声纹聚焦，Apache-2.0：代码与模型权重）
+
+可选功能「声纹聚焦（Alkove）」（`AlkoveFocus.kt` / `AlkoveStore.kt`，默认关闭）通过 Maven 依赖 `ai.alkove:alkove:0.5.0`
+（仓库 https://maven.alkove.ai ）调用 Alkove 的端侧声纹聚焦，APK 中包含其原生库 `libalkove.so`（仅 arm64-v8a）。
+模型 `alkove-focus-1.alk`、`alkove-cue-1-preview.alk`、`alkove-timbre-1.alk` 不包含在本仓库与 APK 中，
+只在用户选择该功能或注册声纹时，按 SDK 0.5.0 钉定的 revision 从 Hugging Face（或其镜像 hf-mirror.com）下载并校验 sha256。
+Alkove 的代码与模型权重均以 Apache License 2.0 发布（全文见 `notices/Apache-2.0.txt`），其 NOTICE 原文收录于 `notices/alkove-NOTICE.txt`。
+
+> Alkove — https://github.com/alkove-ai/alkove · https://alkove.ai
+> Copyright 2026 Eddy Bordi. Licensed under the Apache License, Version 2.0
+>
+> 模型：https://huggingface.co/alkove-ai/alkove-focus-1 （revision 69075e5）、
+> https://huggingface.co/alkove-ai/alkove-cue-1-preview （revision 0e1f303）、
+> https://huggingface.co/alkove-ai/alkove-timbre-1 （revision cb87ad7），均为 Apache License 2.0
+>
+> alkove-focus-1 由 GTCRN 检查点（https://github.com/Xiaobin-Rong/gtcrn ，在 DNS3 上训练）继续训练而来：
+> MIT License, Copyright (c) 2024 Rong Xiaobin（全文见 `notices/alkove-NOTICE.txt`）
+>
+> libalkove.so 中 alkove-core 的文本表（crates/core/src/text/tables.rs）派生自 Unicode Character Database 16.0：
+> Unicode License v3, Copyright © 1991-2024 Unicode, Inc.（全文见 `notices/alkove-NOTICE.txt`）
+
+本功能的接入思路参考了一位用户转来的 Alkove 接入提案（alkove-micmask.patch 及其说明）：在实时变声链路里、RVC 之前插入 Alkove Focus，
+在 App 里用 Timbre 注册声纹后交给注入进程使用。本仓库按现有架构重新实现（模型改为运行时下载、与声纹门限并列为下拉选项、经 tune 参数传声纹）。
+感谢 Eddy Bordi 与 Alkove 项目、Rong Xiaobin（GTCRN），以及提出该提案的用户。
+
 感谢以上作者。
 
 | 组件 | 许可 |
@@ -66,6 +140,10 @@ mobile-rvc 的解码器结构又移植自 RVC（mobile-rvc 的 THIRD_PARTY_NOTIC
 | RVC WebUI：合成器 / 声码器结构（经 mobile-rvc） | MIT（见 notices/RVC-MIT.txt） |
 | TTS 前端数据表（GPT-SoVITS / pypinyin / g2pW / chinese-roberta 词表） | MIT / MIT / Apache-2.0 / Apache-2.0 |
 | 内置音效 app/src/main/assets/sfx | CC0 1.0 / 公有领域（见 sfx/LICENSES.md） |
+| 3D-Speaker CAM++ 说话人嵌入模型（sherpa-onnx 导出的 ONNX，声纹门限按需下载，不随 APK 分发） | Apache-2.0（见上文） |
+| webrtc-aec3-kmp：软件回声消除的 Kotlin/JNI 绑定（Maven 依赖，含 libwebrtc_aec3_jni.so） | MIT（POM 写 BSD-3-Clause，见上文） |
+| WebRTC AEC3（经 webrtc-aec3-kmp）及其包含的 Abseil / JsonCpp / Ooura FFT | BSD-3-Clause + 专利授权 / Apache-2.0 / MIT 或公有领域 / Ooura 许可（见上文） |
+| Alkove SDK `ai.alkove:alkove`（含 libalkove.so）与 Focus / Cue / Timbre 模型权重（声纹聚焦按需下载，不随 APK 分发） | Apache-2.0（Focus 派生自 GTCRN，MIT；文本表 Unicode License v3；见上文） |
 
 ## 模型与声音
 

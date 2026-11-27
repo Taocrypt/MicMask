@@ -271,6 +271,39 @@ object ModelRepo {
         } finally { tmp.delete() }
     }
 
+    /**
+     * 单个文件直链下载（声纹模型等不在仓库清单里的固定文件）：[mirrors] 是同一文件的多个地址，按顺序试，
+     * 先写 .part、校验大小与 sha256 后改名为 [dst]。已存在且校验一致直接返回。全部失败抛异常（各地址的原因）。
+     */
+    fun downloadDirect(mirrors: List<String>, dst: File, sha256: String, size: Long, progress: (Float) -> Unit) {
+        if (dst.isFile && dst.length() == size && sha256(dst) == sha256.lowercase()) { progress(1f); return }
+        dst.parentFile?.mkdirs()
+        val tmp = File(dst.path + ".part")
+        val errs = ArrayList<String>()
+        for (u in mirrors) {
+            val md = MessageDigest.getInstance("SHA-256")
+            var done = 0L; var last = 0L
+            val r = runCatching {
+                stream(listOf(u), tmp, md) { n ->
+                    done += n
+                    val now = System.currentTimeMillis()
+                    if (now - last > 200) { last = now; progress((done.toFloat() / size.coerceAtLeast(1L)).coerceAtMost(1f)) }
+                }
+                checkLfs(tmp)
+                val hex = md.digest().joinToString("") { "%02x".format(it) }
+                if ((size > 0 && tmp.length() != size) || hex != sha256.lowercase()) throw java.io.IOException(tr("{0} 校验失败（sha256 不符）", dst.name))
+                dst.delete()
+                if (!tmp.renameTo(dst)) throw java.io.IOException(tr("改名失败：{0}", dst.name))
+            }
+            if (r.isSuccess) { L.i("直链下载完成 ${dst.name} ${dst.length() / 1048576}MB（$u）"); progress(1f); return }
+            tmp.delete()
+            val why = r.exceptionOrNull()?.let { it.message ?: it.javaClass.simpleName } ?: "?"
+            L.w("直链下载失败 ${dst.name}（$u）：$why")
+            errs += u.substringAfter("://").substringBefore('/') + "：" + why
+        }
+        throw java.io.IOException(errs.joinToString("；"))
+    }
+
     /** 依次下载 [urls]（分片按顺序拼接）写进 [tmp]，同时算整体摘要；每个分片先检查不是 LFS 指针。 */
     private fun stream(urls: List<String>, tmp: File, md: MessageDigest, onBytes: (Int) -> Unit) {
         tmp.outputStream().use { out ->

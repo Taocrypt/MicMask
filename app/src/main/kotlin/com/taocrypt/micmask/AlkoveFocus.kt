@@ -1,0 +1,195 @@
+package com.taocrypt.micmask
+
+import ai.alkove.Alkove
+import ai.alkove.Event
+import ai.alkove.Live
+import ai.alkove.Models
+import ai.alkove.Voiceprint
+import java.io.File
+
+/**
+ * 声纹聚焦（Alkove Focus，shell 进程侧）：在 LiveRvc.pumpLoop 里 io.pull 之后、历史窗 / 输入降噪 / 声纹门限 / RVC 之前，
+ * 把 48 kHz 单声道 PCM 过一遍 ai.alkove.Live（Focus + Cue + Timbre），只留下注册的声音（未注册时留最近、最响的人声）。
+ * 设计参考了用户转来的 Alkove 接入提案（alkove-micmask.patch），按本仓库现状重写。
+ *
+ *  - 参数固定 gate=false（PCM 连续送 RVC）、normalize=false（不改电平）、sleep=true（静音 2 s 后 Focus/Cue 休眠）。
+ *  - Live 内部：48k → 16k（窗口 sinc，实时模式晚半个窗 = 12 个 48k 样本）→ 按 256 样本（16 ms）一跳跑 Focus
+ *    （Focus 自身晚 256 样本）→ 16k → 48k（再晚 12 个 16k 样本）。每次 push 只吐出已就绪的样本，数量与输入不必相等，
+ *    pumpLoop 本来就按实际样本数累计，所以不补齐、不混原始声。算法延迟约 17–33 ms（视 push 与 16 ms 跳的对齐，平均约 25 ms）。
+ *  - 输出带宽 16 kHz（≤ 约 7 kHz）：RVC 的 HuBERT / RMVPE 本来就在 16 kHz 上取特征，对变声结果影响小。
+ *  - 模型从 [dir]（shell 的模型目录，App 经 TX_LIVE_MODELS 送来）加载，Alkove.configure(dir) 指向它，加载时校验 sha256。
+ *  - 声纹 JSON 由 App 经 tune Parcel 送来，持久化到 [dir]/alkove/voiceprint.json；Live 建立时从这里读，
+ *    运行中更新则 Live.setVoiceprint（在下一段静音处生效）。读不出（另一版 Timbre 的声纹）按就近人声运行。
+ *  - 任何异常 / 模型缺失 / 跟不上实时 → 本次变声旁路原始 PCM 并记日志；下次开始变声（[reset]）再试。
+ *  - 每 10 s 汇总一条日志：处理耗时 p50 / 最大、是否有声纹、旁路原因。
+ *
+ * 线程：[process] 只在 live-pump 线程调用；[configure] 在 binder 线程；[reset] 在启动线程。共享状态用 [lock] 保护。
+ */
+class AlkoveFocus(private val dir: File) {
+    companion object {
+        const val SR = 48000
+        val NAMES = listOf("focus", "cue", "timbre")
+        private const val STAT_NS = 10_000_000_000L
+        /** 一个统计窗内处理耗时占音频时长超过这个比例 → 判定跟不上实时，旁路 */
+        private const val RT_LIMIT = 0.5
+    }
+
+    /** 声纹聚焦开关（tune 送来）。关时 LiveRvc 不调 [process] */
+    @Volatile var enabled = false; private set
+
+    private val lock = Any()
+    @Volatile private var models: Models? = null
+    @Volatile private var loading = false
+    @Volatile private var loadErr: String? = null
+    private var live: Live? = null
+    /** 本次变声的旁路原因（null = 正常工作）；[reset] 清掉 */
+    @Volatile private var fail: String? = null
+    @Volatile private var hasPrint = false
+    private var fbuf = FloatArray(4800)
+
+    // 统计（只在 pump 线程读写）
+    private val costs = LongArray(4096)
+    private var nCost = 0
+    private var maxCost = 0L
+    private var procNs = 0L
+    private var inSamples = 0L
+    private var bypassSamples = 0L
+    private var sleepPushes = 0
+    private var statT = 0L
+    private var lastReason: String? = null
+
+    val printFile: File get() = File(File(dir, "alkove"), "voiceprint.json")
+
+    /**
+     * tune 送来的开关和声纹。[updatePrint] = Parcel 里带了声纹字段（旧版 App 不带 → 不动已存的声纹）；
+     * [json] 空 = 未注册（删除已存的，按就近人声）。
+     */
+    fun configure(on: Boolean, json: String?, updatePrint: Boolean) {
+        if (updatePrint) {
+            val f = printFile
+            val old = runCatching { if (f.isFile) f.readText() else null }.getOrNull()
+            val j = json?.takeIf { it.isNotBlank() }
+            if (j != old) {
+                runCatching {
+                    if (j == null) f.delete()
+                    else { f.parentFile?.mkdirs(); val tmp = File(f.path + ".part"); tmp.writeText(j); f.delete(); if (!tmp.renameTo(f)) throw java.io.IOException("rename ${f.name}") }
+                }.onSuccess { L.i("聚焦：声纹已${if (j == null) "删除（按就近人声）" else "保存 ${j.length} 字节"} → ${f.path}") }
+                    .onFailure { L.e("聚焦：声纹写入 ${f.path} 失败", it) }
+                // 运行中：直接换声纹（Alkove 在下一段静音处生效，不重建）
+                synchronized(lock) { live?.let { l -> runCatching { l.setVoiceprint(readPrint()) }.onFailure { L.w("聚焦：运行中更新声纹失败：${it.message}") } } }
+            }
+        }
+        if (on != enabled) L.i("声纹聚焦（Alkove）→ ${if (on) "开" else "关"}")
+        enabled = on
+        if (on) preload() else synchronized(lock) { live?.let { runCatching { it.close() } }; live = null }
+    }
+
+    /** 开始变声时调：丢掉上次的流状态，清旁路原因；模型上次没加载成功（比如当时还没送达）再试一次 */
+    fun reset() {
+        synchronized(lock) { live?.let { runCatching { it.close() } }; live = null; fail = null }
+        if (loadErr != null && models == null) loadErr = null
+        statT = 0L; clearStats(); lastReason = null
+        if (enabled) preload()
+    }
+
+    /** 后台加载模型（读文件 + sha256 + 原生初始化），不占 pump 线程；加载完之前 [process] 旁路 */
+    private fun preload() {
+        if (models != null || loading || loadErr != null) return
+        loading = true
+        Thread({
+            try {
+                if (!Alkove.supported) throw IllegalStateException("本机 ABI 没有 Alkove 原生库（只有 arm64-v8a / x86_64）")
+                val miss = AlkoveStore.FILES.filter { !File(dir, it).isFile }
+                if (miss.isNotEmpty()) throw IllegalStateException("模型未送达：${miss.joinToString()}")
+                val t0 = System.nanoTime()
+                Alkove.configure(dir = dir)
+                models = Models.load(NAMES, dir = dir)
+                L.i("聚焦：模型已加载（Alkove ${Alkove.version}，${NAMES.joinToString("+")}，用时 ${(System.nanoTime() - t0) / 1_000_000}ms）")
+            } catch (t: Throwable) {
+                loadErr = t.message ?: t.javaClass.simpleName
+                L.e("聚焦：模型加载失败，本次变声旁路原始声音", t)
+            } finally { loading = false }
+        }, "alkove-load").start()
+    }
+
+    /** 已存声纹；没有或读不出（另一版 Timbre 的声纹）→ null，按就近人声 */
+    private fun readPrint(): Voiceprint? {
+        val f = printFile
+        if (!f.isFile) { hasPrint = false; return null }
+        val vp = runCatching { Voiceprint.fromJson(f.readText()) }.onFailure { L.w("聚焦：声纹读取失败：${it.message}") }.getOrNull()
+        if (vp == null) L.w("聚焦：已存声纹与当前 Timbre 版本不符或已损坏，按就近人声运行；请重新注册")
+        hasPrint = vp != null
+        return vp
+    }
+
+    /**
+     * 处理一段 48 kHz 单声道 PCM，返回已就绪的处理结果（长度可与输入不同，开头约 1–2 跳为空）。
+     * 不工作时原样返回输入。只在 live-pump 线程调用。
+     */
+    fun process(x: ShortArray): ShortArray {
+        val now = System.nanoTime()
+        if (statT == 0L) statT = now
+        val m = models
+        val why = when {
+            fail != null -> fail
+            loadErr != null -> "模型加载失败：$loadErr"
+            m == null -> if (loading) "模型加载中" else "模型未加载"
+            else -> null
+        }
+        val y: ShortArray
+        if (why != null) {
+            y = x; bypassSamples += x.size
+        } else {
+            y = try {
+                synchronized(lock) {
+                    val l = live ?: Live(m!!, SR, gate = false, normalize = false, voiceprint = readPrint(), sleep = true).also {
+                        live = it
+                        L.i("聚焦：开始（48k→16k Focus→48k，算法延迟约 17–33ms；声纹=${if (hasPrint) "已注册" else "未注册，按就近人声"}；gate=关 normalize=关 sleep=开）")
+                    }
+                    if (fbuf.size < x.size) fbuf = FloatArray(x.size)
+                    for (i in x.indices) fbuf[i] = x[i] / 32768f
+                    val t0 = System.nanoTime()
+                    val (out, ev) = l.push(fbuf, x.size)
+                    val c = System.nanoTime() - t0
+                    if (nCost < costs.size) costs[nCost++] = c
+                    maxCost = maxOf(maxCost, c); procNs += c
+                    for (e in ev) if (e is Event.Diag && e.code == "idle") L.m("聚焦：${if (e.data["asleep"] == true) "静音休眠" else "唤醒"}")
+                    if (l.sleeping) sleepPushes++
+                    ai.alkove.toInt16(out)
+                }
+            } catch (t: Throwable) {
+                fail = "处理出错：${t.message ?: t.javaClass.simpleName}"
+                L.e("聚焦：处理出错，本次变声改为旁路原始声音", t)
+                synchronized(lock) { live?.let { runCatching { it.close() } }; live = null }
+                bypassSamples += x.size
+                x
+            }
+        }
+        inSamples += x.size
+        val r = fail ?: why
+        if (r != lastReason) { if (r != null) L.w("聚焦：旁路（$r）") else if (lastReason != null) L.i("聚焦：恢复处理"); lastReason = r }
+        if (now - statT >= STAT_NS) { report(now); statT = now }
+        return y
+    }
+
+    private fun report(now: Long) {
+        val audioS = inSamples.toDouble() / SR
+        val n = nCost
+        val r = fail ?: lastReason
+        val head = if (n > 0) {
+            val a = costs.copyOf(n); a.sort()
+            val load = if (audioS > 0) procNs / 1e9 / audioS else 0.0
+            if (load > RT_LIMIT && fail == null) {
+                fail = "跟不上实时（处理占音频时长 ${(load * 100).toInt()}%）"
+                L.w("聚焦：${fail}，本次变声改为旁路原始声音")
+                synchronized(lock) { live?.let { runCatching { it.close() } }; live = null }
+            }
+            "处理耗时 p50=${"%.2f".format(a[n / 2] / 1e6)}ms 最大=${"%.2f".format(maxCost / 1e6)}ms（$n 次，实时占用 ${(load * 100).toInt()}%，休眠 ${sleepPushes * 100 / n}%）"
+        } else "处理耗时 —（本 10 s 未处理）"
+        val bp = if (bypassSamples > 0) "旁路 ${bypassSamples * 1000 / SR}ms 音频，原因：${r ?: "?"}" else "旁路原因：无"
+        L.i("聚焦：$head · 声纹=${if (hasPrint) "已注册" else "未注册（就近人声）"} · $bp · 已用 ${"%.1f".format(audioS)}s 音频")
+        clearStats()
+    }
+
+    private fun clearStats() { nCost = 0; maxCost = 0L; procNs = 0L; inSamples = 0L; bypassSamples = 0L; sleepPushes = 0 }
+}

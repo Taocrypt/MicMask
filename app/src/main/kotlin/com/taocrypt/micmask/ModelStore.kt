@@ -44,8 +44,12 @@ object ModelStore {
         val v = currentVoice(ctx) ?: return listOf(HUBERT, RMVPE)
         val netg = LIVE_NETG_ALL.map { voiceFile(v, it) }.filter { locate(ctx, it) != null }
             .let { l -> if (l.size > 1) l.filterNot { it.endsWith("_d8.onnx") } else l }
-        return listOf(HUBERT, RMVPE) + netg + listOfNotNull(voiceFile(v, LIVE_INDEX).takeIf { locate(ctx, it) != null })
+        return listOf(HUBERT, RMVPE) + netg + listOfNotNull(voiceFile(v, LIVE_INDEX).takeIf { locate(ctx, it) != null }) + voiceprintNames(ctx) + focusNames(ctx)
     }
+    /** 声纹门限模型：下载过就一起交给 shell（不管开关），变声中开关声纹门限即时生效，不用重传模型 */
+    private fun voiceprintNames(ctx: Context): List<String> = listOfNotNull(SpeakerEmbedder.MODEL.takeIf { Voiceprint.modelReady(ctx) })
+    /** 声纹聚焦（Alkove）模型：三个都下载齐了就一起交给 shell（不管模式），变声中切到聚焦即时生效 */
+    private fun focusNames(ctx: Context): List<String> = if (AlkoveStore.modelsReady(ctx)) AlkoveStore.FILES else emptyList()
 
     // ---------------------------------------------------------------- 多音色
     /** 实时音色文件：<音色>_stream[_b50]_<qdq|fp32|d8>.onnx；DEFAULT_VOICE 是内部标准名（历史沿用，仅作文件名约定） */

@@ -1522,6 +1522,79 @@ private fun rememberFold(key: String): androidx.compose.runtime.MutableState<Boo
     return remember { mutableStateOf(ctx.getSharedPreferences("ui", 0).getBoolean("fold_$key", false)) }
 }
 
+/**
+ * 设置页「声纹」：下拉选 关 / 声纹门限（CAM++）/ 声纹聚焦（Alkove），二者互斥，默认关；只作用于 AI 实时变声。
+ * 门限：录入声纹（约 10 秒）、阈值、删除；聚焦：Timbre 学习声纹（约 8 秒）、删除，未注册时按就近人声运行。
+ */
+@Composable
+private fun VoiceprintCard(vm: MainViewModel, st: UiState, mode: Int, setMode: (Int) -> Unit) {
+    val prog by vm.vpProgress.collectAsStateWithLifecycle()
+    var gen by remember { mutableIntStateOf(0) }
+    val data = remember(gen) { vm.vpData() }
+    val model = remember(gen, prog) { vm.vpModelReady() }
+    val fTime = remember(gen) { vm.focusPrintTime() }
+    val fModel = remember(gen, prog) { vm.focusModelsReady() }
+    var thr by remember { mutableFloatStateOf(vm.vpThr()) }
+    var permFor by remember { mutableIntStateOf(1) }
+    val perm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (!ok) vm.toast(tr("需要麦克风权限才能录音"))
+        else if (permFor == 2) vm.focusEnroll { gen++ } else vm.vpEnroll { gen++ }
+    }
+    val busy = prog != null
+    val fmt = { t: Long -> java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date(t)) }
+    WindowDropdownPreference(items = listOf(tr("关"), tr("声纹门限"), tr("声纹聚焦（Alkove）")), selectedIndex = mode, title = tr("声纹模式"),
+        summary = when (mode) {
+            1 -> when {
+                data == null -> tr("未录入声纹，录入后生效。只有像你本人的声音才会被变声，旁人说话按静音处理（AI 实时变声）")
+                !model -> tr("打开时会下载声纹模型（约 27 MB）")
+                else -> tr("只有像你本人的声音才会被变声，旁人说话按静音处理（AI 实时变声）。叠加在静音门限之后")
+            }
+            2 -> when {
+                !fModel -> tr("选择时会下载声纹聚焦模型（约 4.5 MB）")
+                fTime == null -> tr("未注册声纹：按就近人声运行，保留离麦克风最近、最响的人声。注册后只保留你的声音（AI 实时变声）")
+                else -> tr("只保留你的声音，压低旁人说话和背景声后再变声（AI 实时变声）")
+            }
+            else -> tr("默认关闭。声纹门限：不像你的声音按静音处理；声纹聚焦：从混杂的声音里只留下你的声音再变声")
+        },
+        enabled = !busy,
+        onSelectedIndexChange = { m -> if (m != mode) vm.setVpMode(m) { r -> setMode(r); gen++ } })
+    if (busy && mode == 0) Text(prog ?: "", Modifier.padding(horizontal = 16.dp, vertical = 4.dp), fontSize = 12.sp, color = Summary)
+    if (mode == 1) {
+        ArrowPreference(title = if (data == null) tr("录入声纹") else tr("重新录入声纹"),
+            summary = prog ?: if (data == null) tr("在安静环境用平常的音量连续说约 {0} 秒", com.taocrypt.micmask.Voiceprint.ENROLL_S)
+                else tr("已录入 · {0}", fmt(data.time)),
+            enabled = !st.liveOn,
+            onClick = {
+                if (busy) vm.vpCancelEnroll()
+                else if (!vm.hasMicPermission()) { permFor = 1; perm.launch(android.Manifest.permission.RECORD_AUDIO) }
+                else vm.vpEnroll { gen++ }
+            })
+        if (st.liveOn && data == null) Text(tr("变声中不能录入，先关闭变声"), Modifier.padding(horizontal = 16.dp), fontSize = 12.sp, color = Summary)
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+            Row { Text(tr("相似度阈值"), Modifier.weight(1f), fontSize = 14.sp); Text("%.2f".format(thr), color = Summary) }
+            Slider(value = thr, onValueChange = { thr = (it * 20).roundToInt() / 20f; vm.setVpThr(thr) }, valueRange = 0.1f..0.7f, steps = 11,
+                onValueChangeFinished = { vm.commitAiTune() })
+            Text(tr("越高越严：本人的字被吞就调低，旁人声音漏进来就调高。默认 {0}", "%.2f".format(com.taocrypt.micmask.SpeakerGate.DEFAULT_THR)), fontSize = 12.sp, color = Summary)
+        }
+        if (data != null && !busy) ArrowPreference(title = tr("删除声纹"), summary = tr("删除录入的声纹并关闭声纹门限"),
+            onClick = { vm.vpDelete(); setMode(0); gen++ })
+    }
+    if (mode == 2) {
+        ArrowPreference(title = if (fTime == null) tr("注册声纹（Alkove）") else tr("重新注册声纹（Alkove）"),
+            summary = prog ?: if (fTime == null) tr("可选。在安静环境用平常的音量连续说约 {0} 秒，学够自动结束", com.taocrypt.micmask.AlkoveStore.ENROLL_S)
+                else tr("已注册 · {0}", fmt(fTime)),
+            enabled = !st.liveOn,
+            onClick = {
+                if (busy) vm.vpCancelEnroll()
+                else if (!vm.hasMicPermission()) { permFor = 2; perm.launch(android.Manifest.permission.RECORD_AUDIO) }
+                else vm.focusEnroll { gen++ }
+            })
+        if (st.liveOn) Text(tr("变声中不能录入，先关闭变声"), Modifier.padding(horizontal = 16.dp), fontSize = 12.sp, color = Summary)
+        if (fTime != null && !busy) ArrowPreference(title = tr("删除声纹（Alkove）"), summary = tr("删除后按就近人声运行"),
+            onClick = { vm.focusDelete(); gen++ })
+    }
+}
+
 private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (String) -> Unit) {
     item {
         var f by rememberFold("voice")
@@ -1546,6 +1619,9 @@ private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (St
                 summary = (if (st.liveAec) tr("已开：回声消除 + 降噪") else tr("已关：原始麦克风，音质优先")) + if (st.liveOn) tr("（切换会重启变声）") else "")
             SwitchPreference(checked = st.liveMonitor, onCheckedChange = { vm.setLiveMonitor(it) }, title = tr("实时耳返"),
                 summary = tr("变声后的声音送到耳机"))
+            var aecOn by remember { mutableStateOf(vm.aecMode() != 0) }
+            SwitchPreference(checked = aecOn, onCheckedChange = { aecOn = it; vm.setAecMode(if (it) 1 else 0) }, title = tr("软件回声消除（实验）"),
+                summary = if (aecOn) tr("已开：消除耳返/录制预览外放进麦克风的回声；使用通话录音源（系统回声消除）或耳返关闭时自动旁路") else tr("默认关闭。外放耳返时可打开试试"))
             var rc by remember { mutableStateOf(vm.recCompat()) }
             SwitchPreference(checked = rc, onCheckedChange = { rc = it; vm.setRecCompat(it) }, title = tr("兼容录音"),
                 summary = tr("录音失败时自动启用，打开则始终使用"))
@@ -1553,6 +1629,14 @@ private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (St
                 summary = tr("单击展开 · 双击打开 App · 长按关闭"))
             if (st.liveFloat) FloatLookSettings()
         }
+        }
+    }
+    item {
+        var f by rememberFold("vp")
+        var mode by remember { mutableIntStateOf(vm.vpMode()) }
+        Column {
+            FoldTitle("vp", tr("声纹"), when (mode) { 1 -> tr("声纹门限"); 2 -> tr("声纹聚焦"); else -> tr("已关") }, f) { f = it }
+            if (!f) Card(Modifier.fillMaxWidth().padding(PagePad)) { VoiceprintCard(vm, st, mode) { mode = it } }
         }
     }
     item {
@@ -1576,6 +1660,9 @@ private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (St
             ArrowPreference(title = tr("日志"), summary = tr("查看、筛选、导出日志"), onClick = { open("logs") })
             ArrowPreference(title = tr("音频还原"), summary = tr("应用没声音时点这里还原"), onClick = { vm.repairAudio() })
             ArrowPreference(title = tr("使用教程"), summary = tr("安装、模式、AI 变声与常见问题"), onClick = { open("manual") })
+            var bw by remember { mutableStateOf(vm.batteryWhitelisted()) }
+            ArrowPreference(title = tr("电池白名单"), summary = if (bw) tr("已加入，后台不易被系统限制") else tr("未加入，点此一键加入（切后台卡顿时试试）"),
+                onClick = { vm.addBatteryWhitelist { bw = it } })
             ArrowPreference(title = tr("关于 MicMask"), summary = tr("v{0} · 更新、反馈、赞赏", com.taocrypt.micmask.BuildConfig.VERSION_NAME), onClick = { open("about") })
         }
     }

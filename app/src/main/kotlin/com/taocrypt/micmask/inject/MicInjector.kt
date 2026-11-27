@@ -324,6 +324,9 @@ object MicInjector {
     /** 调试开关：root 下把注入进程降为 shell(2000)。降权失败（8 s 没交回 binder）会自动关掉并回退 root 用户服务 */
     @Volatile var rootAsShell = true
 
+    /** 供设置页用：以 shell（或 root）身份跑一条命令，返回输出 */
+    fun shellCmd(cmd: String): String = shell(cmd)
+
     /** 通过 Shizuku 以 shell 身份跑命令（newProcess 在 API 13 是私有的，反射调用） */
     private fun shell(cmd: String): String = if (rootMode) suExec(cmd) else runCatching {
         val m = Shizuku::class.java.getDeclaredMethod("newProcess", Array<String>::class.java, Array<String>::class.java, String::class.java)
@@ -613,7 +616,24 @@ object MicInjector {
     @Volatile var tuneDnOut = false
     /** 输入麦克风 0=自动（有耳机麦用耳机麦）1=机身麦 2=耳机麦（USB/有线） */
     @Volatile var tuneMic = 0
-    private fun writeTune(d: android.os.Parcel) { d.writeInt(tuneTier); d.writeFloat(tuneGate); d.writeInt(tuneFeat); d.writeInt(tuneSyn); d.writeInt(if (tunePin) 1 else 0); d.writeFloat(tuneIdx); d.writeInt(tuneVoc); d.writeFloat(tuneRms); d.writeFloat(tuneFormant); d.writeInt(if (tunePl) 1 else 0); d.writeInt(if (tuneDnIn) 1 else 0); d.writeInt(if (tuneDnOut) 1 else 0); d.writeInt(tuneMic) }
+    /** 声纹门限：开关、阈值、录入的声纹嵌入（null = 未录入，shell 侧不拦截） */
+    @Volatile var tuneVpOn = false
+    @Volatile var tuneVpThr = com.taocrypt.micmask.SpeakerGate.DEFAULT_THR
+    @Volatile var tuneVpEmb: FloatArray? = null
+    /** 软件回声消除（WebRTC AEC3）0=关 1=开；默认关 */
+    @Volatile var tuneAec = 0
+    /** 声纹聚焦（Alkove）0=关 1=开（与声纹门限互斥，App 侧保证只开一个）；声纹 JSON（null = 未注册，按就近人声） */
+    @Volatile var tuneFocus = 0
+    @Volatile var tuneFocusPrint: String? = null
+    private fun writeTune(d: android.os.Parcel) { d.writeInt(tuneTier); d.writeFloat(tuneGate); d.writeInt(tuneFeat); d.writeInt(tuneSyn); d.writeInt(if (tunePin) 1 else 0); d.writeFloat(tuneIdx); d.writeInt(tuneVoc); d.writeFloat(tuneRms); d.writeFloat(tuneFormant); d.writeInt(if (tunePl) 1 else 0); d.writeInt(if (tuneDnIn) 1 else 0); d.writeInt(if (tuneDnOut) 1 else 0); d.writeInt(tuneMic)
+        // 声纹门限（追加在末尾，旧版 shell 读到 tuneMic 就停，兼容）
+        val e = tuneVpEmb
+        d.writeInt(if (tuneVpOn) 1 else 0); d.writeFloat(tuneVpThr); d.writeInt(e?.size ?: 0); e?.forEach { d.writeFloat(it) }
+        // 软件回声消除（AEC3）：追加在声纹门限之后；旧版 shell 读完声纹段就停，忽略此字段
+        d.writeInt(tuneAec)
+        // 声纹聚焦（Alkove）：追加在 AEC 之后；旧版 shell 读完 aecMode 就停，忽略此段。JSON 每次都带（不管开关），shell 据此持久化
+        d.writeInt(tuneFocus); d.writeString(tuneFocusPrint)
+    }
     fun pushTune() {
         if (!liveOn) return
         runCatching { call(InjectorService.TX_LIVE_TUNE, { d -> writeTune(d) }) { } }

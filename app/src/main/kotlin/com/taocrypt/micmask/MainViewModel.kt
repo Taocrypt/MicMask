@@ -1135,6 +1135,163 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         inj.tuneVoc = aiTuneVoc()
         inj.tuneRms = aiRms(); inj.tuneFormant = aiFormant(); inj.tunePl = aiPhaseLock(); inj.tuneDnIn = aiDnIn(); inj.tuneDnOut = aiDnOut()
         inj.tuneMic = aiMic()
+        inj.tuneAec = aecMode()
+        syncVp()
+    }
+    // ---- 声纹门限（设置页「声纹门限」卡片）：可选，默认关；叠加在静音门限之后，只放行像本人的声音
+    /** 录入/下载进度文字（null = 空闲），界面显示在卡片里 */
+    val vpProgress = MutableStateFlow<String?>(null)
+    @Volatile private var vpJob: kotlinx.coroutines.Job? = null
+    @Volatile private var vpCancel = false
+    /** 声纹模式 0=关 1=声纹门限（CAM++）2=声纹聚焦（Alkove）；默认关。旧版只有 vp_on 开关：开 → 门限 */
+    fun vpMode(): Int = if (prefs.contains("vp_mode")) prefs.getInt("vp_mode", 0).coerceIn(0, 2) else if (prefs.getBoolean("vp_on", false)) 1 else 0
+    private fun saveVpMode(m: Int) { prefs.edit().putInt("vp_mode", m).putBoolean("vp_on", m == 1).apply() }
+    fun vpOn(): Boolean = vpMode() == 1
+    fun vpThr(): Float = prefs.getFloat("vp_thr", SpeakerGate.DEFAULT_THR)
+    fun vpData(): Voiceprint.Data? = Voiceprint.load(ctx)
+    fun vpModelReady(): Boolean = Voiceprint.modelReady(ctx)
+    fun vpBusy(): Boolean = vpJob?.isActive == true
+    /** 开关、阈值、声纹嵌入同步给注入进程的 tune 参数（模型或声纹缺失时传「关」） */
+    private fun syncVp() {
+        val inj = com.taocrypt.micmask.inject.MicInjector
+        val d = if (vpOn()) Voiceprint.load(ctx) else null
+        inj.tuneVpOn = vpOn() && d != null && Voiceprint.modelReady(ctx)
+        inj.tuneVpThr = vpThr()
+        inj.tuneVpEmb = d?.emb
+        // 声纹聚焦：与门限互斥（模式只能选一个）；声纹 JSON 不管模式都带上，shell 据此持久化
+        inj.tuneFocus = if (vpMode() == 2 && AlkoveStore.modelsReady(ctx)) 1 else 0
+        inj.tuneFocusPrint = AlkoveStore.loadPrint(ctx)
+    }
+    /** 没下载模型就先下载（前台服务保活 + 进度）；返回是否可用 */
+    private suspend fun vpEnsureModel(): Boolean {
+        if (Voiceprint.modelReady(ctx)) return true
+        com.taocrypt.micmask.repo.DownloadService.start(ctx, tr("声纹模型"))
+        return try {
+            vpProgress.value = tr("下载声纹模型…")
+            Voiceprint.download(ctx) { p ->
+                vpProgress.value = tr("下载声纹模型 {0}%", (p * 100).toInt()); com.taocrypt.micmask.repo.DownloadService.progress(ctx, p, SpeakerEmbedder.MODEL)
+            }
+            L.i("声纹模型已下载")
+            true
+        } catch (t: Throwable) {
+            L.e("声纹模型下载失败", t)
+            withContext(Dispatchers.Main) { toast(tr("声纹模型下载失败，声纹门限不可用：{0}", t.message ?: t.javaClass.simpleName)) }
+            false
+        } finally { com.taocrypt.micmask.repo.DownloadService.stop(ctx); vpProgress.value = null }
+    }
+    /** 声纹聚焦模型（三个 .alk，约 4.5 MB）没下载就先下载（前台服务保活 + 进度）；返回是否可用 */
+    private suspend fun focusEnsureModels(): Boolean {
+        if (AlkoveStore.modelsReady(ctx)) return true
+        com.taocrypt.micmask.repo.DownloadService.start(ctx, tr("声纹聚焦模型"))
+        return try {
+            vpProgress.value = tr("下载声纹聚焦模型…")
+            AlkoveStore.download(ctx) { p ->
+                vpProgress.value = tr("下载声纹聚焦模型 {0}%", (p * 100).toInt()); com.taocrypt.micmask.repo.DownloadService.progress(ctx, p, "alkove")
+            }
+            L.i("声纹聚焦模型已下载")
+            true
+        } catch (t: Throwable) {
+            L.e("声纹聚焦模型下载失败", t)
+            withContext(Dispatchers.Main) { toast(tr("声纹聚焦模型下载失败：{0}", t.message ?: t.javaClass.simpleName)) }
+            false
+        } finally { com.taocrypt.micmask.repo.DownloadService.stop(ctx); vpProgress.value = null }
+    }
+    /**
+     * 切换声纹模式（设置页下拉）：0 关 / 1 声纹门限 / 2 声纹聚焦，二者互斥。选门限缺模型先下载，选聚焦缺模型先下载；
+     * 门限没录入声纹时照样选上，但录入前不生效（提示先录入）；聚焦没注册声纹时按就近人声运行。[done] 回调最终模式
+     */
+    fun setVpMode(m: Int, done: (Int) -> Unit) {
+        val want = m.coerceIn(0, 2)
+        if (want == 0) {
+            saveVpMode(0); syncVp(); commitAiTune()
+            L.i("UI 声纹模式 → 关"); done(0); return
+        }
+        if (vpBusy()) { done(vpMode()); return }
+        vpJob = viewModelScope.launch(Dispatchers.IO) {
+            val had = if (want == 1) Voiceprint.modelReady(ctx) else AlkoveStore.modelsReady(ctx)
+            val ok = if (want == 1) vpEnsureModel() else focusEnsureModels()
+            if (ok) {
+                saveVpMode(want); syncVp(); commitAiTune()
+                L.i("UI 声纹模式 → " + if (want == 1) "声纹门限 阈值=${vpThr()} 已录入=${Voiceprint.load(ctx) != null}" else "声纹聚焦（Alkove）已注册=${AlkoveStore.printTime(ctx) != null}")
+            }
+            withContext(Dispatchers.Main) {
+                if (ok && want == 1 && Voiceprint.load(ctx) == null) toast(tr("请先录入声纹，录入后声纹门限才生效"))
+                else if (ok && !had && _state.value.liveOn) toast(tr("模型已下载，下次开始变声时生效"))
+                done(if (ok) want else vpMode())
+            }
+        }
+    }
+    /** 阈值：拖动时只记下，松手 commitAiTune 推给运行中的引擎 */
+    fun setVpThr(v: Float) {
+        prefs.edit().putFloat("vp_thr", v.coerceIn(0.1f, 0.7f)).apply()
+        com.taocrypt.micmask.inject.MicInjector.tuneVpThr = vpThr()
+    }
+    /** 录入声纹：录 [Voiceprint.ENROLL_S] 秒本人说话 → 算嵌入均值存私有目录。变声中不能录（麦克风被注入链路占用） */
+    fun vpEnroll(done: (Boolean) -> Unit) {
+        if (vpBusy()) return
+        if (_state.value.liveOn) { toast(tr("变声中不能录入，先关闭变声")); done(false); return }
+        if (!hasMicPermission()) { toast(tr("需要麦克风权限才能录音")); done(false); return }
+        vpCancel = false
+        vpJob = viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching {
+                if (!vpEnsureModel()) throw IllegalStateException(tr("声纹模型还没下载"))
+                vpProgress.value = tr("准备录音…")
+                val x = Voiceprint.record({ vpCancel }) { sec, db ->
+                    vpProgress.value = tr("录音中 {0}/{1} 秒 · 电平 {2} dB：请用平常的音量连续说话", sec, Voiceprint.ENROLL_S, db.toInt())
+                }
+                vpProgress.value = tr("计算声纹…")
+                Voiceprint.enroll(ctx, x)
+            }
+            vpProgress.value = null
+            r.onSuccess { d -> syncVp(); commitAiTune(); L.i("UI 声纹已录入 有效窗=${d.windows} 自洽度=${"%.2f".format(d.consistency)}") }
+                .onFailure { L.w("UI 声纹录入失败：${it.message}") }
+            withContext(Dispatchers.Main) {
+                r.onSuccess { d -> toast(if (d.consistency < 0.6f) tr("声纹已录入，但录音里杂音或别人的声音偏多，建议安静环境重录") else tr("声纹已录入")) }
+                    .onFailure { toast(tr("录入失败：{0}", it.message ?: it.javaClass.simpleName)) }
+                done(r.isSuccess)
+            }
+        }
+    }
+    fun vpCancelEnroll() { vpCancel = true }
+    /** 删除录入的声纹（并关闭声纹门限） */
+    fun vpDelete() {
+        Voiceprint.delete(ctx)
+        if (vpMode() == 1) saveVpMode(0)
+        syncVp(); commitAiTune()
+        L.i("UI 已删除声纹")
+    }
+    // ---- 声纹聚焦（Alkove）：Timbre 学习声纹（约 8 秒），JSON 存私有目录并经 tune 交给 shell
+    fun focusModelsReady(): Boolean = AlkoveStore.modelsReady(ctx)
+    fun focusPrintTime(): Long? = AlkoveStore.printTime(ctx)
+    /** 注册聚焦声纹。变声中不能录（麦克风被注入链路占用） */
+    fun focusEnroll(done: (Boolean) -> Unit) {
+        if (vpBusy()) return
+        if (_state.value.liveOn) { toast(tr("变声中不能录入，先关闭变声")); done(false); return }
+        if (!hasMicPermission()) { toast(tr("需要麦克风权限才能录音")); done(false); return }
+        vpCancel = false
+        vpJob = viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching {
+                if (!focusEnsureModels()) throw IllegalStateException(tr("声纹聚焦模型还没下载"))
+                vpProgress.value = tr("准备录音…")
+                AlkoveStore.enroll(ctx, { vpCancel }) { sec, p, db ->
+                    vpProgress.value = tr("录音中 {0} 秒 · 已学习 {1}% · 电平 {2} dB：请用平常的音量连续说话", sec, (p * 100).toInt(), db.toInt())
+                }
+            }
+            vpProgress.value = null
+            r.onSuccess { syncVp(); commitAiTune(); L.i("UI 聚焦声纹已注册 接受=${it.accepted} 拒绝=${it.rejected} 录音=${it.seconds}s") }
+                .onFailure { L.w("UI 聚焦声纹注册失败：${it.message}") }
+            withContext(Dispatchers.Main) {
+                r.onSuccess { toast(if (it.rejected > it.accepted) tr("声纹已注册，但录音里杂音或别人的声音偏多，建议安静环境重录") else tr("声纹已注册")) }
+                    .onFailure { toast(tr("注册失败：{0}", it.message ?: it.javaClass.simpleName)) }
+                done(r.isSuccess)
+            }
+        }
+    }
+    /** 删除聚焦声纹（模式不变，之后按就近人声运行） */
+    fun focusDelete() {
+        AlkoveStore.deletePrint(ctx)
+        syncVp(); commitAiTune()
+        L.i("UI 已删除聚焦声纹（按就近人声运行）")
     }
     fun aiRms(): Float = prefs.getFloat("ai_rms", 0f)
     fun aiFormant(): Float = prefs.getFloat("ai_formant", 0f)
@@ -1212,6 +1369,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** 滑杆松手 / 选项点下后推给运行中的引擎 */
     fun commitAiTune() {
         if (_state.value.liveOn && _state.value.liveMode == 0) Thread { com.taocrypt.micmask.inject.MicInjector.pushTune() }.start()
+    }
+    /** 软件回声消除（WebRTC AEC3）0=关 1=开；默认关。变声中改了即推给 shell（AI / 普通变声都生效） */
+    fun aecMode(): Int = prefs.getInt("aec_mode", 0)
+    fun setAecMode(v: Int) {
+        val n = v.coerceIn(0, 1)
+        prefs.edit().putInt("aec_mode", n).apply()
+        com.taocrypt.micmask.inject.MicInjector.tuneAec = n
+        L.i("UI 软件回声消除 → ${if (n != 0) "开" else "关"}")
+        if (_state.value.liveOn && _state.value.liveMode == 0) commitAiTune()
+        else if (_state.value.liveOn) Thread { com.taocrypt.micmask.inject.MicInjector.pushTune() }.start()
     }
     /** 输入麦克风 0=自动 1=机身麦 2=耳机麦；下次开始变声生效 */
     fun aiMic(): Int = prefs.getInt("ai_mic", 0)
@@ -1975,6 +2142,33 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         com.taocrypt.micmask.inject.MicInjector.selfTest(ctx) { r ->
             _state.value = _state.value.copy(qqSelfTesting = false, qqSelfTest = r)
             refreshInjectState()
+        }
+    }
+
+    /** 是否已在系统电池优化白名单 */
+    fun batteryWhitelisted(): Boolean = runCatching {
+        (ctx.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager).isIgnoringBatteryOptimizations(ctx.packageName)
+    }.getOrDefault(false)
+
+    /** 设置页「电池白名单」：先用 Shizuku/root 以 shell 身份加入；失败则打开系统授权弹窗 */
+    fun addBatteryWhitelist(done: (Boolean) -> Unit) {
+        val pkg = ctx.packageName
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val out = runCatching {
+                com.taocrypt.micmask.inject.MicInjector.shellCmd("dumpsys deviceidle whitelist +$pkg; cmd appops set $pkg RUN_ANY_IN_BACKGROUND allow")
+            }.getOrElse { "ERR ${it.message}" }
+            val ok = batteryWhitelisted()
+            L.i("UI 电池白名单：${if (ok) "已加入" else "未加入"} 输出=${out.replace('\n', ';').take(200)}")
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                if (!ok) runCatching {
+                    ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        android.net.Uri.parse("package:$pkg")).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+                }.onFailure { L.w("UI 电池白名单 系统弹窗打开失败：${it.message}") }
+                val vivo = android.os.Build.MANUFACTURER.equals("vivo", true) || android.os.Build.MANUFACTURER.equals("iqoo", true)
+                toast(if (ok && vivo) tr("已加入电池白名单。vivo 还需在 设置 → 电池 → 后台耗电管理 里允许 MicMask 后台高耗电")
+                      else if (ok) tr("已加入电池白名单") else tr("请在系统弹窗中允许忽略电池优化"))
+                done(ok)
+            }
         }
     }
 

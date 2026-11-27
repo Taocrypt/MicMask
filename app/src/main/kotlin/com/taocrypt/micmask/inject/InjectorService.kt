@@ -90,7 +90,7 @@ class InjectorService : Binder {
         const val TX_SFX_STOP = 22
         /** 输出状态：距上次有人声输出的毫秒（-1=从未），输出缓冲毫秒 */
         const val TX_OUT_STATE = 23
-        /** 实时 AI 高级参数：tier(int) gateDb(float) featThreads(int) synThreads(int) */
+        /** 实时 AI 高级参数：tier(int) gateDb(float) featThreads(int) synThreads(int) …（见 readTune；末尾可带声纹门限 on(int) thr(float) n(int) n×float，其后可带软件回声消除 aecMode(int 0关 1开)，再其后可带声纹聚焦 focus(int 0关 1开) printJson(String，可为 null)） */
         const val TX_LIVE_TUNE = 24
         /** 变声中换音色：新合成器已由 TX_LIVE_MODELS 送到，重启推理（麦克风通道不断，换的这一两秒输出静音） */
         const val TX_LIVE_RELOAD = 25
@@ -711,6 +711,26 @@ class InjectorService : Binder {
         out("ROOT audio 策略: ${sh("dumpsys media.audio_policy 2>/dev/null | grep -iE 'silenc|Capture|uid 10' | head -15")}")
     }
 
+    /** 后台诊断：cgroup（cpu/cpuset/uclamp 等）、大核当前频率/最高频、thermal zone 最高温。读不到的项跳过 */
+    private fun bgDiag(): String {
+        fun rd(path: String) = runCatching { java.io.File(path).readText().trim() }.getOrNull()
+        val cg = rd("/proc/self/cgroup")?.lines()?.filter { it.isNotBlank() }?.joinToString(";") { it.substringAfter(':') } ?: "?"
+        val big = com.taocrypt.micmask.CpuPin.bigCores()
+        val cores = (if (big.isEmpty()) (0 until Runtime.getRuntime().availableProcessors()).toList() else big.sorted())
+        val freq = cores.joinToString(" ") { c ->
+            val cur = rd("/sys/devices/system/cpu/cpu$c/cpufreq/scaling_cur_freq")?.toLongOrNull()?.div(1000)
+            val mx = rd("/sys/devices/system/cpu/cpu$c/cpufreq/scaling_max_freq")?.toLongOrNull()?.div(1000)
+            "cpu$c=${cur ?: "?"}/${mx ?: "?"}"
+        }
+        var tMax = Int.MIN_VALUE; var tName = ""
+        java.io.File("/sys/class/thermal").listFiles { f -> f.name.startsWith("thermal_zone") }.orEmpty().forEach { z ->
+            val t = rd("${z.path}/temp")?.toIntOrNull() ?: return@forEach
+            if (t > tMax) { tMax = t; tName = rd("${z.path}/type") ?: z.name }
+        }
+        val temp = if (tMax == Int.MIN_VALUE) "?" else "%.1f°C(%s)".format(if (tMax > 1000) tMax / 1000f else tMax.toFloat(), tName)
+        return "cgroup=$cg | 频率MHz(当前/上限) $freq | 最高温 $temp"
+    }
+
     private fun slog(level: Char, msg: String, t: Throwable? = null) {
         when (level) { 'E' -> Log.e(TAG, msg, t); 'W' -> Log.w(TAG, msg, t); else -> Log.i(TAG, msg) }
         val line = synchronized(logFmt) { logFmt.format(java.util.Date()) } + " $level [shell/${Thread.currentThread().name}] " + msg +
@@ -776,6 +796,16 @@ class InjectorService : Binder {
     @Volatile private var tuneDnOut = false
     /** 输入麦克风 0=自动 1=机身麦 2=耳机麦（旧版 App 不传 → 自动）；开始变声时生效 */
     @Volatile private var tuneMic = 0
+    /** 声纹门限：开关、阈值、录入的声纹嵌入（旧版 App 不传 → 关）；即时生效 */
+    @Volatile private var tuneVpOn = false
+    @Volatile private var tuneVpThr = com.taocrypt.micmask.SpeakerGate.DEFAULT_THR
+    @Volatile private var tuneVpEmb: FloatArray? = null
+    /** 软件回声消除（WebRTC AEC3）0=关 1=开（旧版 App 不传 → 关）；接在声纹门限字段之后，变声中即时生效 */
+    @Volatile private var tuneAec = 0
+    /** 声纹聚焦（Alkove）0=关 1=开（旧版 App 不传 → 关）；接在 aecMode 之后，变声中即时生效。与声纹门限互斥：聚焦开时门限不生效 */
+    @Volatile private var tuneFocus = 0
+    /** 声纹聚焦：shell 侧处理器（模型在 MODEL_DIR，声纹持久化到 MODEL_DIR/alkove/voiceprint.json），跨引擎重建保留 */
+    private val focus by lazy { com.taocrypt.micmask.AlkoveFocus(java.io.File(MODEL_DIR)) }
     /** 当前录音指定的输入设备 id（-1 = 没指定） */
     @Volatile private var curMicId = -1
     /** 按「输入麦克风」设置选设备：1=机身麦 2=耳机麦（没插就退回机身麦）0=自动，有 USB/有线耳机麦优先 */
@@ -798,6 +828,28 @@ class InjectorService : Binder {
         if (d.dataAvail() >= 4) tuneDnIn = d.readInt() != 0
         if (d.dataAvail() >= 4) tuneDnOut = d.readInt() != 0
         if (d.dataAvail() >= 4) tuneMic = d.readInt().coerceIn(0, 2)
+        if (d.dataAvail() >= 12) {
+            tuneVpOn = d.readInt() != 0; tuneVpThr = d.readFloat()
+            val n = d.readInt()
+            tuneVpEmb = if (n in 1..1024 && d.dataAvail() >= n * 4) FloatArray(n) { d.readFloat() } else null
+            // 软件回声消除：追加在声纹门限之后（只有声纹段完整读完才往下读，避免错位）
+            if ((n == 0 || tuneVpEmb != null) && d.dataAvail() >= 4) {
+                val a = d.readInt().coerceIn(0, 1)
+                if (a != tuneAec) slog('I', "软件回声消除（AEC3）→ ${if (a != 0) "开" else "关"}")
+                tuneAec = a
+                // 声纹聚焦（Alkove）：追加在 aecMode 之后
+                if (d.dataAvail() >= 4) {
+                    tuneFocus = d.readInt().coerceIn(0, 1)
+                    val json = if (d.dataAvail() >= 4) d.readString() else null
+                    focus.configure(tuneFocus != 0, json, updatePrint = true)
+                    slog('I', "声纹聚焦参数：${if (tuneFocus != 0) "开" else "关"} 声纹=${if (json.isNullOrEmpty()) "未注册" else "${json.length} 字节"} 模型=${
+                        if (com.taocrypt.micmask.AlkoveStore.FILES.all { java.io.File(MODEL_DIR, it).isFile }) "已送达" else "未送达"}" +
+                        if (tuneFocus != 0 && tuneVpOn) "（与声纹门限互斥：门限本次不生效）" else "")
+                }
+            }
+            slog('I', "声纹门限参数：${if (tuneVpOn) "开" else "关"} 阈值=$tuneVpThr 声纹=${tuneVpEmb?.size ?: 0} 维 模型=${if (models.containsKey(com.taocrypt.micmask.SpeakerEmbedder.MODEL)) "已送达" else "未送达"}")
+        }
+        engine?.voiceprint(tuneVpOn && tuneFocus == 0, tuneVpThr, tuneVpEmb)
         val plChanged = engine?.let { it.phaseLock != tunePl } ?: false
         engine?.let { it.rmsFollow = tuneRms; it.formant = tuneFormant; it.phaseLock = tunePl; it.denoiseIn = tuneDnIn; it.denoiseOut = tuneDnOut }
         slog('I', "音色参数：响度跟随=$tuneRms 共振峰=$tuneFormant 相位锁定=$tunePl 输入降噪=$tuneDnIn 输出降噪=$tuneDnOut")
@@ -814,6 +866,8 @@ class InjectorService : Binder {
             it.tune(tuneTier, tuneGate, tuneFeat, tuneSyn)
             it.pinBig = tunePin; it.indexRate = tuneIdx; it.setVocoder(tuneVoc)
             it.rmsFollow = tuneRms; it.formant = tuneFormant; it.phaseLock = tunePl; it.denoiseIn = tuneDnIn; it.denoiseOut = tuneDnOut
+            it.voiceprint(tuneVpOn && tuneFocus == 0, tuneVpThr, tuneVpEmb)
+            it.focus = focus
             it.qnnDirProvider = { com.taocrypt.micmask.QnnPack.shellDir(ctx?.packageName) }
             it.onConfig = { blockMs -> tierPrimeMs = blockMs + 80; livePrimeMs = tierPrimeMs; slog('I', "预缓冲跟随档位 → ${livePrimeMs}ms") }
             engine = it
@@ -929,6 +983,15 @@ class InjectorService : Binder {
     }
 
     private val monBuf = ShortArray(SR / 100)
+
+    // ------------------------------------------------------------ 软件回声消除（AEC3，一期：参考 = 本进程的耳返 / 录制预览）
+    /** 耳返写给 monTrack 的样本（liveLoop 线程写、读） */
+    private val aecMonRef = ShortRing(SR)
+    /** 录制预览回放写出的样本（preview 线程写，liveLoop 读） */
+    private val aecPrevRef = ShortRing(SR)
+    @Volatile private var previewPlaying = false
+    /** 只在 liveLoop 线程里用 */
+    private var softAec: com.taocrypt.micmask.SoftAec? = null
     /** 耳返/录制预览只取人声（音效混入之前），音效只进麦克风；要本机听音效用悬浮窗长按外放 */
     private fun voiceTap(buf: FloatArray, n: Int) {
         for (i in 0 until n) monBuf[i] = (buf[i] * 32767f).toInt().coerceIn(-32768, 32767).toShort()
@@ -937,7 +1000,10 @@ class InjectorService : Binder {
 
     /** 每 10 ms 一帧变声结果都过一遍这里：耳返 + 录制预览 */
     private fun tap(mono: ShortArray, n: Int) {
-        monTrack?.let { t -> if (t.write(mono, 0, n, AudioTrack.WRITE_NON_BLOCKING) < 0) setMonitor(false) }
+        monTrack?.let { t ->
+            if (t.write(mono, 0, n, AudioTrack.WRITE_NON_BLOCKING) < 0) setMonitor(false)
+            else if (tuneAec != 0) aecMonRef.write(mono, 0, n)   // 软件 AEC 的参考：和耳返同一批样本
+        }
         var done: ShortArray? = null
         synchronized(capLock) {
             val cb = capBuf ?: return@synchronized
@@ -955,11 +1021,17 @@ class InjectorService : Binder {
                 slog('I', "录制预览完成，开始回放 ${pcm.size / SR}s")
                 val t = newMediaTrack(200)
                 t.play()
+                aecPrevRef.clear(); previewPlaying = true
                 var o = 0
-                while (o < pcm.size) { val w = t.write(pcm, o, minOf(4800, pcm.size - o)); if (w <= 0) break; o += w }
+                while (o < pcm.size) {
+                    val w = t.write(pcm, o, minOf(4800, pcm.size - o)); if (w <= 0) break
+                    if (tuneAec != 0) aecPrevRef.write(pcm, o, w)   // 软件 AEC 的参考：预览回放（同在 shell 进程）
+                    o += w
+                }
                 Thread.sleep(300)
                 runCatching { t.stop() }; t.release()
             } catch (t: Throwable) { slog('E', "预览回放失败", t) }
+            finally { previewPlaying = false; aecPrevRef.clear() }
         }, "preview").start()
     }
 
@@ -1105,6 +1177,7 @@ class InjectorService : Binder {
             var lastTgtSil: Boolean? = null
             // 被系统静音检测（AI / 普通两种模式都查）：连续 2 s 被静音且当前不是原始麦克风 → 改用原始麦克风重建一次
             var silChkT = System.nanoTime(); var silSec = 0
+            var diagSec = 0
             var callSec = 0; var callCycled = false
             // 0 DEFAULT、1 MIC、5 CAMCORDER、6 VOICE_RECOGNITION、9 UNPROCESSED、10 VOICE_PERFORMANCE
             val silOrder = intArrayOf(1, 6, 5, 9, 10, 0); var silTry = 0; val silTried = LinkedHashSet<Int>(); var silGood = true
@@ -1115,6 +1188,9 @@ class InjectorService : Binder {
             val shifter = PitchShifter(SR)
             val hop = SR / 100            // 10 ms
             val inBuf = ShortArray(hop)
+            // 软件 AEC：处理结果进 aecBuf；检测类逻辑（全零/数字静音/被静音/电平）继续用原始 inBuf
+            val aecBuf = ShortArray(hop); val aecRef = ShortArray(hop); val aecTmp = ShortArray(hop)
+            var aecWhy: String? = "未开"; var aecStatT = System.nanoTime()
             val outBytes = ByteArray(hop * FRAME_BYTES)
             val rnd = java.util.Random()
             val ext = ShortArray(hop)
@@ -1179,6 +1255,8 @@ class InjectorService : Binder {
                         val sid = rec?.audioSessionId ?: -1
                         am?.activeRecordingConfigurations?.firstOrNull { it.clientAudioSessionId == sid }?.isClientSilenced == true
                     }.getOrDefault(false)
+                    // 诊断：每 10 s 记一次推理进程的 cgroup、大核当前频率、最高温度（只记录，不改行为）
+                    if (++diagSec >= 10) { diagSec = 0; runCatching { slog('I', "后台诊断：${bgDiag()}") } }
                     // 2.1.1-alpha.3：进入通话模式 2 s 仍看不到别的应用录音 → 撤掉注入再重新接管（每次通话一次）
                     val inCall = runCatching { am?.mode.let { it == android.media.AudioManager.MODE_IN_COMMUNICATION || it == android.media.AudioManager.MODE_IN_CALL } }.getOrDefault(false)
                     if (!inCall) { callSec = 0; callCycled = false }
@@ -1278,8 +1356,39 @@ class InjectorService : Binder {
                     }
                 }
                 rdMax = maxOf(rdMax, System.nanoTime() - tr0)
+                // ---- 软件回声消除（AEC3）：在 micRing / 降噪 / PitchShifter / RVC 之前
+                var mic = inBuf
+                if (tuneAec != 0) {
+                    val why = when {
+                        liveSource == android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION -> "录音源 7 已有系统回声消除"
+                        softAec?.failed != null -> "出错：${softAec?.failed}"
+                        monTrack == null && !previewPlaying -> "无参考信号（耳返未开、无预览回放）"
+                        else -> null
+                    }
+                    if (why == null) {
+                        val sa = softAec ?: com.taocrypt.micmask.SoftAec { lv, m -> slog(lv, m) }.also { softAec = it }
+                        val k = aecMonRef.read(aecRef, 0, hop)
+                        for (i in k until hop) aecRef[i] = 0
+                        if (previewPlaying || aecPrevRef.size() > 0) {
+                            val k2 = aecPrevRef.read(aecTmp, 0, hop)
+                            for (i in 0 until k2) aecRef[i] = (aecRef[i] + aecTmp[i]).coerceIn(-32768, 32767).toShort()
+                        }
+                        if (sa.render(aecRef, hop) && sa.process(inBuf, aecBuf)) mic = aecBuf
+                    } else { aecMonRef.clear(); aecPrevRef.clear() }
+                    val st = why ?: "工作中"
+                    if (st != aecWhy) { slog('I', if (why == null) "AEC：开始处理（参考=${if (monTrack != null) "耳返" else ""}${if (previewPlaying) " 预览" else ""}）" else "AEC：旁路（$why）"); aecWhy = st }
+                    val nowA = System.nanoTime()
+                    if (nowA - aecStatT >= 10_000_000_000L) {
+                        aecStatT = nowA
+                        if (why == null) softAec?.report()?.let { slog('I', "AEC：$it") }
+                        else slog('I', "AEC：旁路（$why）")
+                    }
+                } else if (aecWhy != "未开") {
+                    softAec?.release(); softAec = null; aecMonRef.clear(); aecPrevRef.clear()
+                    slog('I', "AEC：已关闭"); aecWhy = "未开"
+                }
                 if (liveExternal) {
-                    micRing.write(inBuf, 0, hop)
+                    micRing.write(mic, 0, hop)
                     var e2 = 0.0
                     for (i in 0 until hop) { val x = inBuf[i] / 32768f; e2 += x * x }
                     liveLevelDb = (10 * Math.log10(e2 / hop + 1e-12)).toFloat()
@@ -1322,8 +1431,9 @@ class InjectorService : Binder {
                 var e = 0.0
                 val ratio = Math.pow(2.0, liveSemis / 12.0).toFloat()
                 for (i in 0 until hop) {
-                    val x = inBuf[i] / 32768f
-                    e += x * x
+                    val x0 = inBuf[i] / 32768f
+                    e += x0 * x0   // 电平（检测用）仍取原始麦克风
+                    val x = mic[i] / 32768f
                     fxBuf[i] = if (ratio == 1f) x else shifter.process(x, ratio)
                 }
                 fx.process(fxBuf, hop); voiceTap(fxBuf, hop); mixSfx(fxBuf, hop)
@@ -1351,6 +1461,7 @@ class InjectorService : Binder {
             watchdog?.interrupt()
             runCatching { rec?.stop() }
             runCatching { aec?.release() }; runCatching { ns?.release() }; aec = null; ns = null
+            runCatching { softAec?.release() }; softAec = null; aecMonRef.clear(); aecPrevRef.clear()
             runCatching { rec?.release() }
             if (running) disarm("live-end")
         }
