@@ -14,9 +14,13 @@ import cn.enaium.webrtc.aec3.createAec3FactoryWithConfig
 /**
  * 软件回声消除（WebRTC AEC3，经 webrtc-aec3-kmp 1.0.3 绑定；MIT/BSD-3，见 NOTICE.md）。
  *
- * - 固定 48 kHz 单声道、10 ms 一帧（480 样本），与 InjectorService.liveLoop 的 hop 一致，不引入额外缓冲。
+ * - 对外固定 48 kHz 单声道、10 ms 一帧（480 样本），与 InjectorService.liveLoop 的 hop 一致。
+ * - 2.1.1-alpha.7：AEC3 改在 16 kHz 跑。1.0.3 的 JNI 在 32/48 kHz 下不做分频带（上游之后才修，Maven 未发新版），
+ *   AEC3 看到的参考恒为空、永不收敛、输出原样返回（alpha.6 真机 ERL=-30.0 ERLE=0.2 估计延迟=12 ms 一直不变即此）。
+ *   现在由 [AecBandBridge] 把参考和麦克风降到 16 kHz 给 AEC3，处理完的低频带升回 48 kHz，
+ *   高频带（约 7 kHz 以上）按低频带的压低比例同步压低。代价：麦克风多 [AecBandBridge.latency48] 个样本（10 ms）延迟。
  * - 样本按 int16 刻度的 float 喂给 AEC3（不是 −1..1）。
- * - [render] 喂参考信号（本机将要/正在外放的声音），[process] 先 analyzeCapture 再 processCapture 处理麦克风。
+ * - [render] 喂参考信号（本机刚外放出去的声音），[process] 先 analyzeCapture 再 processCapture 处理麦克风。
  * - 不是线程安全的：render 与 process 都在 liveLoop 线程里串行调用。
  * - 任何异常（含 .so 加载失败的 UnsatisfiedLinkError / ExceptionInInitializerError）→ 自动关闭、记一条日志，
  *   之后 [process] 一律返回 false，调用方继续用原始麦克风。
@@ -25,6 +29,8 @@ class SoftAec(private val log: (Char, String) -> Unit) {
     companion object {
         const val SR = 48000
         const val FRAME = SR / 100
+        /** AEC3 实际运行的采样率（见类注释） */
+        const val CORE_SR = 16000
     }
 
     /** 出错原因（null = 正常）；一旦出错本实例不再工作，直到 [release] 后重建 */
@@ -38,6 +44,12 @@ class SoftAec(private val log: (Char, String) -> Unit) {
     private var cBuf: Aec3AudioBuffer? = null
     private val rf = FloatArray(FRAME)
     private val cf = FloatArray(FRAME)
+    private val of = FloatArray(FRAME)
+    private val bridge = AecBandBridge()
+    /** 最近一次读到的 AEC3 指标（每 10 帧读一次，给兜底判断用）；未读到为 NaN / -1 */
+    var lastErle = Float.NaN; private set
+    var lastDelayMs = -1; private set
+    private var metricTick = 0
 
     // 统计（由调用方定时取一次 [report] 后清零）：每帧 render+analyze+process 耗时；参考 / 麦克风处理前后能量（int16 刻度）
     private val costs = LongArray(1200)
@@ -57,10 +69,12 @@ class SoftAec(private val log: (Char, String) -> Unit) {
             cfg = c
             env = createAec3Environment()
             factory = createAec3FactoryWithConfig(c)
-            ec = createAec3EchoControl(factory!!, env!!, SR, 1, 1)
-            rBuf = createAec3AudioBuffer(SR, 1)
-            cBuf = createAec3AudioBuffer(SR, 1)
-            log('I', "AEC：已初始化（WebRTC AEC3，${SR / 1000} kHz 单声道，10 ms 帧）")
+            ec = createAec3EchoControl(factory!!, env!!, CORE_SR, 1, 1)
+            rBuf = createAec3AudioBuffer(CORE_SR, 1)
+            cBuf = createAec3AudioBuffer(CORE_SR, 1)
+            bridge.reset()
+            log('I', "AEC：已初始化（WebRTC AEC3，内部 ${CORE_SR / 1000} kHz + 高频带跟随，对外 ${SR / 1000} kHz 单声道 10 ms 帧，" +
+                "麦克风多 ${bridge.latency48 * 1000 / SR} ms 延迟；1.0.3 在 48 kHz 下不分频带、不会收敛，故改 16 kHz）")
             // 2.1.1-alpha.6：记录默认配置里和延迟相关的值（只记录，不改默认），排查外放大延迟时对照
             runCatching {
                 val j = org.json.JSONObject(c.toJson())
@@ -82,7 +96,7 @@ class SoftAec(private val log: (Char, String) -> Unit) {
             var e = 0.0
             for (i in 0 until FRAME) { val v = if (i < n) pcm[i].toFloat() else 0f; rf[i] = v; e += v.toDouble() * v }
             refE += e; nRef += FRAME
-            rBuf!!.writeChannel(0, rf)
+            rBuf!!.writeChannel(0, bridge.render48(rf))
             ec!!.analyzeRender(rBuf!!)
         }
         pendingRenderNs += System.nanoTime() - t0
@@ -97,13 +111,18 @@ class SoftAec(private val log: (Char, String) -> Unit) {
             var ei = 0.0
             for (i in 0 until FRAME) { val v = inp[i].toFloat(); cf[i] = v; ei += v.toDouble() * v }
             val b = cBuf!!
-            b.writeChannel(0, cf)
+            b.writeChannel(0, bridge.capture48(cf))
             ec!!.analyzeCapture(b)
             ec!!.processCapture(b, false)
             val y = b.readChannel(0)
-            val m = minOf(FRAME, y.size)
-            for (i in 0 until m) { val v = y[i]; out[i] = (if (v >= 32767f) 32767 else if (v <= -32768f) -32768 else v.toInt()).toShort() }
-            for (i in m until FRAME) out[i] = 0
+            check(y.size == AecBandBridge.N16) { "AEC3 输出 ${y.size} 样本（应为 ${AecBandBridge.N16}）" }
+            bridge.merge(y, of)
+            for (i in 0 until FRAME) { val v = of[i]; out[i] = (if (v >= 32767f) 32767 else if (v <= -32768f) -32768 else v.toInt()).toShort() }
+            if (++metricTick >= 10) {
+                metricTick = 0
+                val m = ec!!.getMetrics()
+                lastErle = m.echoReturnLossEnhancement.toFloat(); lastDelayMs = m.delayMs
+            }
             var eo = 0.0
             for (i in 0 until FRAME) eo += out[i].toDouble() * out[i]
             inE += ei; outE += eo; nCap += FRAME
@@ -125,7 +144,7 @@ class SoftAec(private val log: (Char, String) -> Unit) {
             val m = e.getMetrics()
             val a = costs.copyOf(nCost); a.sort()
             val p50 = a[a.size / 2]
-            line = "ERL=${"%.1f".format(m.echoReturnLoss)} ERLE=${"%.1f".format(m.echoReturnLossEnhancement)} 估计延迟=${m.delayMs} ms " +
+            line = "ERL=${"%.1f".format(m.echoReturnLoss)} ERLE=${"%.1f".format(m.echoReturnLossEnhancement)} AEC估计延迟=${m.delayMs} ms（内部 ${CORE_SR / 1000}k，高频带增益 ${"%.2f".format(bridge.hiGain)}） " +
                 "参考电平=${db(refE, nRef)}dB 麦克风 处理前=${db(inE, nCap)}dB 处理后=${db(outE, nCap)}dB " +
                 "耗时 p50/最大=${"%.2f".format(p50 / 1e6)}/${"%.2f".format(maxCost / 1e6)} ms（${nCost} 帧）"
         }
@@ -139,6 +158,7 @@ class SoftAec(private val log: (Char, String) -> Unit) {
         runCatching { ec?.close() }
         runCatching { factory?.close() }; runCatching { env?.close() }; runCatching { cfg?.close() }
         rBuf = null; cBuf = null; ec = null; factory = null; env = null; cfg = null
+        bridge.reset(); lastErle = Float.NaN; lastDelayMs = -1; metricTick = 0
         nCost = 0; maxCost = 0; pendingRenderNs = 0; refE = 0.0; inE = 0.0; outE = 0.0; nRef = 0; nCap = 0
     }
 

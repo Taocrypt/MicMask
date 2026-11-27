@@ -124,6 +124,8 @@ class InjectorService : Binder {
         const val USAGE_VIRTUAL_SOURCE = 15
         const val SR = 48000
         const val FRAME_BYTES = 4 // 立体声 16bit
+        /** 耳返目标排队（ms）：盖住注入写出 20~40 ms 的抖动，又不明显加耳返延迟（2.1.1-alpha.7） */
+        const val MON_TARGET_MS = 40
         /** 每次写 10ms */
         const val CHUNK_BYTES = SR / 100 * FRAME_BYTES
         /** 目标开始录音后，先垫一小段静音再放（QQ 开头常会丢一点） */
@@ -1189,7 +1191,8 @@ class InjectorService : Binder {
     private fun setMonitor(on: Boolean) {
         if (on) {
             if (monTrack != null) return
-            runCatching { newMediaTrack(60).also { it.play(); monTrack = it } }
+            // 2.1.1-alpha.7：容量 60 → 100 ms（只是上限，实际排队由 MonQueue 稳在约 40 ms），给写端抖动留余量，减少丢写
+            runCatching { newMediaTrack(100).also { it.play(); monTrack = it } }
                 .onSuccess { slog('I', "耳返已开（建议戴耳机，外放会啸叫）") }
                 .onFailure { slog('E', "耳返打开失败", it) }
         } else {
@@ -1203,8 +1206,37 @@ class InjectorService : Binder {
     private val monBuf = ShortArray(SR / 100)
 
     // ------------------------------------------------------------ 软件回声消除（AEC3，一期：参考 = 本进程的耳返 / 录制预览）
-    /** 耳返写给 monTrack 的样本（liveLoop 线程写、读） */
-    private val aecMonRef = ShortRing(SR)
+    /**
+     * 2.1.1-alpha.7：耳返写给 monTrack 的全部样本（含预填静音）按写入顺序记下，AEC 取参考时按 monTrack 的播放头
+     * 取「刚播出去的 10 ms」，不再是「刚写进去的」（liveLoop 线程写、读）
+     */
+    private val aecAlign = com.taocrypt.micmask.PlayoutAligner(SR * 2)
+    /** 耳返排队稳定器（启动/欠载后预填静音、长期积压过多时少写一点）；liveLoop 线程用 */
+    private val monQ = com.taocrypt.micmask.MonQueue(SR, MON_TARGET_MS)
+    /** tap 最近一次写的 monTrack（换了就重置对齐和排队） */
+    private var monSeen: AudioTrack? = null
+    private var monUnderLast = -1
+    private val monZeros = ShortArray(SR / 10)
+    /** AEC 兜底半双工压低；liveLoop 线程用 */
+    private val aecDuck = com.taocrypt.micmask.AecDuck()
+
+    /**
+     * 兜底是否适用：外放（耳返 AudioTrack 实际路由到扬声器/听筒；取不到路由时看有没有耳机），
+     * 或者在放录制预览且没戴耳机。[headset] = 当前是否接着耳机类输出
+     */
+    private fun aecOnSpeaker(headset: Boolean): Boolean {
+        val mt = monTrack
+        if (mt != null) {
+            val d = if (Build.VERSION.SDK_INT >= 24) runCatching { mt.routedDevice }.getOrNull() else null
+            if (d != null) return d.type == android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER ||
+                d.type == android.media.AudioDeviceInfo.TYPE_BUILTIN_EARPIECE || d.type == 24 /* TYPE_BUILTIN_SPEAKER_SAFE（API 30） */
+            return !headset
+        }
+        return previewPlaying && !headset
+    }
+
+    /** 耳返 AudioTrack 已播出的帧数（播放头，按无符号 32 位）；取不到返回 -1 */
+    private fun monHead(t: AudioTrack): Long = runCatching { t.playbackHeadPosition.toLong() and 0xffffffffL }.getOrDefault(-1L)
     /** 录制预览回放写出的样本（preview 线程写，liveLoop 读） */
     private val aecPrevRef = ShortRing(SR)
     @Volatile private var previewPlaying = false
@@ -1223,34 +1255,70 @@ class InjectorService : Binder {
         val ur = if (mt != null && Build.VERSION.SDK_INT >= 24) runCatching { mt.underrunCount }.getOrDefault(-1) else -1
         val dUr = if (ur >= 0 && aecMonUnderBase >= 0) ur - aecMonUnderBase else -1
         if (ur >= 0) aecMonUnderBase = ur
-        slog('I', "AEC${if (tag.isEmpty()) "" else "（$tag）"}：$r | 参考链路：耳返欠载 ${if (dUr >= 0) "$dUr" else "?"} 次 耳返丢写 $aecMonPartial 次 ${aecMonDrop * 1000 / SR}ms " +
-            "参考不足补零 $aecRefUnder 帧 参考溢出 $aecRefOver 次 参考积压 ${aecMonRef.size() * 1000 / SR}ms 输出积压 ${outRing.size() * 1000 / SR}ms")
-        aecMonDrop = 0L; aecMonPartial = 0; aecRefUnder = 0; aecRefOver = 0
+        fun ms(x: Long) = x * 1000 / SR
+        val q = monQ
+        val qs = if (q.qN > 0) "${ms(q.qSum / q.qN)}/${ms(q.qMin)}/${ms(q.qMax)}" else "?"
+        val alignQ = if (aecAlignN > 0) "${ms(aecAlignSum / aecAlignN)}ms（${ms(aecAlignMin)}~${ms(aecAlignMax)}）" else "?"
+        val d = aecDuck
+        val duck = when {
+            !aecDuckAllowed -> "不适用（${if (monTrack == null && !previewPlaying) "无外放" else "耳机"}）"
+            d.engaged -> "压低中"
+            else -> "未触发"
+        } + (if (d.engages > 0) " 本段触发 ${d.engages} 次" else "") +
+            (if (d.duckFrames > 0) " 压低 ${d.duckFrames * 10} ms 平均 -${"%.0f".format(d.duckDbSum / d.duckFrames)} dB 最深 -${"%.0f".format(d.maxDuck)} dB" else "")
+        slog('I', "AEC${if (tag.isEmpty()) "" else "（$tag）"}：$r | 参考对齐：排队补偿 $alignQ 微调 ${aecAlign.nudges} 次 重同步 ${aecAlign.resyncs} 次 " +
+            "未写补零 ${ms(aecAlign.missing)}ms 播放头=${if (aecHeadOk) "有" else "无（退回按写入）"} | 耳返：排队 平均/最小/最大 $qs ms（目标 $MON_TARGET_MS）预填 ${q.prefills} 次 ${ms(q.prefillSamples)}ms " +
+            "削减 ${ms(q.trimmedSamples)}ms 欠载 ${if (dUr >= 0) "$dUr" else "?"} 次 丢写 $aecMonPartial 次 ${ms(aecMonDrop)}ms | 兜底：$duck | 输出积压 ${ms(outRing.size().toLong())}ms")
+        aecMonDrop = 0L; aecMonPartial = 0
+        aecAlign.clearCounters(); q.clearStats(); d.clearStats()
+        aecAlignSum = 0L; aecAlignN = 0; aecAlignMin = Long.MAX_VALUE; aecAlignMax = 0L
     }
 
     // AEC 参考链路统计（liveLoop 线程读写；随 AEC 统计行输出后清零）
     /** 耳返非阻塞写没写进去、被丢掉的样本数（这些样本没外放，不进参考） */
     private var aecMonDrop = 0L
     private var aecMonPartial = 0
-    /** 参考环形缓冲：读时不足一帧（补零）的次数 / 写时超过上限被丢掉旧样本的次数 */
-    private var aecRefUnder = 0
-    private var aecRefOver = 0
+    /** 参考对齐：每帧「排队补偿」（参考起点落后写入末尾多少样本）的累计 / 最小 / 最大 */
+    private var aecAlignSum = 0L
+    private var aecAlignN = 0
+    private var aecAlignMin = Long.MAX_VALUE
+    private var aecAlignMax = 0L
+    /** 最近一帧能否取到耳返播放头 */
+    private var aecHeadOk = true
+    /** 兜底是否适用（AEC 开 + 外放）：liveLoop 每秒评估一次 */
+    private var aecDuckAllowed = false
     /** 耳返 AudioTrack 的欠载计数（系统累计值，统计时取差） */
     private var aecMonUnderBase = -1
 
     /** 每 10 ms 一帧变声结果都过一遍这里：耳返 + 录制预览 */
     private fun tap(mono: ShortArray, n: Int) {
         monTrack?.let { t ->
-            val w = t.write(mono, 0, n, AudioTrack.WRITE_NON_BLOCKING)
+            if (t !== monSeen) {
+                monSeen = t; aecAlign.reset(); monQ.reset()
+                monUnderLast = if (Build.VERSION.SDK_INT >= 24) runCatching { t.underrunCount }.getOrDefault(-1) else -1
+            }
+            // 2.1.1-alpha.7：耳返排队稳定——第一次写先垫 40 ms 静音，欠载后补回 40 ms；整秒都多出 25 ms 以上就少写几毫秒拉回来。
+            // 以前排队常在 0~10 ms 徘徊，写端（注入写出单次 20~40 ms、偶尔读麦 80 ms）一抖就欠载，alpha.6 真机每 3 s 欠载 20~53 次
+            val head = monHead(t)
+            val queued = if (head >= 0) (aecAlign.written - head).coerceAtLeast(0L) else -1L
+            val ur = if (Build.VERSION.SDK_INT >= 24) runCatching { t.underrunCount }.getOrDefault(-1) else -1
+            val underran = ur >= 0 && monUnderLast >= 0 && ur > monUnderLast
+            if (ur >= 0) monUnderLast = ur
+            monQ.plan(queued, underran, n)
+            var pre = monQ.prefill
+            while (pre > 0) {
+                val zw = t.write(monZeros, 0, minOf(pre, monZeros.size), AudioTrack.WRITE_NON_BLOCKING)
+                if (zw <= 0) break
+                aecAlign.writeZeros(zw); pre -= zw
+            }
+            val off = monQ.skip.coerceIn(0, n)
+            val w = t.write(mono, off, n - off, AudioTrack.WRITE_NON_BLOCKING)
             if (w < 0) setMonitor(false)
             else {
                 // 2.1.1-alpha.6：软件 AEC 的参考只记实际写进耳返的样本（缓冲满时没写进去的不会外放，以前照记 n 个，参考与真实外放逐渐错位）
-                if (w < n) { aecMonDrop += (n - w).toLong(); aecMonPartial++ }
-                if (tuneAec != 0 && w > 0) {
-                    // 正常时环里只有约 1 帧（本轮写、下轮读）；超过 200 ms 说明读端没跟上，丢旧的并计数，避免参考越积越晚
-                    if (aecMonRef.size() + w > SR / 5) { aecRefOver++; aecMonRef.trimTo(maxOf(0, SR / 5 - w)) }
-                    aecMonRef.write(mono, 0, w)
-                }
+                if (w < n - off) { aecMonDrop += (n - off - w).toLong(); aecMonPartial++ }
+                // 不论 AEC 开没开都记（记的是这个 AudioTrack 的帧号，排队和对齐都靠它）
+                if (w > 0) aecAlign.write(mono, off, w)
             }
         }
         var done: ShortArray? = null
@@ -1452,7 +1520,10 @@ class InjectorService : Binder {
             // 软件 AEC：处理结果进 aecBuf；检测类逻辑（全零/数字静音/被静音/电平）继续用原始 inBuf
             val aecBuf = ShortArray(hop); val aecRef = ShortArray(hop); val aecTmp = ShortArray(hop)
             var aecWhy: String? = "未开"; var aecStatT = System.nanoTime(); var aecRunT = 0L
-            aecMonDrop = 0L; aecMonPartial = 0; aecRefUnder = 0; aecRefOver = 0; aecMonUnderBase = -1
+            aecMonDrop = 0L; aecMonPartial = 0; aecMonUnderBase = -1
+            aecAlign.clearCounters(); monQ.clearStats(); aecDuck.reset(); aecDuck.clearStats()
+            aecAlignSum = 0L; aecAlignN = 0; aecAlignMin = Long.MAX_VALUE; aecAlignMax = 0L
+            var duckChkT = 0L
             val outBytes = ByteArray(hop * FRAME_BYTES)
             val rnd = java.util.Random()
             val ext = ShortArray(hop)
@@ -1629,16 +1700,44 @@ class InjectorService : Binder {
                     }
                     if (why == null) {
                         val sa = softAec ?: com.taocrypt.micmask.SoftAec { lv, m -> slog(lv, m) }.also { softAec = it }
-                        // 参考与麦克风一对一：每读一帧麦克风（hop=480）取一帧参考；参考不足（耳返欠载/丢写）补零并计数
-                        val k = aecMonRef.read(aecRef, 0, hop)
-                        if (k < hop && monTrack != null) aecRefUnder++
-                        for (i in k until hop) aecRef[i] = 0
+                        // 参考与麦克风一对一：每读一帧麦克风（hop=480）取一帧参考。
+                        // 2.1.1-alpha.7：耳返参考按 monTrack 播放头取「刚播出去的 10 ms」（PlayoutAligner），AEC3 只需估硬件/HAL 延迟
+                        val mt = monTrack
+                        if (mt != null && mt === monSeen) {
+                            val hd = monHead(mt)
+                            aecHeadOk = hd >= 0
+                            aecAlign.read(aecRef, hop, hd)
+                            val lq = aecAlign.lastQueue
+                            aecAlignSum += lq; aecAlignN++; aecAlignMin = minOf(aecAlignMin, lq); aecAlignMax = maxOf(aecAlignMax, lq)
+                        } else java.util.Arrays.fill(aecRef, 0.toShort())
                         if (previewPlaying || aecPrevRef.size() > 0) {
                             val k2 = aecPrevRef.read(aecTmp, 0, hop)
                             for (i in 0 until k2) aecRef[i] = (aecRef[i] + aecTmp[i]).coerceIn(-32768, 32767).toShort()
                         }
-                        if (sa.render(aecRef, hop) && sa.process(inBuf, aecBuf)) mic = aecBuf
-                    } else { aecMonRef.clear(); aecPrevRef.clear() }
+                        if (sa.render(aecRef, hop) && sa.process(inBuf, aecBuf)) {
+                            mic = aecBuf
+                            // ---- 兜底（2.1.1-alpha.7）：AEC 开 + 外放时，ERLE 持续 < 3 dB 且参考有声 → 按参考电平压低麦克风（半双工）
+                            val nowD = System.nanoTime()
+                            if (nowD - duckChkT >= 1_000_000_000L) { duckChkT = nowD; aecDuckAllowed = aecOnSpeaker(headsetOut()) }
+                            val refDb = com.taocrypt.micmask.AecDuck.levelDb(aecRef, hop)
+                            val erle = sa.lastErle.let { if (it.isNaN()) 99f else it }
+                            val g0 = aecDuck.gainDb
+                            if (aecDuck.step(refDb, erle, aecDuckAllowed)) {
+                                slog(if (aecDuck.engaged) 'W' else 'I', if (aecDuck.engaged)
+                                    "AEC 兜底：参考有声时 ERLE 持续 < 3 dB（当前 ${"%.1f".format(erle)} dB，参考 ${"%.0f".format(refDb)} dB），外放时按参考电平压低麦克风 15~25 dB（半双工），对方说话时你这边会变小"
+                                    else "AEC 兜底：解除（${if (!aecDuckAllowed) "已不是外放/已关" else "ERLE 回升到 ${"%.1f".format(erle)} dB"}）")
+                            }
+                            val g1 = aecDuck.gainDb
+                            if (g0 < 0f || g1 < 0f) {
+                                // 帧内从上一帧增益线性过渡到这一帧，避免咔哒声
+                                val l0 = Math.pow(10.0, g0 / 20.0).toFloat(); val l1 = Math.pow(10.0, g1 / 20.0).toFloat()
+                                for (i in 0 until hop) {
+                                    val gl = l0 + (l1 - l0) * (i + 1) / hop
+                                    aecBuf[i] = (aecBuf[i] * gl).toInt().coerceIn(-32768, 32767).toShort()
+                                }
+                            }
+                        }
+                    } else { aecPrevRef.clear(); aecDuck.reset() }
                     val st = why ?: "工作中"
                     if (st != aecWhy) {
                         // 2.1.1-alpha.6：从「工作中」切到旁路时先把这段的统计输出一次（以前不足 10 s 的会话没有任何 ERL/ERLE）
@@ -1657,7 +1756,7 @@ class InjectorService : Binder {
                     }
                 } else if (aecWhy != "未开") {
                     if (aecWhy == "工作中") aecReport("关闭前")
-                    softAec?.release(); softAec = null; aecMonRef.clear(); aecPrevRef.clear()
+                    softAec?.release(); softAec = null; aecPrevRef.clear(); aecDuck.reset()
                     slog('I', "AEC：已关闭"); aecWhy = "未开"
                 }
                 if (vpEnState == 1) vpEnrollFeed(mic, hop)
@@ -1736,7 +1835,7 @@ class InjectorService : Binder {
             runCatching { rec?.stop() }
             runCatching { aec?.release() }; runCatching { ns?.release() }; aec = null; ns = null
             if (softAec?.ready == true) runCatching { aecReport("停止时") }
-            runCatching { softAec?.release() }; softAec = null; aecMonRef.clear(); aecPrevRef.clear()
+            runCatching { softAec?.release() }; softAec = null; aecPrevRef.clear(); aecDuck.reset()
             runCatching { rec?.release() }
             if (running) disarm("live-end")
         }
