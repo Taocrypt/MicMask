@@ -204,8 +204,14 @@ object L {
     fun clearView() = synchronized(ring) { ring.clear(); version++ }
 
     /** 把日志文件 + 本进程 logcat 写进一个 zip 流（导出与反馈共用） */
-    private fun writeZip(os: java.io.OutputStream, files: List<File>, logcatLines: Int, tailBytes: Long = 0L) {
+    private fun writeZip(os: java.io.OutputStream, files: List<File>, logcatLines: Int, tailBytes: Long = 0L, report: String? = null) {
         ZipOutputStream(os).use { z ->
+            // 用户填写的标题 / 问题描述（导出前弹框），放在包里第一个
+            if (report != null) {
+                z.putNextEntry(ZipEntry("report.txt"))
+                z.write(report.toByteArray(Charsets.UTF_8))
+                z.closeEntry()
+            }
             for (f in files) {
                 z.putNextEntry(ZipEntry(f.name))
                 f.inputStream().use { ins ->
@@ -261,6 +267,52 @@ object L {
         }
         i("反馈日志：${out.name} ${out.length() / 1024}KB（${minOf(n, all.size)}/${all.size} 个日志文件）")
         return out
+    }
+
+    /** 导出文件名清洗：去掉文件系统非法字符和控制字符，压空白，限长；清洗后为空返回 null（调用方用默认时间戳名） */
+    fun safeExportName(title: String): String? {
+        val t = title.replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), "_").replace(Regex("\\s+"), " ").trim().trim('.', ' ', '_')
+        return t.take(60).trim().ifEmpty { null }
+    }
+
+    /**
+     * 导出并分享（设置 › 日志 › 导出）：用户先填「标题」和「遇到的具体问题」。
+     * 标题清洗后作 zip 文件名（留空用 micmask-logs-时间）；两者写进包里的 report.txt，并在当前日志末尾追加一行标记，
+     * 然后照旧存一份到「下载/MicMask」。返回 cache/logshare/ 下的 zip（经 FileProvider 分享）和下载目录里的路径（失败为 null）。
+     */
+    fun exportForShare(ctx: Context, title: String, problem: String): Pair<File, String?> {
+        val d = dir ?: throw IllegalStateException("日志未初始化")
+        val ts = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+        val base = safeExportName(title) ?: "micmask-logs-$ts"
+        val name = "$base.zip"
+        val t = title.trim(); val pb = problem.trim()
+        // 标记行进当前日志（末尾），方便在长日志里找到用户描述问题的时刻
+        i("===== 用户导出日志：标题=${t.ifEmpty { "（未填）" }} 问题=${pb.replace('\n', ' ').take(200).ifEmpty { "（未填）" }} =====")
+        flushQueue()
+        val report = buildString {
+            append("MicMask 日志导出\n")
+            append("时间：").append(SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z", Locale.US).format(Date())).append('\n')
+            append("版本：").append(runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).let { "${it.versionName} (${androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(it)})" } }.getOrDefault("?")).append('\n')
+            append("设备：").append(Build.MANUFACTURER).append(' ').append(Build.MODEL).append(" Android ").append(Build.VERSION.RELEASE).append(" (SDK ").append(Build.VERSION.SDK_INT).append(")\n")
+            append("\n标题：").append(t.ifEmpty { "（未填）" }).append('\n')
+            append("\n遇到的具体问题：\n").append(pb.ifEmpty { "（未填）" }).append('\n')
+        }
+        val files = d.listFiles()?.filter { it.isFile }?.sortedBy { it.lastModified() } ?: emptyList()
+        val outDir = File(ctx.cacheDir, "logshare").apply { mkdirs(); listFiles()?.forEach { it.delete() } }
+        val out = File(outDir, name)
+        out.outputStream().use { writeZip(it, files, 20000, report = report) }
+        val saved = runCatching {
+            val cv = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, name)
+                put(MediaStore.Downloads.MIME_TYPE, "application/zip")
+                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/MicMask")
+            }
+            val uri = ctx.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv) ?: throw IllegalStateException("无法在下载目录创建文件")
+            ctx.contentResolver.openOutputStream(uri)!!.use { os -> out.inputStream().use { it.copyTo(os) } }
+            "下载/MicMask/$name"
+        }.onFailure { w("日志导出：存到下载目录失败（${it.message}），只分享") }.getOrNull()
+        i("日志已导出：$name（${files.size} 个文件，${out.length() / 1024}KB）")
+        return out to saved
     }
 
     /** 打包全部日志到「下载/MicMask/micmask-logs-时间.zip」，返回给用户看的路径 */

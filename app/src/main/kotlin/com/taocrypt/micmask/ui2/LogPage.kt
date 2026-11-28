@@ -81,6 +81,7 @@ private fun copy(ctx: Context, text: String, what: String) {
 fun LogPage(vm: MainViewModel) {
     val ctx = LocalContext.current
     var selfCheck by remember { mutableStateOf(false) }
+    var exportAsk by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     var all by remember { mutableStateOf(L.entries()) }
     var levels by remember { mutableStateOf(setOf('E', 'W', 'I', 'D')) }   // 指标默认不看，太多
@@ -191,17 +192,58 @@ fun LogPage(vm: MainViewModel) {
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                 }
             }
-            Action(tr("导出")) {
-                scope.launch {
-                    val m = withContext(Dispatchers.IO) { runCatching { tr("已导出到 ") + L.exportToDownloads(ctx) }.getOrElse { tr("导出失败：{0}", it.message) } }
-                    Toast.makeText(ctx, m, Toast.LENGTH_LONG).show()
-                }
-            }
+            Action(tr("导出")) { exportAsk = true }
             Action(tr("清屏")) { L.clearView(); expanded = emptySet() }
             Action(tr("自检")) { selfCheck = true }
         }
     }
     if (selfCheck) AdbSelfCheckDialog { selfCheck = false }
+    if (exportAsk) ExportLogDialog(onDismiss = { exportAsk = false }) { title, problem ->
+        exportAsk = false
+        scope.launch {
+            val r = withContext(Dispatchers.IO) { runCatching { L.exportForShare(ctx, title, problem) } }
+            r.onSuccess { (f, saved) ->
+                Toast.makeText(ctx, if (saved != null) tr("已导出到 ") + saved else tr("已打包 {0}", f.name), Toast.LENGTH_LONG).show()
+                runCatching {
+                    val uri = androidx.core.content.FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", f)
+                    val send = Intent(Intent.ACTION_SEND).setType("application/zip")
+                        .putExtra(Intent.EXTRA_STREAM, uri)
+                        .putExtra(Intent.EXTRA_SUBJECT, title.trim().ifEmpty { tr("MicMask 日志") })
+                        .putExtra(Intent.EXTRA_TEXT, problem.trim().take(2000))
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    send.clipData = ClipData.newRawUri(f.name, uri)
+                    ctx.startActivity(Intent.createChooser(send, tr("分享日志")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION))
+                }.onFailure { L.w("日志导出：唤起分享失败 ${it.message}") }
+            }.onFailure { Toast.makeText(ctx, tr("导出失败：{0}", it.message), Toast.LENGTH_LONG).show() }
+        }
+    }
+}
+
+/** 导出日志前填写标题（作文件名）和具体问题（写进 report.txt），确定后打包并唤起系统分享 */
+@Composable
+private fun ExportLogDialog(onDismiss: () -> Unit, onConfirm: (String, String) -> Unit) {
+    var title by remember { mutableStateOf("") }
+    var problem by remember { mutableStateOf("") }
+    WindowDialog(show = true, title = tr("导出日志"),
+        summary = tr("标题用作导出文件名（留空用时间命名）；问题描述会写进压缩包里的 report.txt。日志不含录音。"),
+        onDismissRequest = onDismiss) {
+        Column {
+            TextField(value = title, onValueChange = { title = it.replace('\n', ' ').take(60) }, label = tr("标题（可选）"),
+                singleLine = true, modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(8.dp))
+            TextField(value = problem, onValueChange = { problem = it.take(2000) }, label = tr("遇到的具体问题（可选，怎么复现）"),
+                minLines = 4, maxLines = 10, modifier = Modifier.fillMaxWidth())
+            val fn = L.safeExportName(title)
+            Text(tr("文件名：{0}", (fn ?: "micmask-logs-" + tr("时间")) + ".zip"), fontSize = 11.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                modifier = Modifier.padding(top = 6.dp, start = 4.dp))
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(tr("取消"), onClick = onDismiss, modifier = Modifier.weight(1f))
+                TextButton(tr("导出并分享"), onClick = { onConfirm(title, problem) },
+                    modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary())
+            }
+        }
+    }
 }
 
 /** 不装 Shizuku 也能用的 adb 自检命令（借鉴 mobile-rvc）：电脑上执行后把输出发给开发者 */

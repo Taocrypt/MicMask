@@ -225,7 +225,8 @@ CAPS flags：`1 = 本端会发音频`、`2 = 本端想收音频`、`4 = 支持 O
   `h` 为本机全部网卡地址（与「本机地址」列表一致：局域网、热点、USB、VPN、IPv6；Tailscale 插件启用后含 tailnet 地址）。实现：`MmPairUri`（纯 Kotlin，两端共用）。
 - 发送端点「扫码」：按需申请相机权限（拒绝 → 提示手填）；扫到后按「与本机同 /24 > 私网局域网 > 隧道 / 公网 > IPv6」依次尝试（`MmNet.orderHosts`），连上即按设备 ID 保存（含配对码），之后自动连接照常工作。
 - 二维码只是把「地址 + 配对码」搬到发送端，握手仍是 SPAKE2，安全性与手填配对码相同；二维码等同于配对码，不要公开截图。
-- 生成：zxing core 3.5.3（纠错 M）；扫码界面：zxing-android-embedded 4.3.0（Camera1 预览，不引入 CameraX）。两者 Apache-2.0。
+- 2.1.1-alpha.14 起二维码用精简写法（`MmPairUri.encodeQr`）：**字段名不变，只省略可选字段**——只放 `h`（IPv4，最多 4 个；没有 IPv4 才放 IPv6）和 `c`，`p` 等于默认端口时省略，`id`、`n` 省略（连上后以握手里的设备 ID / 名字保存）。例：`micmask://link?h=192.168.1.8,10.144.144.5&c=012345`。旧版解析（缺 `p` 用默认端口、缺 `id`/`n` 置空）不用改即可识别；完整写法 `encode()` 保留。
+- 生成：zxing core 3.5.3（alpha.13 纠错 M；alpha.14 起纠错 H、中间放 App 图标、圆角白底）；扫码界面：zxing-android-embedded 4.3.0（Camera1 预览，不引入 CameraX）。两者 Apache-2.0。
 
 ## 13. Tailscale 插件预留接口（2.1.1-alpha.13，未实现）
 

@@ -311,6 +311,12 @@ fun testPairUri() {
     check("二维码：缺配对码 → null", MmPairUri.parse("micmask://link?h=1.2.3.4&p=47310&c=12") == null)
     check("二维码：别的二维码 → null", MmPairUri.parse("https://example.com/?h=1.2.3.4&c=123456") == null)
     check("二维码：没写端口用默认、坏 ID 置空", MmPairUri.parse("micmask://link?h=1.2.3.4&c=123456&id=zz")?.let { it.port == MmLink.DEFAULT_PORT && it.id == "" } == true)
+    // 2.1.1-alpha.14 二维码精简写法：字段名不变、只省略可选字段（p 默认、id、n、IPv6），旧解析照样认
+    val q = u.encodeQr()
+    check("二维码精简：只含 h、c", q == "micmask://link?h=192.168.1.8,10.126.126.5&c=012345", q)
+    check("二维码精简：解析出地址与配对码、端口默认、ID/名字为空", MmPairUri.parse(q) == MmPairUri(listOf("192.168.1.8", "10.126.126.5"), MmLink.DEFAULT_PORT, "012345", "", ""), "${MmPairUri.parse(q)}")
+    check("二维码精简：非默认端口保留 p", u.copy(port = 47311).encodeQr().let { MmPairUri.parse(it)?.port == 47311 })
+    check("二维码精简：只有 IPv6 时保留 IPv6", MmPairUri(listOf("fd7a:115c:a1e0::1"), 47310, "012345", "", "").encodeQr().let { MmPairUri.parse(it)?.hosts == listOf("fd7a:115c:a1e0::1") })
     check("连接顺序：同网段 > 局域网 > 隧道 > IPv6",
         MmNet.orderHosts(listOf("fd7a::1", "100.100.1.2", "192.168.9.9", "192.168.1.8"), listOf("192.168.1.20")) == listOf("192.168.1.8", "192.168.9.9", "100.100.1.2", "fd7a::1"),
         MmNet.orderHosts(listOf("fd7a::1", "100.100.1.2", "192.168.9.9", "192.168.1.8"), listOf("192.168.1.20")).toString())

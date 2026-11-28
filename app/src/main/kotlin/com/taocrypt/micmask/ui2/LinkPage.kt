@@ -25,6 +25,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -342,13 +345,34 @@ private fun SavedEditDialog(d: SavedDevice, onDismiss: () -> Unit) {
 
 // ------------------------------------------------------------------ 接收
 
-private fun addrLabel(a: MmNet.LocalAddr): String {
-    val k = when (a.kind) {
-        "wifi" -> "Wi-Fi"; "hotspot" -> tr("热点"); "usb" -> "USB"; "ethernet" -> tr("有线"); "cellular" -> tr("移动数据")
-        "vpn" -> if (a.vpn.isNotEmpty()) "VPN · ${a.vpn}" else "VPN"
-        else -> tr("其他")
+
+/** 网卡类型（不含接口名），给地址分块的标题用 */
+private fun addrKind(a: MmNet.LocalAddr): String = when (a.kind) {
+    "wifi" -> "Wi-Fi"; "hotspot" -> tr("热点"); "usb" -> "USB"; "ethernet" -> tr("有线"); "cellular" -> tr("移动数据")
+    "vpn" -> if (a.vpn.isNotEmpty()) "VPN · ${a.vpn}" else "VPN"
+    else -> tr("其他")
+} + if (a.v6) " · IPv6" else ""
+
+/** 本机地址的一个分块：圆角浅底，标题行（类型 · 接口名），地址行（IP:端口，等宽），右侧复制按钮；点整块也复制 */
+@Composable
+private fun AddrBlock(a: MmNet.LocalAddr, port: Int) {
+    val ctx = LocalContext.current
+    val primary = MiuixTheme.colorScheme.primary
+    val summary = MiuixTheme.colorScheme.onSurfaceVariantSummary
+    val hostPort = if (a.v6) "[${a.ip}]:$port" else "${a.ip}:$port"
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(MiuixTheme.colorScheme.secondaryContainer)
+        .clickable { copyText(ctx, a.ip, tr("已复制 {0}", a.ip)) }
+        .padding(start = 14.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(addrKind(a), fontSize = 13.sp, fontWeight = FontWeight.Medium, color = if (a.kind == "vpn") primary else MiuixTheme.colorScheme.onSecondaryContainer, maxLines = 1)
+                if (a.iface.isNotEmpty()) Text("  ${a.iface}", fontSize = 12.sp, color = summary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Text(hostPort, fontSize = 15.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        IconButton(onClick = { copyText(ctx, a.ip, tr("已复制 {0}", a.ip)) }) { Icon(MiuixIcons.Copy, tr("复制"), Modifier.size(20.dp), tint = primary) }
     }
-    return "$k · ${a.iface}"
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -395,23 +419,19 @@ private fun LinkRecvCard(st: UiState) {
                     val qr = remember(ls.addrs, ls.code, ls.name) { LinkHub.pairUri() }
                     Spacer(Modifier.height(6.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        QrImage(qr, Modifier.size(168.dp).clip(RoundedCornerShape(10.dp)))
+                        QrImage(qr, Modifier.size(176.dp))
                         Spacer(Modifier.width(12.dp))
-                        Text(tr("或在发送端点「扫码」扫这个二维码：自动填好本机全部地址和配对码，连上后记住本机"), Modifier.weight(1f), fontSize = 13.sp, color = summary)
+                        Text(tr("或在发送端点「扫码」扫这个二维码：自动填好本机地址和配对码，连上后记住本机"), Modifier.weight(1f), fontSize = 13.sp, color = summary)
                     }
                 }
             }
 
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 SectionLabel(tr("本机地址"))
                 if (ls.addrs.isEmpty()) Text(tr("没有可用网络：请连接 Wi-Fi、热点或 VPN"), fontSize = 14.sp, color = summary)
-                ls.addrs.forEach { a ->
-                    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { copyText(ctx, a.ip, tr("已复制 {0}", a.ip)) }.padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically) {
-                        Text(a.ip, Modifier.weight(1f), fontSize = 15.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(addrLabel(a), Modifier.padding(start = 8.dp), fontSize = 13.sp, color = if (a.kind == "vpn") primary else summary, maxLines = 1)
-                    }
-                }
+                val port = if (mm) MmLink.DEFAULT_PORT else MicYou.DEFAULT_PORT
+                // 每个地址一个圆角分块：上行网卡类型 + 名称，下行 IP:端口（等宽），右侧复制
+                ls.addrs.forEach { a -> AddrBlock(a, port) }
                 Text(if (mm) tr("端口 {0}（TCP/UDP）· 本机名称「{1}」· 点地址可复制", MmLink.DEFAULT_PORT, ls.name)
                      else tr("端口 {0}（TCP）/ {1}（UDP）· 本机名称「{2}」", MicYou.DEFAULT_PORT, MicYou.DEFAULT_PORT + 1, ls.name), fontSize = 13.sp, color = summary)
             }
@@ -452,8 +472,10 @@ private fun LinkAdvanced() {
     }
     if (rename) DeviceNameDialog { rename = false }
     if (help) WindowDialog(show = true, title = tr("使用说明"), onDismissRequest = { help = false }) {
+        // 说明很长：正文放进限高的滚动区（不定高，最多屏高 55%），「知道了」固定在下面，不会被弹窗裁掉
+        val maxH = (androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp * 0.55f).dp
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text((if (ls.proto == LinkHub.PROTO_MM) listOf(
+            Text(modifier = Modifier.fillMaxWidth().heightIn(max = maxH).verticalScroll(rememberScrollState()), text = (if (ls.proto == LinkHub.PROTO_MM) listOf(
                 tr("· 加密：配对码换算出密钥（SPAKE2 + AES-GCM），不知道配对码的人连不上、也听不到。"),
                 tr("· 电脑：装 MicMask 电脑版并打开「接收」，这里点它、输入电脑上的配对码。USB 连接时在电脑上执行 adb reverse tcp:47310 tcp:47310，再手填 127.0.0.1。"),
                 tr("· 手机之间：一台打开「接收」（注入需要 Shizuku / ROOT / 系统权限），另一台点它发送；建议同一个 5 GHz Wi-Fi 或一台开热点。"),
@@ -467,7 +489,7 @@ private fun LinkAdvanced() {
                 tr("· 电脑端：装 MicYou 电脑端并打开，选它或填电脑 IP 即可；USB 连接时在电脑上执行 adb reverse tcp:8554 tcp:8554，再填 127.0.0.1。"),
                 tr("· 手机之间：一台打开「接收」（需要 Shizuku/ROOT/系统权限才能注入），另一台选它发送；建议连同一个 5 GHz Wi-Fi 或一台开热点。"),
                 tr("· 暂不支持电脑 → 手机（MicYou 电脑端只收不发），后续版本提供。接收只支持 PCM，MicYou 安卓端（Opus）暂不能当发送端。"),
-            )).joinToString("\n\n"), fontSize = 14.sp)
+            )).joinToString("\n\n"), fontSize = 14.sp, lineHeight = 21.sp)
             TextButton(tr("知道了"), onClick = { help = false }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.textButtonColorsPrimary())
         }
     }

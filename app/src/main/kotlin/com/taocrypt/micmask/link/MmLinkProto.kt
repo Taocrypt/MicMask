@@ -395,6 +395,21 @@ data class MmPairUri(val hosts: List<String>, val port: Int, val code: String, v
         fun e(s: String) = java.net.URLEncoder.encode(s, "UTF-8")
         return "micmask://link?h=${e(hosts.joinToString(","))}&p=$port&c=$code&id=${e(id)}&n=${e(name)}"
     }
+
+    /**
+     * 二维码用的精简写法（2.1.1-alpha.14）：字段名与 [encode] 完全相同，只省略可选字段，旧版 [parse] 照样能解析：
+     *  - 只保留 `h`（必填）和 `c`（必填）；`p` 等于默认端口时省略（解析端缺省即 [MmLink.DEFAULT_PORT]）；
+     *  - 省略 `id`、`n`：连上后设备 ID 和名字以握手（HELLO）里的为准保存，二维码里的只用于连接前的显示；
+     *  - `h` 只放 IPv4（没有 IPv4 才放 IPv6），最多 [maxHosts] 个；纯 IPv4 / 主机名的逗号不做 %2C 编码（URLDecoder 原样还原）。
+     * 内容从约 150–250 字符降到约 40–90 字符，二维码可以用 H 级纠错并在中间放 logo。
+     */
+    fun encodeQr(maxHosts: Int = 4): String {
+        val v4 = hosts.filter { h -> h.isNotEmpty() && !h.contains(':') }
+        val hs = (v4.ifEmpty { hosts }).take(maxHosts)
+        val plain = hs.all { h -> h.all { c -> c.isLetterOrDigit() && c.code < 128 || c == '.' || c == '-' } }
+        val h = if (plain) hs.joinToString(",") else java.net.URLEncoder.encode(hs.joinToString(","), "UTF-8")
+        return "micmask://link?h=$h" + (if (port != MmLink.DEFAULT_PORT) "&p=$port" else "") + "&c=$code"
+    }
     companion object {
         const val PREFIX = "micmask://link?"
         /** 解析扫到的文字；不是 MicMask 配对二维码、没有地址或配对码不是 6 位数字时返回 null */

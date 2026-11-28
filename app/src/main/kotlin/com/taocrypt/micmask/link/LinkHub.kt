@@ -413,14 +413,15 @@ object LinkHub {
     private fun syncTxIntent() { ((client as? MmTx)?.s)?.takeIf { !it.closed }?.updateIntent(txIntent()) }
 
     /** 接收页二维码内容：本机全部地址 + 端口 + 配对码 + 设备 ID + 名称 */
-    fun pairUri(): String = MmPairUri(_state.value.addrs.map { it.ip }.ifEmpty { localIps() }, MmLink.DEFAULT_PORT, pairCode(), MmNet.hex(deviceId()), deviceName()).encode()
+    /** 接收端二维码内容：精简写法（只 h + c，见 [MmPairUri.encodeQr]），旧版扫码端照样解析 */
+    fun pairUri(): String = MmPairUri(_state.value.addrs.map { it.ip }.ifEmpty { localIps() }, MmLink.DEFAULT_PORT, pairCode(), MmNet.hex(deviceId()), deviceName()).encodeQr()
 
     /** 扫码连接：按「同网段 > 局域网 > 隧道 > IPv6」依次尝试二维码里的地址，连上后记住设备（含配对码与设备 ID） */
     fun connectScanned(text: String): Boolean {
         val u = MmPairUri.parse(text) ?: return false
         if (proto != PROTO_MM && !setProto(PROTO_MM)) { upd { it.copy(txStatus = tr("收发进行中不能切换协议，先停止"), txError = true) }; return true }
         val order = MmNet.orderHosts(u.hosts, MmNet.localAddrs().map { it.ip })
-        L.i("传音：扫码连接「${u.name}」（ID ${u.id.take(8)}）地址 ${order.joinToString()} 端口 ${u.port}")
+        L.i("传音：扫码连接" + (if (u.name.isNotEmpty()) "「${u.name}」" else "") + (if (u.id.isNotEmpty()) "（ID ${u.id.take(8)}）" else "") + " 地址 ${order.joinToString()} 端口 ${u.port}")
         userStoppedTx = false
         launchTx(order.map { TxTarget(it, u.port, u.name, u.code, u.id) }, auto = false)
         return true

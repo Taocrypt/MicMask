@@ -265,6 +265,7 @@ class InjectorService : Binder {
                     // 传音接收：音源是远端音频，不沿用 AI 引擎定档的预缓冲（tierPrimeMs 可能是上一次 AI 变声留下的 330 ms+）
                     livePrimeMs = if (linkRx) primeReq else maxOf(primeReq, tierPrimeMs)
                     val rvcHere = data.dataAvail() >= 4 && data.readInt() == 1
+                    liveRvcHere = rvcHere
                     if (data.dataAvail() >= 16) readTune(data)
                     micRing.clear(); outRing.clear()
                     // 系统权限模式：真麦录音也是 App uid，目标=自身（本机试听）会把注入声录回来，换成不存在的占位 uid
@@ -1187,6 +1188,15 @@ class InjectorService : Binder {
     @Volatile private var linkTap = false
     @Volatile private var linkTapMic = false
     private val linkRing = ShortRing(SR / 2)
+    /** 本次 TX_LIVE_START 是否在 shell 里跑 RVC（传音接收为 false）；引擎对象会跨会话保留，不能用 engine != null 判断 */
+    @Volatile private var liveRvcHere = false
+    /**
+     * 2.1.1-alpha.14：传音「仅接收」——外部模式 + 接收注入，且没有「发送取点 = 真麦」（同一会话没有在向对端发本机麦）。
+     * 这时 shell 不开本机录音：shell(uid 2000) 一录音就参与安卓并发录音仲裁，系统会把目标应用静音
+     * （ph-000008 实测 vivo 录音机 com.android.bbksoundrecorder src=1 静音=true，对方收不到声音），注入循环改由单调时钟驱动。
+     * 双向（接收注入 + 发送取点=真麦）仍要开本机录音，仲裁照旧，保留无障碍兜底。
+     */
+    private fun linkRxOnly(): Boolean = liveExternal && linkRx && !liveRvcHere && !(linkTap && linkTapMic)
     /** 目标开麦（其他应用录音数 0 → ≥1）的时刻，看门狗线程置、liveLoop 取走处理；0 = 无（2.1.1：按住说话开头的旧积压裁剪） */
     private val tgtOpenNs = java.util.concurrent.atomic.AtomicLong(0L)
     /** 外部（AI）输出里最近一次出现人声的时刻；峰值约 -30 dBFS 以上算有声 */
@@ -1573,13 +1583,39 @@ class InjectorService : Binder {
                 a11yThread = Thread({ try { while (true) { Thread.sleep(3000); a11yBoost(true, quiet = true) } } catch (_: InterruptedException) {} }, "a11y-keep").apply { isDaemon = true; start() }
                 return true
             }
-            if (preOk) {
-                if (echoRisk()) { preRevoked = true; slog('I', "外放且正在通话，保留录音源 $liveSource（回声消除），被静音时再改无障碍录音") }
-                else preEnable("开始即用无障碍录音（非 vivo，${if (headsetOut()) "戴耳机" else "未在通话"}）")
+            /** 开本机录音（开局或传音从仅接收变成双向时）：含开局的无障碍预登记；失败返回 false（lastError 已写） */
+            fun startMic(): Boolean {
+                if (preOk && !preOn && !preRevoked) {
+                    if (echoRisk()) { preRevoked = true; slog('I', "外放且正在通话，保留录音源 $liveSource（回声消除），被静音时再改无障碍录音") }
+                    else preEnable("开始即用无障碍录音（非 vivo，${if (headsetOut()) "戴耳机" else "未在通话"}）")
+                }
+                val r = openRec() ?: return false
+                rec = r; curRec = r
+                return true
             }
-            rec = openRec() ?: return
-            curRec = rec
+            /** 关本机录音（传音从双向变回仅接收）：撤无障碍登记、录音源还原、释放录音与系统 AEC/NS */
+            fun stopMic(why: String) {
+                curRec = null
+                a11yThread?.interrupt(); a11yThread = null
+                if (a11yOn) a11yBoost(false)
+                if (a11yPrevSrc >= 0) liveSource = a11yPrevSrc
+                a11yPrevSrc = -1; a11yFailed = false; a11yChkSec = -1; a11yIdle = 0; tgtSilSec = 0
+                preOn = false; preRevoked = false; riskSec = 0; safeSec = 0
+                runCatching { rec?.stop() }; runCatching { rec?.release() }; rec = null
+                runCatching { aec?.release() }; runCatching { ns?.release() }; aec = null; ns = null
+                micHint = ""
+                slog('I', "传音：$why，关闭本机麦（避免系统静音目标应用）")
+            }
             micHint = ""; recRebuilds = 0
+            // 传音仅接收：不开本机麦，注入循环改由单调时钟按 10 ms 一帧驱动
+            var noMicSince = 0L
+            var biWarned = false; var biSilSec = 0
+            if (linkRxOnly()) {
+                slog('I', "传音：仅接收，不开本机麦（避免系统静音目标应用），注入按单调时钟 10 ms/帧驱动")
+            } else {
+                if (liveExternal && linkRx) slog('W', "传音：双向（接收注入 + 发送本机麦），需开本机麦；系统可能因并发录音仲裁静音目标应用，保留无障碍兜底")
+                if (!startMic()) return
+            }
             // 看门狗：0.6 s 读不到麦克风数据（流失效、切路由、音频服务重启）就停掉当前录音，让主循环重建
             tgtOpenNs.set(0L)
             watchdog = Thread({
@@ -1694,10 +1730,37 @@ class InjectorService : Binder {
             // 外部模式先攒够再开始放：App 每 300 ms 推一整块，缓冲必须 > 一块，否则每块之间都会断
             var prime = SR * livePrimeMs / 1000
             slog('I', "LIVE 外部模式=${liveExternal} 预缓冲=${livePrimeMs}ms")
+            /** 单调时钟节拍：下一帧（10 ms）应处理的时刻；0 = 未起拍 */
+            var clkNext = 0L
+            val hopNs = 10_000_000L
             while (running) {
+                // ---- 传音：按「仅接收 / 双向」开关本机麦（发送取点 = 真麦 在 TX_LIVE_START 之后才由 App 打开，所以要在循环里跟）
+                if (liveExternal && linkRx) {
+                    val rxOnly = linkRxOnly()
+                    if (rxOnly && rec != null) {
+                        // 关麦防抖 300 ms：App 停发送时先关取点再改取点来源，中间状态不来回开关录音
+                        val nowS = System.nanoTime()
+                        if (noMicSince == 0L) noMicSince = nowS
+                        else if (nowS - noMicSince >= 300_000_000L) { stopMic("仅接收（发送取点已关）"); noMicSince = 0L; clkNext = 0L; biWarned = false; biSilSec = 0 }
+                    } else noMicSince = 0L
+                    if (!rxOnly && rec == null) {
+                        slog('W', "传音：双向（接收注入 + 发送取点=真麦），开本机麦；系统可能因并发录音仲裁静音目标应用，保留无障碍兜底（开 MicMask 无障碍可改善）")
+                        if (!startMic()) return
+                    }
+                }
                 var got = 0
                 val tr0 = System.nanoTime()
                 var zeroReads = 0
+                if (rec == null) {
+                    // 不开本机麦：没有麦克风读数当节拍，用单调时钟按 10 ms 一帧推进；落后超过 100 ms（被系统冻结 / 写出卡住）就重新起拍，不一口气补
+                    java.util.Arrays.fill(inBuf, 0.toShort())
+                    val nowC = System.nanoTime()
+                    if (clkNext == 0L || nowC - clkNext > 100_000_000L) clkNext = nowC
+                    else if (clkNext > nowC) java.util.concurrent.locks.LockSupport.parkNanos(clkNext - nowC)
+                    clkNext += hopNs
+                    got = hop
+                    lastReadNs = System.nanoTime()
+                } else clkNext = 0L
                 while (got < hop && running) {
                     val rr = rec ?: break
                     val r = rr.read(inBuf, got, hop - got)
@@ -1726,10 +1789,11 @@ class InjectorService : Binder {
                 val capNs = if (capOk) capTs else capEst
                 // 原始麦克风不会给出连续的纯数字 0：连续 3 s 全零 = 被系统静音或被别的录音占用。
                 // 降噪模式（VOICE_COMMUNICATION）不说话时降噪本身就会输出全 0，不能据此提示（alpha101 真机误报）
-                var allZero = liveSource != android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION
+                var allZero = rec != null && liveSource != android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION
                 if (allZero) for (i in 0 until hop) if (inBuf[i].toInt() != 0) { allZero = false; break }
                 if (allZero) { if (++zeroFrames == 300) { micHint = "采集到的是纯静音（麦克风可能被系统静音或被占用）"; slog('W', micHint) } }
                 else { if (zeroFrames >= 300 || micHint.startsWith("没有收到")) micHint = ""; zeroFrames = 0 }
+                if (rec == null) { stuckT = System.nanoTime(); stuckSec = 0 }
                 if (System.nanoTime() - stuckT >= 1_000_000_000L) {
                     stuckT = System.nanoTime()
                     val lv = liveLevelDb
@@ -1796,95 +1860,107 @@ class InjectorService : Binder {
                             }
                         }
                     }
-                    // 我们没被静音、目标应用却被静音 2 s → 改无障碍录音；改完 3 s 输入比改前底噪低 15 dB 以上 → 判定无效，退回
-                    lvlHist.addLast(liveLevelDb); while (lvlHist.size > 3) lvlHist.removeFirst()
-                    if (preOk && (preOn || preRevoked)) {
-                        val risk = echoRisk()
-                        if (risk) { riskSec++; safeSec = 0 } else { safeSec++; riskSec = 0 }
-                        if (preOn && a11yOn && riskSec >= 2 && a11yPrevSrc >= 0) {
-                            slog('W', "外放通话开始，退回录音源 $a11yPrevSrc（回声消除），被静音时再改无障碍录音")
-                            a11yThread?.interrupt(); a11yThread = null; a11yBoost(false)
-                            liveSource = a11yPrevSrc; preOn = false; preRevoked = true; a11yFailed = false; a11yChkSec = -1; riskSec = 0
-                            if (!rebuildRec("外放通话退回回声消除")) return
-                            continue
-                        }
-                        if (preRevoked && !a11yOn && safeSec >= 3) {
-                            safeSec = 0
-                            if (preEnable(if (headsetOut()) "已戴耳机" else "通话已结束")) { if (!rebuildRec("改回无障碍录音")) return; continue }
-                            else preRevoked = false
-                        }
+                    // 双向时目标应用仍被静音：提示一次（安卓并发录音仲裁，无障碍兜底未必能解除）
+                    if (rec != null && liveExternal && linkRx) {
+                        if (targetSilenced()) {
+                            if (++biSilSec >= 5 && !biWarned) {
+                                biWarned = true
+                                slog('W', "传音：双向中目标应用仍被系统静音 ${biSilSec}s${recDetail()}（安卓并发录音仲裁；无障碍兜底=${if (a11yOn) "已登记" else if (a11yFailed) "无效" else "未生效"}）。对方若听不到，可停掉本机→对端发送改为仅接收，或开启 MicMask 无障碍")
+                            }
+                        } else biSilSec = 0
                     }
-                    // alpha.6：目标应用的静音状态一变就记一行（以前只在录音数变化时打印，看不出切换后微信是否解除静音）
-                    val ts = targetSilenced()
-                    if (lastTgtSil != null && ts != lastTgtSil) slog('I', "目标应用静音 ${lastTgtSil} → $ts ${recDetail()}")
-                    lastTgtSil = ts
-                    if (!sil && !a11yOn && !a11yFailed && targetSilenced()) {
-                        if (++tgtSilSec >= 2) {
-                            tgtSilSec = 0
-                            a11yFloor = lvlHist.maxOrNull() ?: -60f
-                            if (a11yBoost(true)) {
-                                a11yPrevSrc = liveSource
-                                slog('W', "目标应用被系统静音${recDetail()}，改无障碍录音：录音源 $liveSource → 6，改前输入 ${"%.0f".format(a11yFloor)}dB")
-                                liveSource = 6; a11yChkSec = 0; a11yPeak = -200f
-                                a11yThread = Thread({ try { while (true) { Thread.sleep(3000); a11yBoost(true, quiet = true) } } catch (_: InterruptedException) {} }, "a11y-keep").apply { isDaemon = true; start() }
-                                if (!rebuildRec("改无障碍录音")) return
+                    // 仅接收（没开本机麦）：下面的无障碍兜底 / 被静音重建都与本机录音有关，跳过
+                    if (rec != null) {
+                        // 我们没被静音、目标应用却被静音 2 s → 改无障碍录音；改完 3 s 输入比改前底噪低 15 dB 以上 → 判定无效，退回
+                        lvlHist.addLast(liveLevelDb); while (lvlHist.size > 3) lvlHist.removeFirst()
+                        if (preOk && (preOn || preRevoked)) {
+                            val risk = echoRisk()
+                            if (risk) { riskSec++; safeSec = 0 } else { safeSec++; riskSec = 0 }
+                            if (preOn && a11yOn && riskSec >= 2 && a11yPrevSrc >= 0) {
+                                slog('W', "外放通话开始，退回录音源 $a11yPrevSrc（回声消除），被静音时再改无障碍录音")
+                                a11yThread?.interrupt(); a11yThread = null; a11yBoost(false)
+                                liveSource = a11yPrevSrc; preOn = false; preRevoked = true; a11yFailed = false; a11yChkSec = -1; riskSec = 0
+                                if (!rebuildRec("外放通话退回回声消除")) return
                                 continue
-                            } else a11yFailed = true
+                            }
+                            if (preRevoked && !a11yOn && safeSec >= 3) {
+                                safeSec = 0
+                                if (preEnable(if (headsetOut()) "已戴耳机" else "通话已结束")) { if (!rebuildRec("改回无障碍录音")) return; continue }
+                                else preRevoked = false
+                            }
                         }
-                    } else tgtSilSec = 0
-                    // alpha.6：只在目标应用还在录音时计入判定窗口；目标停录了（用户也不说话），拿那段电平和切换前比必然偏低，会误判无效（M332BF 4 次误判 3 次）
-                    if (a11yOn && a11yChkSec in 0..3 && !appRecording()) {
-                        if (++a11yIdle >= 10) { slog('I', "无障碍录音：目标应用已停止录音，无法判定，保持源 6"); a11yChkSec = -1; a11yIdle = 0 }
-                    } else if (a11yOn && a11yChkSec in 0..3) {
-                        a11yIdle = 0
-                        if (a11yChkSec > 0) a11yPeak = maxOf(a11yPeak, liveLevelDb)
-                        if (++a11yChkSec > 3) {
-                            if (a11yPeak < a11yFloor - 15f || a11yPeak < -80f) {
-                                slog('W', "无障碍录音输入只有 ${"%.0f".format(a11yPeak)}dB（改前 ${"%.0f".format(a11yFloor)}dB），退回录音源 $a11yPrevSrc")
-                                a11yThread?.interrupt(); a11yThread = null; a11yBoost(false); a11yFailed = true
-                                if (a11yPrevSrc >= 0) liveSource = a11yPrevSrc
-                                if (!rebuildRec("无障碍录音无效")) return
-                                continue
-                            } else { slog('I', "无障碍录音正常：输入 ${"%.0f".format(a11yPeak)}dB"); a11yChkSec = -1 }
+                        // alpha.6：目标应用的静音状态一变就记一行（以前只在录音数变化时打印，看不出切换后微信是否解除静音）
+                        val ts = targetSilenced()
+                        if (lastTgtSil != null && ts != lastTgtSil) slog('I', "目标应用静音 ${lastTgtSil} → $ts ${recDetail()}")
+                        lastTgtSil = ts
+                        if (!sil && !a11yOn && !a11yFailed && targetSilenced()) {
+                            if (++tgtSilSec >= 2) {
+                                tgtSilSec = 0
+                                a11yFloor = lvlHist.maxOrNull() ?: -60f
+                                if (a11yBoost(true)) {
+                                    a11yPrevSrc = liveSource
+                                    slog('W', "目标应用被系统静音${recDetail()}，改无障碍录音：录音源 $liveSource → 6，改前输入 ${"%.0f".format(a11yFloor)}dB")
+                                    liveSource = 6; a11yChkSec = 0; a11yPeak = -200f
+                                    a11yThread = Thread({ try { while (true) { Thread.sleep(3000); a11yBoost(true, quiet = true) } } catch (_: InterruptedException) {} }, "a11y-keep").apply { isDaemon = true; start() }
+                                    if (!rebuildRec("改无障碍录音")) return
+                                    continue
+                                } else a11yFailed = true
+                            }
+                        } else tgtSilSec = 0
+                        // alpha.6：只在目标应用还在录音时计入判定窗口；目标停录了（用户也不说话），拿那段电平和切换前比必然偏低，会误判无效（M332BF 4 次误判 3 次）
+                        if (a11yOn && a11yChkSec in 0..3 && !appRecording()) {
+                            if (++a11yIdle >= 10) { slog('I', "无障碍录音：目标应用已停止录音，无法判定，保持源 6"); a11yChkSec = -1; a11yIdle = 0 }
+                        } else if (a11yOn && a11yChkSec in 0..3) {
+                            a11yIdle = 0
+                            if (a11yChkSec > 0) a11yPeak = maxOf(a11yPeak, liveLevelDb)
+                            if (++a11yChkSec > 3) {
+                                if (a11yPeak < a11yFloor - 15f || a11yPeak < -80f) {
+                                    slog('W', "无障碍录音输入只有 ${"%.0f".format(a11yPeak)}dB（改前 ${"%.0f".format(a11yFloor)}dB），退回录音源 $a11yPrevSrc")
+                                    a11yThread?.interrupt(); a11yThread = null; a11yBoost(false); a11yFailed = true
+                                    if (a11yPrevSrc >= 0) liveSource = a11yPrevSrc
+                                    if (!rebuildRec("无障碍录音无效")) return
+                                    continue
+                                } else { slog('I', "无障碍录音正常：输入 ${"%.0f".format(a11yPeak)}dB"); a11yChkSec = -1 }
+                            }
                         }
-                    }
-                    if (sil) {
-                        silSec++
-                        if (!micHint.startsWith("麦克风被系统静音")) { micHint = "麦克风被系统静音（其他应用可能占用了录音）"; slog('W', micHint) }
-                        if (silSec >= 2 && !a11yOn && !a11yFailed && appRecording()) {
-                            // 被别的应用（微信等）抢了麦：先改无障碍录音，两边都不被静音；若再抢回来会让对方被静音（显示麦克风被占用）
-                            silSec = 0
-                            a11yFloor = lvlHist.maxOrNull() ?: -60f
-                            if (a11yBoost(true)) {
-                                a11yPrevSrc = liveSource
-                                slog('W', "录音被其他应用抢占（${silWho()}），改无障碍录音：录音源 $liveSource → 6，改前输入 ${"%.0f".format(a11yFloor)}dB")
-                                liveSource = 6; a11yChkSec = 0; a11yPeak = -200f
-                                a11yThread = Thread({ try { while (true) { Thread.sleep(3000); a11yBoost(true, quiet = true) } } catch (_: InterruptedException) {} }, "a11y-keep").apply { isDaemon = true; start() }
-                                if (!rebuildRec("改无障碍录音")) return
+                        if (sil) {
+                            silSec++
+                            if (!micHint.startsWith("麦克风被系统静音")) { micHint = "麦克风被系统静音（其他应用可能占用了录音）"; slog('W', micHint) }
+                            if (silSec >= 2 && !a11yOn && !a11yFailed && appRecording()) {
+                                // 被别的应用（微信等）抢了麦：先改无障碍录音，两边都不被静音；若再抢回来会让对方被静音（显示麦克风被占用）
+                                silSec = 0
+                                a11yFloor = lvlHist.maxOrNull() ?: -60f
+                                if (a11yBoost(true)) {
+                                    a11yPrevSrc = liveSource
+                                    slog('W', "录音被其他应用抢占（${silWho()}），改无障碍录音：录音源 $liveSource → 6，改前输入 ${"%.0f".format(a11yFloor)}dB")
+                                    liveSource = 6; a11yChkSec = 0; a11yPeak = -200f
+                                    a11yThread = Thread({ try { while (true) { Thread.sleep(3000); a11yBoost(true, quiet = true) } } catch (_: InterruptedException) {} }, "a11y-keep").apply { isDaemon = true; start() }
+                                    if (!rebuildRec("改无障碍录音")) return
+                                    micHint = "麦克风被系统静音，正在重新接管"
+                                    continue
+                                } else a11yFailed = true
+                            }
+                            if (silSec >= 2) {
+                                // 被静音 2 s：重建录音（重建后 shell 成为最新开始的录音，实测 OPPO/一加 即可恢复）。
+                                // 上次重建后恢复过 → 同一录音源再重建；上次重建没用 → 换下一种录音源（全试完就只重建）
+                                silSec = 0
+                                var next = liveSource
+                                if (liveSource == android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION || !silGood) {
+                                    while (silTry < silOrder.size) { val c = silOrder[silTry++]; if (c != liveSource && c !in silTried) { next = c; break } }
+                                }
+                                silTried += liveSource
+                                silGood = false
+                                slog('W', "录音源 $liveSource 被系统静音（${silWho()}），" + (if (next == liveSource) "原录音源重建" else "改用录音源 $next 重建"))
+                                liveSource = next
+                                if (!rebuildRec("被系统静音")) return
                                 micHint = "麦克风被系统静音，正在重新接管"
                                 continue
-                            } else a11yFailed = true
-                        }
-                        if (silSec >= 2) {
-                            // 被静音 2 s：重建录音（重建后 shell 成为最新开始的录音，实测 OPPO/一加 即可恢复）。
-                            // 上次重建后恢复过 → 同一录音源再重建；上次重建没用 → 换下一种录音源（全试完就只重建）
-                            silSec = 0
-                            var next = liveSource
-                            if (liveSource == android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION || !silGood) {
-                                while (silTry < silOrder.size) { val c = silOrder[silTry++]; if (c != liveSource && c !in silTried) { next = c; break } }
                             }
-                            silTried += liveSource
-                            silGood = false
-                            slog('W', "录音源 $liveSource 被系统静音（${silWho()}），" + (if (next == liveSource) "原录音源重建" else "改用录音源 $next 重建"))
-                            liveSource = next
-                            if (!rebuildRec("被系统静音")) return
-                            micHint = "麦克风被系统静音，正在重新接管"
-                            continue
+                        } else {
+                            if (silTried.isNotEmpty() && !silGood) { silGood = true; slog('I', "录音源 $liveSource 没有被静音（之前被静音：${silTried.joinToString(",")}）") }
+                            silSec = 0
+                            if (micHint.startsWith("麦克风被系统静音")) micHint = ""
                         }
-                    } else {
-                        if (silTried.isNotEmpty() && !silGood) { silGood = true; slog('I', "录音源 $liveSource 没有被静音（之前被静音：${silTried.joinToString(",")}）") }
-                        silSec = 0
-                        if (micHint.startsWith("麦克风被系统静音")) micHint = ""
                     }
                 }
                 rdMax = maxOf(rdMax, System.nanoTime() - tr0)
@@ -1892,6 +1968,7 @@ class InjectorService : Binder {
                 var mic = inBuf
                 if (tuneAec != 0) {
                     val why = when {
+                        rec == null -> "传音仅接收，未开本机麦"
                         liveSource == android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION -> "录音源 7 已有系统回声消除"
                         softAec?.failed != null -> "出错：${softAec?.failed}"
                         monTrack == null && !previewPlaying -> "无参考信号（耳返未开、无预览回放）"
@@ -1977,9 +2054,9 @@ class InjectorService : Binder {
                     softAec?.release(); softAec = null; aecPrevRef.clear(); aecDuck.reset()
                     slog('I', "AEC：已关闭"); aecWhy = "未开"
                 }
-                if (vpEnState == 1) vpEnrollFeed(mic, hop)
+                if (vpEnState == 1 && rec != null) vpEnrollFeed(mic, hop)
                 if (liveExternal) {
-                    micRing.write(mic, 0, hop)
+                    if (rec != null) micRing.write(mic, 0, hop)
                     var e2 = 0.0
                     for (i in 0 until hop) { val x = inBuf[i] / 32768f; e2 += x * x }
                     liveLevelDb = (10 * Math.log10(e2 / hop + 1e-12)).toFloat()
@@ -2067,7 +2144,7 @@ class InjectorService : Binder {
                     if (now - statT >= 1_000_000_000L) {
                         val rc = recCount()
                         slog('M', "live/s mic=${"%.0f".format(liveLevelDb)}dB readMax=${rdMax / 1_000_000}ms writeMax=${wrMax / 1_000_000}ms " +
-                            "outBuf=${obMin * 1000 / SR}~${obMax * 1000 / SR}ms 断流+${underruns - lastUnder} 积压mic=${micRing.size() * 1000 / SR}ms 目标在录=$rc")
+                            "outBuf=${obMin * 1000 / SR}~${obMax * 1000 / SR}ms 断流+${underruns - lastUnder} 积压mic=${micRing.size() * 1000 / SR}ms 目标在录=$rc" + (if (rec == null) " 本机麦=关（仅接收）" else ""))
                         if (rc != lastRec) { slog('I', "目标录音数 $lastRec → $rc ${recDetail()}"); lastRec = rc }
                         statT = now; rdMax = 0; wrMax = 0; obMin = Int.MAX_VALUE; obMax = 0; lastUnder = underruns
                     }
