@@ -83,11 +83,21 @@ val genBuildInfo = tasks.register("genBuildInfo") {
 
 tasks.register("printVersions") { doLast { println("appVersion=$appVersion"); println("msiVersion=$pkgVersion") } }
 
+// ---------------------------------------------------------------- 使用说明（App 内本机渲染）
+// 构建时把仓库的 docs/desktop-manual.md 原样复制进资源 manual/desktop-manual.md，保证与仓库同步（约 12 KB，jar 里再压缩）
+val manualResDir = layout.buildDirectory.dir("generated/manual/resources")
+val syncManual = tasks.register<Sync>("syncManual") {
+    from(rootDir.resolve("../docs")) { include("desktop-manual.md") }
+    into(manualResDir.map { it.dir("manual") })
+}
+
 sourceSets.main {
     kotlin.srcDir(linkSharedDir)
     kotlin.srcDir(buildInfoDir)
+    resources.srcDir(manualResDir)
 }
 tasks.named("compileKotlin") { dependsOn(syncLinkShared, genBuildInfo) }
+tasks.named("processResources") { dependsOn(syncManual) }
 
 dependencies {
     // Skia 本地库只带一种：在 Windows 上构建（CI）固定 x64，不随 arm64 等其它平台打包；其它系统（本地开发/自测）用当前平台

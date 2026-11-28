@@ -38,9 +38,26 @@ object LinkUri {
         return Link(addrs, com.taocrypt.micmask.link.MmLink.DEFAULT_PORT, DeskLink.code, DeskLink.deviceIdHex, DeskLink.deviceName)
     }
 
-    /** 二维码模块矩阵（true = 黑）；纠错 M 级 */
-    fun qr(text: String): Array<BooleanArray> {
-        val q = QrCode.encodeText(text, QrCode.Ecc.MEDIUM)
+    /**
+     * 二维码用的精简链接（格式不变，只省掉可选字段，手机端现有解析 MmPairUri.parse 直接认）：
+     *   micmask://link?h=<地址1,地址2,…>&c=<配对码>[&p=<端口>]
+     *  - 不带 id / n：设备 ID 和名称在握手（MmHello）里本来就会交换，连上后照样记住设备；
+     *  - 端口是默认 47310 时省略 p（解析默认就是 47310）；
+     *  - 地址之间的逗号不再编码成 %2C（查询串里逗号合法，解析先按 & 切再解码，结果相同）；最多 6 个地址（局域网在前）。
+     * 例：micmask://link?h=192.168.31.253,10.126.126.1&c=123456（48 字符，纠错 H 级 + 中间 logo 时为 41×41 模块）
+     * 「复制链接」仍用 [build] 的完整链接（带 id / 名称，电脑间粘贴导入时用来认已保存设备）。
+     */
+    fun buildQr(l: Link): String {
+        val hosts = l.hosts.take(6).joinToString(",") { java.net.URLEncoder.encode(it, "UTF-8").replace("%3A", ":") }
+        return "micmask://link?h=$hosts&c=${l.code}" + (if (l.port != com.taocrypt.micmask.link.MmLink.DEFAULT_PORT) "&p=${l.port}" else "")
+    }
+
+    /** 二维码模块矩阵（true = 深色）。默认纠错 H 级（可恢复约 30%），中间盖 logo 也能扫 */
+    fun qr(text: String, ecc: QrCode.Ecc = QrCode.Ecc.HIGH): Array<BooleanArray> {
+        val q = QrCode.encodeText(text, ecc)
         return Array(q.size) { y -> BooleanArray(q.size) { x -> q.getModule(x, y) } }
     }
+
+    /** 中间 logo 占的模块边长（含白色衬底）：约 22% 边长，取与二维码同奇偶以便居中；面积约 5%，远低于 H 级 30% 的纠错能力 */
+    fun logoModules(size: Int): Int { var k = (size * 0.22f).toInt(); if ((size - k) % 2 != 0) k++; return k.coerceAtLeast(5) }
 }

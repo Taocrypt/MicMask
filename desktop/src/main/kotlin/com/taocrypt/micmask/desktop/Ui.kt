@@ -47,6 +47,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.border
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import top.yukonga.miuix.kmp.basic.Slider
@@ -71,6 +75,13 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
  */
 
 /** 弹框状态 */
+/** 导出日志对话框（托盘菜单也会打开它：先显示窗口） */
+object ExportUi {
+    var open by mutableStateOf(false)
+    var lastMsg by mutableStateOf("")
+    fun request() { Ui.show(); open = true }
+}
+
 private object Dlg {
     var codePeer by mutableStateOf<PeerDevice?>(null)
     var codeSaved by mutableStateOf<SavedDev?>(null)
@@ -95,13 +106,14 @@ fun Root() {
         Row(Modifier.fillMaxSize()) {
             NavRail()
             Box(Modifier.weight(1f).fillMaxHeight()) {
-                when (Ui.page) { 1 -> SettingsPage(); 2 -> AboutPage(); 3 -> LogPage(); else -> LinkPage() }
+                when (Ui.page) { 1 -> SettingsPage(); 2 -> AboutPage(); 3 -> LogPage(); 4 -> ManualPage(onBack = { Ui.page = Ui.manualFrom }); else -> LinkPage() }
             }
         }
         if (Dlg.codePeer != null || Dlg.codeSaved != null) CodeDialog()
         Dlg.rename?.let { RenameDialog(it) }
         Dlg.linkCode?.let { LinkCodeDialog(it) }
         if (Ui.closePrompt) ClosePrompt()
+        if (ExportUi.open) ExportDialog()
         BeaconOverlays()
     }
 }
@@ -316,14 +328,50 @@ private fun GainRow() {
     }
 }
 
-/** 二维码（黑白方块，四周留 4 格白边） */
+private val qrLogo: androidx.compose.ui.graphics.ImageBitmap? by lazy {
+    runCatching { javax.imageio.ImageIO.read(Thread.currentThread().contextClassLoader.getResourceAsStream("micmask.png")).toComposeImageBitmap() }.getOrNull()
+}
+
+/**
+ * 二维码：圆点模块 + 圆角定位框，四周留 3 格静区，圆角白底卡片，中间 MicMask 图标（纠错 H 级）。
+ * 深色主题下码本身仍是「深色码 + 浅色底」（很多扫码器不认反色码），只把底色压暗一点、外加细描边，避免在深色界面上刺眼。
+ */
 @Composable
-private fun QrImage(text: String, size: androidx.compose.ui.unit.Dp) {
+internal fun QrImage(text: String, size: androidx.compose.ui.unit.Dp) {
     val m = remember(text) { runCatching { LinkUri.qr(text) }.getOrNull() } ?: return
-    Canvas(Modifier.size(size).clip(RoundedCornerShape(8.dp)).background(Color.White)) {
-        val n = m.size + 8
-        val c = this.size.width / n
-        for (y in m.indices) for (x in m.indices) if (m[y][x]) drawRect(Color.Black, Offset((x + 4) * c, (y + 4) * c), Size(c + 0.5f, c + 0.5f))
+    val dark = MiuixTheme.colorScheme.surface.luminance() < 0.5f
+    val bg = if (dark) Color(0xFFEDEFF2) else Color.White
+    val fg = Color(0xFF17191C)
+    val logo = qrLogo
+    Box(Modifier.size(size).clip(RoundedCornerShape(14.dp)).background(bg)
+        .then(if (dark) Modifier.border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(14.dp)) else Modifier.border(1.dp, Color.Black.copy(alpha = 0.06f), RoundedCornerShape(14.dp)))) {
+        Canvas(Modifier.fillMaxSize()) {
+            val q = 3
+            val n = m.size
+            val c = this.size.width / (n + 2 * q)
+            val o = q * c
+            val k = LinkUri.logoModules(n); val l0 = (n - k) / 2
+            fun finder(x: Int, y: Int) = (x < 7 && y < 7) || (x >= n - 7 && y < 7) || (x < 7 && y >= n - 7)
+            for (y in 0 until n) for (x in 0 until n) {
+                if (!m[y][x] || finder(x, y)) continue
+                if (logo != null && x in l0 until l0 + k && y in l0 until l0 + k) continue
+                drawRoundRect(fg, Offset(o + x * c + c * 0.06f, o + y * c + c * 0.06f), Size(c * 0.88f, c * 0.88f), CornerRadius(c * 0.38f))
+            }
+            for ((fx, fy) in listOf(0 to 0, n - 7 to 0, 0 to n - 7)) {
+                val p = Offset(o + fx * c, o + fy * c)
+                drawRoundRect(fg, p, Size(7 * c, 7 * c), CornerRadius(2.2f * c))
+                drawRoundRect(bg, p + Offset(c, c), Size(5 * c, 5 * c), CornerRadius(1.5f * c))
+                drawRoundRect(fg, p + Offset(2 * c, 2 * c), Size(3 * c, 3 * c), CornerRadius(1.0f * c))
+            }
+            if (logo != null) {
+                val lp = Offset(o + l0 * c, o + l0 * c); val ls = k * c
+                drawRoundRect(bg, lp, Size(ls, ls), CornerRadius(ls * 0.26f))
+                val pad = ls * 0.12f
+                drawImage(logo, srcSize = androidx.compose.ui.unit.IntSize(logo.width, logo.height),
+                    dstOffset = androidx.compose.ui.unit.IntOffset((lp.x + pad).toInt(), (lp.y + pad).toInt()),
+                    dstSize = androidx.compose.ui.unit.IntSize((ls - 2 * pad).toInt(), (ls - 2 * pad).toInt()))
+            }
+        }
     }
 }
 
@@ -453,8 +501,9 @@ private fun ReceiveCard() {
             if (DeskLink.rxPeer != null) Hint(tr("手机连着时不能换配对码"))
             if (DeskLink.rxOn) {
                 val link = remember(DeskLink.code, DeskLink.deviceName, DeskLink.rxOn) { LinkUri.build(LinkUri.forReceiver()) }
+                val qrText = remember(DeskLink.code, DeskLink.rxOn) { LinkUri.buildQr(LinkUri.forReceiver()) }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    QrImage(link, 150.dp)
+                    QrImage(qrText, 164.dp)
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(tr("手机扫码连接"), fontSize = S14, fontWeight = FontWeight.SemiBold)
                         Hint(tr("手机 MicMask「传音 › 发送」点扫码，扫这个二维码即可连上（含本机所有地址和配对码，不用手输）。二维码含配对码，别发给不认识的人。"))
@@ -669,6 +718,7 @@ private fun SettingsPage() {
                 onSelectedIndexChange = { render = it; Settings.set("render_api", if (it == 1) "SOFTWARE" else "") })
             var upd by remember { mutableStateOf(Settings.getBool("upd_auto", true)) }
             SwitchPreference(checked = upd, onCheckedChange = { upd = it; Settings.setBool("upd_auto", it) }, title = tr("启动时检查更新"), summary = tr("只查 GitHub Release 的电脑版标签，不自动下载"))
+            Row(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) { Link(tr("使用说明")) { Ui.openManual() } }
         }
         Section(tr("本机设备名")) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -758,7 +808,7 @@ private fun AboutPage() {
                     if (updUrl != null && !updBusy) Link(tr("发布页")) { openUrl(updUrl!!) }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Link(tr("电脑版使用手册")) { openUrl(MANUAL_URL) }
+                    Link(tr("使用说明")) { Ui.openManual() }
                     Link(tr("问题反馈（GitHub Issues）")) { openUrl("https://github.com/Taocrypt/MicMask/issues") }
                 }
                 Hint(tr("音频引擎：{0}", if (NativeAudio.available) tr("WASAPI（mmaudio v{0}，Windows build {1}）", NativeAudio.version, NativeAudio.winBuild) else tr("DirectSound（{0}）", NativeAudio.loadError.ifEmpty { tr("设置里关掉了 WASAPI") })))
@@ -811,8 +861,8 @@ private fun AboutPage() {
     }
 }
 
-/** 电脑版手册（仓库 docs/desktop-manual.md） */
-const val MANUAL_URL = "https://github.com/Taocrypt/MicMask/blob/feat/desktop-windows/docs/desktop-manual.md"
+/** 电脑版手册网页版（本机「使用说明」页右上角可在浏览器打开） */
+const val MANUAL_URL = Manual.WEB_URL
 
 // ================================================================ 日志
 
@@ -848,17 +898,42 @@ private fun LogPage() {
     }
 }
 
-/** 「导出日志」：系统保存对话框（默认桌面），导出后在资源管理器中选中 */
+/** 「导出日志」：先弹对话框填标题与问题描述，再打包到桌面并在资源管理器里选中 */
 @Composable
 private fun ExportLink() {
-    var msg by remember { mutableStateOf("") }
+    Link(tr("导出日志")) { ExportUi.open = true }
+    if (ExportUi.lastMsg.isNotEmpty()) Text(ExportUi.lastMsg, fontSize = S12, color = sub())
+}
+
+@Composable
+internal fun ExportDialog() {
+    var title by remember { mutableStateOf("") }
+    var problem by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    var err by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
-    Link(if (busy) tr("正在导出…") else tr("导出日志"), enabled = !busy) {
-        busy = true
-        scope.launch { msg = withContext(Dispatchers.IO) { DeskLog.exportInteractive() }; busy = false }
+    fun close() { if (!busy) ExportUi.open = false }
+    Overlay(::close) {
+        Text(tr("导出日志"), fontSize = 17.sp, fontWeight = FontWeight.Bold)
+        Hint(tr("会打包日志和系统信息（配对码、密钥不会写入），保存到桌面并在资源管理器里选中，方便发给开发者。"))
+        TextField(value = title, onValueChange = { title = it.replace("\n", " ").take(80) }, label = tr("标题（用作文件名，可留空）"), singleLine = true, modifier = Modifier.fillMaxWidth())
+        val name = DeskLog.safeFileName(title)
+        Hint(tr("文件名：{0}", (name ?: DeskLog.defaultExportName().removeSuffix(".zip")) + ".zip"))
+        TextField(value = problem, onValueChange = { problem = it.take(4000) }, label = tr("遇到的具体问题（什么时候、做了什么、看到什么）"), singleLine = false, minLines = 4, maxLines = 10, modifier = Modifier.fillMaxWidth())
+        if (err.isNotEmpty()) Hint(err, errC())
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            TextButton(tr("取消"), onClick = ::close, enabled = !busy, modifier = Modifier.weight(1f))
+            TextButton(if (busy) tr("正在导出…") else tr("导出"), enabled = !busy, modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary(), onClick = {
+                busy = true; err = ""
+                scope.launch {
+                    val r = withContext(Dispatchers.IO) { runCatching { DeskLog.exportWithReport(title, problem) } }
+                    busy = false
+                    r.onSuccess { ExportUi.lastMsg = tr("已导出：{0}", it.absolutePath); DeskLog.i("系统", ExportUi.lastMsg); ExportUi.open = false }
+                        .onFailure { err = tr("导出失败：{0}", it.message ?: it.javaClass.simpleName); DeskLog.e("系统", err) }
+                }
+            })
+        }
     }
-    if (msg.isNotEmpty()) Text(msg, fontSize = S12, color = sub())
 }
 
 fun openUrl(u: String) { runCatching { java.awt.Desktop.getDesktop().browse(java.net.URI(u)) }.onFailure { DeskLink.addLog("打开链接失败：$u") } }

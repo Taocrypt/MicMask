@@ -170,11 +170,12 @@ object DeskLog {
         }
     }.let(::redact)
 
-    /** 打包：最近的日志文件 + system-info.txt → [dst]（zip） */
-    fun exportZip(dst: File): File {
+    /** 打包：最近的日志文件 + system-info.txt（+ 用户填的 report.txt）→ [dst]（zip） */
+    fun exportZip(dst: File, report: String? = null): File {
         i("系统", "导出日志到 ${dst.path}")
         flushNow()
         ZipOutputStream(dst.outputStream().buffered()).use { z ->
+            if (report != null) { z.putNextEntry(ZipEntry("report.txt")); z.write(redact(report).toByteArray(Charsets.UTF_8)); z.closeEntry() }
             z.putNextEntry(ZipEntry("system-info.txt")); z.write(systemInfo().toByteArray(Charsets.UTF_8)); z.closeEntry()
             for (f in logFiles()) {
                 z.putNextEntry(ZipEntry("logs/" + f.name))
@@ -184,6 +185,53 @@ object DeskLog {
             }
         }
         return dst
+    }
+
+    /**
+     * 标题 → 安全的文件名（不含扩展名）：去掉 Windows 非法字符 <>:"/\|?* 和控制字符，空白合并，去首尾的点和空格，
+     * 避开保留名（CON、NUL、COM1…），最长 80 字符；清洗后为空返回 null（用默认时间戳名）
+     */
+    fun safeFileName(title: String): String? {
+        var t = title.replace(Regex("[<>:\"/\\\\|?*\\x00-\\x1F\\x7F]"), " ").replace(Regex("\\s+"), " ").trim().trim('.', ' ')
+        if (t.length > 80) t = t.take(80).trim().trim('.', ' ')
+        if (t.isEmpty()) return null
+        if (Regex("(?i)^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\\..*)?$").matches(t)) t = "_$t"
+        return t
+    }
+
+    /** 桌面上不重名的导出文件：标题.zip / 标题 (2).zip …；标题为空用默认时间戳名 */
+    fun exportTarget(title: String, dir: File = desktopDir()): File {
+        val base = safeFileName(title) ?: defaultExportName().removeSuffix(".zip")
+        var f = File(dir, "$base.zip"); var n = 2
+        while (f.exists()) { f = File(dir, "$base ($n).zip"); n++ }
+        return f
+    }
+
+    /**
+     * 带问题描述的导出（导出对话框用，后台线程调用）：在日志里追加一行标记 → 打包（含 report.txt）到桌面 → 在资源管理器里选中该 zip。
+     * 返回导出的文件；失败抛异常。
+     */
+    fun exportWithReport(title: String, problem: String): File {
+        val t = title.trim(); val pr = problem.trim()
+        val dst = exportTarget(t)
+        i("反馈", "==== 用户导出日志：「${t.ifEmpty { "（无标题）" }}」 问题描述 ${pr.length} 字 ====")
+        val report = buildString {
+            appendLine("标题：${t.ifEmpty { "（未填）" }}")
+            appendLine("MicMask 电脑版 ${BuildInfo.VERSION}，导出时间 ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z", Locale.US).format(Date())}")
+            appendLine("系统 ${System.getProperty("os.name")} ${System.getProperty("os.version")}")
+            appendLine()
+            appendLine("遇到的具体问题：")
+            appendLine(pr.ifEmpty { "（未填）" })
+        }
+        exportZip(dst, report)
+        revealInExplorer(dst)
+        return dst
+    }
+
+    /** 在资源管理器里打开所在文件夹并选中文件（用户可直接拖到聊天窗口 / 右键「共享」） */
+    fun revealInExplorer(f: File) {
+        if (System.getProperty("os.name").lowercase().contains("win")) runCatching { ProcessBuilder("explorer.exe", "/select,", f.absolutePath).start() }
+            .onFailure { w("系统", "打开资源管理器失败：${it.message}") }
     }
 
     fun defaultExportName() = "micmask-desktop-logs-" + SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date()) + ".zip"

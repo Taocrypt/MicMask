@@ -176,7 +176,7 @@ object AppTray {
             else -> tr("开始发送（先在窗口里连一次手机）")
         }, enabled = DeskLink.txOn || q != null) { if (DeskLink.txOn) DeskLink.stopSend() else q?.let { DeskLink.connectSaved(it) } }
         m.addSeparator()
-        item(m, tr("导出日志…")) { Thread({ DeskLog.i("系统", DeskLog.exportInteractive()) }, "mm-export").start() }
+        item(m, tr("导出日志…")) { ExportUi.request() }
         item(m, tr("退出 MicMask")) { AppExit.quit() }
         return m
     }

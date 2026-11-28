@@ -1,6 +1,13 @@
 package com.taocrypt.micmask.desktop
 
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.unit.Density
 import com.taocrypt.micmask.link.MmCrypto
@@ -108,6 +115,15 @@ object SelfTest {
             require(again) { "第一个实例释放后重新获取失败" }
             "第二次启动被拦下并转交参数（${System.currentTimeMillis() - t0} ms）；释放后可重新获取"
         }
+        check("manual") {
+            val t = Manual.load() ?: error("资源 ${Manual.RES} 不在安装包里")
+            val bs = Md.parse(t)
+            val h = bs.count { it is Md.Block.Heading }; val tb = bs.count { it is Md.Block.Table }; val ls = bs.count { it is Md.Block.ListBlock }; val cd = bs.count { it is Md.Block.Code }
+            require(h >= 5 && ls >= 3) { "手册解析不对：标题 $h 列表 $ls" }
+            val a = Md.inline("**粗** `码` [链接](https://x.y) 普通", androidx.compose.ui.graphics.Color.Blue, androidx.compose.ui.graphics.Color.Gray) { }
+            require(a.text.contains("粗") && a.text.contains("链接") && !a.text.contains("**") && a.getLinkAnnotations(0, a.length).size == 1) { "行内解析不对：${a.text}" }
+            "${t.length} 字 → ${bs.size} 块（标题 $h、列表 $ls、表格 $tb、代码块 $cd）"
+        }
         check("msi-error-text") { require(Updater.msiError(1638).contains("另一版本")); "ok" }
         check("audio-enum") {
             val ins = AudioIO.inputs(); val outs = AudioIO.outputs()
@@ -194,7 +210,16 @@ object SelfTest {
             require(LinkUri.parse("micmask://link?h=1.2.3.4%2C5.6.7.8&p=1&n=a+b")?.let { it.hosts.size == 2 && it.port == 1 && it.name == "a b" } == true) { "兼容写法解析不对" }
             require(LinkUri.parse("http://x") == null && LinkUri.parse("micmask://link?p=1") == null) { "非法链接没拒绝" }
             val q = LinkUri.qr(u)
-            "${u.length} 字符 → 二维码 ${q.size}×${q.size}"
+            // 二维码用的精简链接：手机端同一解析（MmPairUri.parse）必须认，地址/端口/配对码不变
+            val cq = LinkUri.buildQr(l)
+            val pq = com.taocrypt.micmask.link.MmPairUri.parse(cq) ?: error("精简链接手机端解析失败：$cq")
+            require(pq.hosts == l.hosts && pq.port == l.port && pq.code == l.code) { "精简链接解析不一致：$pq" }
+            val cq2 = LinkUri.buildQr(l.copy(port = 50000))
+            require(com.taocrypt.micmask.link.MmPairUri.parse(cq2)?.port == 50000) { "非默认端口丢了：$cq2" }
+            val qq = LinkUri.qr(cq); val k = LinkUri.logoModules(qq.size)
+            val frac = k * k / (qq.size * qq.size).toFloat()
+            require(frac < 0.10f && (qq.size - k) % 2 == 0) { "logo 遮挡 ${"%.1f".format(frac * 100)}% 太大或没居中" }
+            "完整 ${u.length} 字符 → ${q.size}×${q.size}（M 级，旧）；二维码用 $cq（${cq.length} 字符）→ ${qq.size}×${qq.size}（H 级），logo ${k}×$k 模块占 ${"%.1f".format(frac * 100)}%"
         }
         check("beacon") { beaconTest() }
         check("duplex-reuse") { duplexReuse() }
@@ -209,6 +234,7 @@ object SelfTest {
             "ips=${Discovery.localIps().size} 关闭耗时 ${System.currentTimeMillis() - t} ms"
         }
         check("compose-miuix-render") { render() }
+        check("render-qr-manual-export") { renderExtras(File(outFile).absoluteFile.parentFile ?: File(".")) }
         check("https") {
             // TLS 握手确认 jdk.crypto.ec 等在；纯网络不通（无网、DNS）只记警告，不算失败
             try {
@@ -260,6 +286,41 @@ object SelfTest {
             pngOut?.let { p -> img.encodeToData(org.jetbrains.skia.EncodedImageFormat.PNG)?.bytes?.let { File(p).writeBytes(it) } }
             return "${img.width}x${img.height} 非白采样点=$nonWhite"
         } finally { scene.close(); DeskLink.stopPreview() }
+    }
+
+    /** 离屏渲染二维码（浅色 / 深色主题）、使用说明页、导出对话框，存 PNG 供人工查看（smoke-*.png，CI 产物 smoke-test-log） */
+    private fun renderExtras(dir: File): String {
+        val qrText = LinkUri.buildQr(LinkUri.Link(listOf("192.168.31.253", "10.126.126.1"), MmLink.DEFAULT_PORT, "123456", "", ""))
+        val res = ArrayList<String>()
+        fun shot(name: String, w: Int, h: Int, frames: Int = 6, content: @Composable () -> Unit): Int {
+            val scene = ImageComposeScene(w, h, Density(1f)) { content() }
+            try {
+                var img = scene.render(0)
+                for (i in 1..frames) { Thread.sleep(if (frames > 6) 60 else 0); img = scene.render(i * 16_000_000L) }
+                val bmp = org.jetbrains.skia.Bitmap.makeFromImage(img)
+                var dark = 0
+                for (y in 0 until bmp.height step 4) for (x in 0 until bmp.width step 4) { val c = bmp.getColor(x, y); if (((c shr 16) and 0xFF) + ((c shr 8) and 0xFF) + (c and 0xFF) < 200) dark++ }
+                img.encodeToData(org.jetbrains.skia.EncodedImageFormat.PNG)?.bytes?.let { File(dir, "smoke-$name.png").writeBytes(it) }
+                return dark
+            } finally { scene.close() }
+        }
+        for (mode in listOf(ColorSchemeMode.Light, ColorSchemeMode.Dark)) {
+            val n = shot("qr-${mode.name.lowercase()}", 260, 260) {
+                MiuixTheme(controller = remember { ThemeController(mode) }) {
+                    Box(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.surface), contentAlignment = Alignment.Center) { QrImage(qrText, 200.dp) }
+                }
+            }
+            require(n > 100) { "二维码（$mode）没画出来" }
+            res += "qr-$mode 深色点 $n"
+        }
+        val mn = shot("manual", 1000, 900, frames = 20) {
+            MiuixTheme(controller = remember { ThemeController(ColorSchemeMode.Light) }) { Box(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.surface)) { ManualPage(onBack = {}) } }
+        }
+        require(mn > 200) { "使用说明页没渲染出文字" }
+        shot("export-dialog", 900, 640) {
+            MiuixTheme(controller = remember { ThemeController(ColorSchemeMode.Light) }) { Box(Modifier.fillMaxSize().background(MiuixTheme.colorScheme.surface)) { ExportDialog() } }
+        }
+        return res.joinToString("；") + "；manual 深色点 $mn；PNG 在 ${dir.path}"
     }
 
     /** 自适应抖动缓冲：手机时钟快 1%（每 100 次读写 101 帧）+ 随机突发，模拟 120 秒：水位要稳定、裁剪要发生、断流少 */

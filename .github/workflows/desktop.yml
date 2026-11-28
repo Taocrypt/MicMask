@@ -328,6 +328,7 @@ jobs:
           path: |
             ${{ runner.temp }}/micmask-smoke.txt
             ${{ runner.temp }}/mem-*.txt
+            ${{ runner.temp }}/smoke-*.png
           if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4

@@ -72,3 +72,6 @@
 
 # QR Code generator（Nayuki）：纯 Java，摇树即可
 -dontwarn io.nayuki.qrcodegen.**
+
+# 使用说明（manual/desktop-manual.md）是普通资源文件，ProGuard 原样保留；解析/渲染代码在 com.taocrypt.micmask.** 里，已被上面 keep。
+# 自测 check("manual") 在 release 安装包里验证资源能读到并解析出标题/表格/列表。

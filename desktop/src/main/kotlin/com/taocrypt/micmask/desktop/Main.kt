@@ -68,6 +68,9 @@ object Ui {
     var activateTick by mutableIntStateOf(0)
     /** 缩到托盘时释放窗口（销毁 Compose 窗口与 Skia 上下文，更省内存、恢复稍慢）；默认关 = 只隐藏，恢复即时 */
     var releaseOnTray by mutableStateOf(Settings.getBool("tray_release", false))
+    /** 从哪一页进的「使用说明」（返回时回到那一页） */
+    var manualFrom = 2
+    fun openManual() { if (page != 4) manualFrom = page; page = 4 }
 
     /** 显示并前置主窗口（托盘点击、托盘菜单、另一次启动的激活请求都走这里；须在 EDT 调用） */
     fun show() { windowShown = true; AudioIO.watchFast = true; activateTick++ }
@@ -226,6 +229,15 @@ private fun smokeMain(args: Array<String>) {
                 out(MemProbe.line("window-again($tag)"))
             }
             javax.swing.SwingUtilities.invokeAndWait { Ui.releaseOnTray = false }
+            // 使用说明：打开（懒加载 + 解析 + 渲染）→ 关闭（回到传音页 + GC），对比内存
+            System.gc(); Thread.sleep(800)
+            out(MemProbe.line("before-manual"))
+            javax.swing.SwingUtilities.invokeAndWait { Ui.openManual() }
+            Thread.sleep(2500)
+            out(MemProbe.line("manual-open"))
+            javax.swing.SwingUtilities.invokeAndWait { Ui.page = 0 }
+            Thread.sleep(1200); System.gc(); Thread.sleep(800)
+            out(MemProbe.line("manual-closed+gc"))
             // 退出：隐藏窗口 → 后台清理（与 AppExit.quit 同一路径，只是不 halt）
             val a = System.currentTimeMillis()
             Ui.windowShown = false

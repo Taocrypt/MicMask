@@ -32,18 +32,26 @@ function Shot($name) {
 function Windows() { (Get-Process | Where-Object { $_.MainWindowTitle } | ForEach-Object { "$($_.ProcessName):$($_.MainWindowTitle)" }) -join ' | ' }
 
 function MsiProps($path) {
-  $i = New-Object -ComObject WindowsInstaller.Installer
-  $db = $i.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $i, @($path, 0))
-  $r = @{}
-  foreach ($p in 'ProductVersion', 'ProductCode', 'UpgradeCode') {
-    $v = $db.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $db, @("SELECT Value FROM Property WHERE Property='$p'"))
-    $v.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $v, $null) | Out-Null
-    $rec = $v.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $v, $null)
-    $r[$p] = $rec.GetType().InvokeMember('StringData', 'GetProperty', $null, $rec, 1)
-    $v.GetType().InvokeMember('Close', 'InvokeMethod', $null, $v, $null) | Out-Null
-  }
-  [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($db)
-  return $r
+  # WindowsInstaller COM 在 pwsh 7 里 InvokeMember 会报 DISP_E_TYPEMISMATCH（参数被包成 PSObject）：交给 Windows PowerShell 5.1 读
+  $ps = @'
+param($p)
+$i = New-Object -ComObject WindowsInstaller.Installer
+$db = $i.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $i, @($p, 0))
+$r = @{}
+foreach ($k in 'ProductVersion', 'ProductCode', 'UpgradeCode') {
+  $v = $db.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $db, @("SELECT Value FROM Property WHERE Property='$k'"))
+  [void]$v.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $v, $null)
+  $rec = $v.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $v, $null)
+  $r[$k] = $rec.GetType().InvokeMember('StringData', 'GetProperty', $null, $rec, 1)
+  [void]$v.GetType().InvokeMember('Close', 'InvokeMethod', $null, $v, $null)
+}
+$r | ConvertTo-Json -Compress
+'@
+  $f = Join-Path $env:RUNNER_TEMP 'msiprops.ps1'; Set-Content $f $ps -Encoding UTF8
+  $j = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $f ([string]$path)
+  if ($LASTEXITCODE -ne 0 -or -not $j) { throw "读 MSI 属性失败：$path $j" }
+  $o = $j | ConvertFrom-Json
+  return @{ ProductVersion = $o.ProductVersion; ProductCode = $o.ProductCode; UpgradeCode = $o.UpgradeCode }
 }
 function Entries() {
   @(Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall', 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall' -ErrorAction SilentlyContinue |
