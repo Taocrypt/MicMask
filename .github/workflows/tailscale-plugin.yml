@@ -1,0 +1,252 @@
+name: Tailscale plugin
+
+# MicMask 的 Tailscale 在线下载插件（plugins/tailscale/）。不进 APK / 安装包，App 按 manifest.json 按需下载。
+#   push 到 feat/desktop-windows（仅 plugins/tailscale/** 或本文件变化）-> 构建 + 测试，上传 workflow 产物（版本 <VERSION>-dev.<run>）
+#   push ts-plugin-v* 标签 -> 同上，再发 GitHub Release：一律 prerelease、make_latest=false，不顶掉安卓的 Latest
+#   workflow_dispatch      -> 手动跑一次
+# 与 build.yml（main / v*）、desktop.yml（win-v*）互不触发。
+on:
+  push:
+    branches: [feat/desktop-windows]
+    tags: ['ts-plugin-v*']
+    paths:
+      - 'plugins/tailscale/**'
+      - '.github/workflows/tailscale-plugin.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tailscale-plugin-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NDK_VERSION: 28.2.13676358 # 与 app/build.gradle.kts 的 ndkVersion 一致（r28c）
+  ANDROID_API: 26 # = app minSdk
+  KOTLIN_VERSION: 2.4.21
+  ORG_JSON_VERSION: '20260814'
+  ORG_JSON_SHA256: 7dd2de1533e766e2b6c07d8194da85145ad313a167a4760050f5c9b6839604fe
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    defaults:
+      run:
+        working-directory: plugins/tailscale/native
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        id: ver
+        run: |
+          BASE=$(tr -d ' \r\n' < ../VERSION)
+          if [[ "$GITHUB_REF" == refs/tags/ts-plugin-v* ]]; then
+            VER="${GITHUB_REF_NAME#ts-plugin-v}"
+          else
+            VER="${BASE}-dev.${GITHUB_RUN_NUMBER}"
+          fi
+          if ! [[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then echo "::error::版本号 $VER 不是 MAJOR.MINOR.PATCH 开头"; exit 1; fi
+          TSVER=$(sed -n 's/^\s*tailscale.com v\(.*\)$/\1/p' go.mod | head -n1)
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "VER=$VER" >> "$GITHUB_ENV"
+          echo "TSVER=$TSVER" >> "$GITHUB_ENV"
+          echo "MicMask Tailscale 插件 $VER（tailscale.com $TSVER）"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: plugins/tailscale/native/go.mod
+          cache-dependency-path: plugins/tailscale/native/go.sum
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Toolchains (MinGW, NDK)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q gcc-mingw-w64-x86-64
+          NDK="$ANDROID_HOME/ndk/$NDK_VERSION"
+          if [ ! -d "$NDK" ]; then
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" > /dev/null
+          fi
+          test -x "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${ANDROID_API}-clang"
+          echo "NDK=$NDK" >> "$GITHUB_ENV"
+
+      - name: Vet + unit/integration tests (linux-x64 host)
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          export CGO_CFLAGS="-I$JAVA_HOME/include -I$JAVA_HOME/include/linux"
+          test -z "$(gofmt -l .)" || { gofmt -l .; echo "::error::gofmt"; exit 1; }
+          go vet .
+          go test -count=1 -v -run 'TestLoginURL|TestExposeAndDial' -timeout 5m .
+
+      - name: Build android-arm64-v8a (.so)
+        env:
+          CGO_ENABLED: '1'
+          GOOS: android
+          GOARCH: arm64
+        run: |
+          mkdir -p ../dist
+          OUT="../dist/micmask-tailscale-$VER-android-arm64-v8a.so"
+          CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${ANDROID_API}-clang" \
+          go build -trimpath -buildmode=c-shared \
+            -ldflags "-s -w -X main.pluginVersion=$VER -extldflags '-Wl,-soname,libmicmask_tailscale.so -Wl,-z,max-page-size=16384'" \
+            -o "$OUT" .
+          rm -f "${OUT%.so}.h"
+          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -d "$OUT" | grep -E 'NEEDED|SONAME'
+          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -lW "$OUT" | grep -m2 LOAD
+          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" -D --defined-only "$OUT" | grep -c ' T Java_com_taocrypt_micmask_ts_TsNative_'
+
+      - name: Build windows-x64 (.dll)
+        env:
+          CGO_ENABLED: '1'
+          GOOS: windows
+          GOARCH: amd64
+          CC: x86_64-w64-mingw32-gcc
+        run: |
+          export CGO_CFLAGS="-I$JAVA_HOME/include -I$PWD/include/win32"
+          OUT="../dist/micmask-tailscale-$VER-windows-x64.dll"
+          go build -trimpath -buildmode=c-shared \
+            -ldflags "-s -w -X main.pluginVersion=$VER -extldflags '-static-libgcc -Wl,--no-insert-timestamp'" \
+            -o "$OUT" .
+          rm -f "${OUT%.dll}.h"
+          x86_64-w64-mingw32-objdump -p "$OUT" | grep 'DLL Name'
+          x86_64-w64-mingw32-objdump -p "$OUT" | grep -c 'Java_com_taocrypt_micmask_ts_TsNative_'
+
+      - name: Third-party notices (per platform)
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          GOOS=android GOARCH=arm64 python3 ../scripts/collect_licenses.py "../dist/micmask-tailscale-$VER-android-arm64-v8a-licenses.txt"
+          GOOS=windows GOARCH=amd64 python3 ../scripts/collect_licenses.py "../dist/micmask-tailscale-$VER-windows-x64-licenses.txt"
+
+      - name: Build linux-x64 (.so, CI smoke only, not released)
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          export CGO_CFLAGS="-I$JAVA_HOME/include -I$JAVA_HOME/include/linux"
+          mkdir -p ../smoke/rel
+          go build -trimpath -buildmode=c-shared -ldflags "-s -w -X main.pluginVersion=$VER" \
+            -o "../smoke/rel/micmask-tailscale-$VER-linux-x64.so" .
+          go test -c -o ../smoke/mmts.test .
+
+      - name: Manifest
+        run: |
+          python3 ../scripts/make_manifest.py --version "$VER" --tailscale "$TSVER" \
+            --base-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/ts-plugin-v$VER" \
+            --out ../dist/manifest.json \
+            android-arm64-v8a="../dist/micmask-tailscale-$VER-android-arm64-v8a.so" \
+            windows-x64="../dist/micmask-tailscale-$VER-windows-x64.dll"
+          python3 ../scripts/make_manifest.py --version "$VER" --tailscale "$TSVER" \
+            --base-url "file://$PWD/../smoke/rel" --out ../smoke/rel/manifest.json \
+            linux-x64="../smoke/rel/micmask-tailscale-$VER-linux-x64.so" > /dev/null
+
+      - name: Compile Kotlin loader + smoke (kotlinc)
+        working-directory: plugins/tailscale
+        run: |
+          curl -fsSL --retry 3 -o /tmp/kc.zip "https://github.com/JetBrains/kotlin/releases/download/v$KOTLIN_VERSION/kotlin-compiler-$KOTLIN_VERSION.zip"
+          unzip -q /tmp/kc.zip -d /tmp
+          curl -fsSL --retry 3 -o smoke/json.jar "https://repo1.maven.org/maven2/org/json/json/$ORG_JSON_VERSION/json-$ORG_JSON_VERSION.jar"
+          echo "$ORG_JSON_SHA256  smoke/json.jar" | sha256sum -c -
+          cp /tmp/kotlinc/lib/kotlin-stdlib.jar smoke/
+          /tmp/kotlinc/bin/kotlinc -cp smoke/json.jar -d smoke/classes kotlin kotlin-test 2>&1 | grep -v '^warning' || true
+          test -f smoke/classes/TsSmokeKt.class
+
+      - name: JVM smoke (JNI + loader + local tailnet, linux-x64)
+        working-directory: plugins/tailscale/smoke
+        run: |
+          MMTS_PEER_OUT=$PWD/peer.txt MMTS_PEER_SECS=90 ./mmts.test -test.run TestPeerServer -test.v > peer.log 2>&1 &
+          for i in $(seq 300); do [ -f peer.txt ] && break; sleep 0.2; done
+          cat peer.txt
+          CP="classes:json.jar:kotlin-stdlib.jar"
+          java -Dmicmask.ts.platform=linux-x64 -cp "$CP" TsSmokeKt "$PWD/plugdir" "file://$PWD/rel/manifest.json" "$PWD/peer.txt"
+          java -Dmicmask.ts.platform=linux-x64 -cp "$CP" TsSmokeKt "$PWD/plugdir-login" "file://$PWD/rel/manifest.json" login
+
+      - name: Sizes
+        run: |
+          python3 - ../dist/*.so ../dist/*.dll ../smoke/rel/*.so <<'EOF' | tee -a "$GITHUB_STEP_SUMMARY"
+          import gzip, os, sys
+          print(f"### MicMask Tailscale 插件 {os.environ['VER']}（tailscale.com {os.environ['TSVER']}）")
+          print('| 文件 | 字节 | MiB | gzip -9 MiB |')
+          print('|---|---:|---:|---:|')
+          for f in sys.argv[1:]:
+              b = os.path.getsize(f); g = len(gzip.compress(open(f, 'rb').read(), 9))
+              print(f'| {os.path.basename(f)} | {b} | {b/1048576:.1f} | {g/1048576:.1f} |')
+          EOF
+          cat ../dist/manifest.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: micmask-tailscale-${{ steps.ver.outputs.version }}
+          path: plugins/tailscale/dist/*
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: smoke-kit
+          path: |
+            plugins/tailscale/smoke/classes
+            plugins/tailscale/smoke/json.jar
+            plugins/tailscale/smoke/kotlin-stdlib.jar
+          retention-days: 3
+
+  windows-smoke:
+    needs: build
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/download-artifact@v4
+        with:
+          name: micmask-tailscale-${{ needs.build.outputs.version }}
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: smoke-kit
+          path: kit
+      - name: Load DLL in JVM + real login-URL round trip
+        run: |
+          VER='${{ needs.build.outputs.version }}'
+          # 本地 manifest：同一个 DLL，url 指向本地文件（验证下载/校验/加载路径）
+          python - <<'EOF'
+          import json, os, pathlib
+          m = json.load(open('dist/manifest.json'))
+          a = m['platforms']['windows-x64']
+          a['url'] = pathlib.Path(os.path.abspath('dist/' + a['file'])).as_uri()
+          a['urls'] = [a['url']]
+          json.dump(m, open('local-manifest.json', 'w'))
+          EOF
+          MURL=$(python -c "import pathlib,os;print(pathlib.Path(os.path.abspath('local-manifest.json')).as_uri())")
+          java -cp "kit/classes;kit/json.jar;kit/kotlin-stdlib.jar" TsSmokeKt "$PWD/plugdir" "$MURL" login
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/ts-plugin-v')
+    needs: [build, windows-smoke]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: micmask-tailscale-${{ needs.build.outputs.version }}
+          path: dist
+      - name: GitHub Release (prerelease, not latest)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER='${{ needs.build.outputs.version }}'
+          cat > notes.md <<EOF
+          MicMask Tailscale 在线插件 $VER（按需下载，不随 APK / 安装包分发）。
+          基于 tailscale.com/tsnet（BSD-3-Clause，© Tailscale Inc & AUTHORS），见 plugins/tailscale/README.md。
+          Tailscale 是 Tailscale Inc. 的商标；本插件不是 Tailscale 官方产品。
+          EOF
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+            --title "Tailscale 插件 $VER" --notes-file notes.md --prerelease --latest=false
