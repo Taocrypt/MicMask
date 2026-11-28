@@ -189,6 +189,7 @@ private fun LevelBar(src: () -> AudioIO.Level?, silentHint: String) {
         var since = System.currentTimeMillis()
         while (true) {
             delay(100)
+            if (!Ui.windowShown) { awaitWindowShown(); since = System.currentTimeMillis() }
             val l = src()
             if (l == null) { lv = 0f; db = -120f; silent = false; since = System.currentTimeMillis(); continue }
             lv = lv * 0.6f + l.peak * 0.4f; db = l.peakDb
@@ -248,7 +249,7 @@ private fun SendCard() {
     val ins = AudioIO.inList
     var apps by remember { mutableStateOf(emptyList<NativeAudio.AppSession>()) }
     // 正在用声音的程序：3 秒刷新一次（只在页面开着时）
-    LaunchedEffect(Unit) { while (true) { apps = withContext(Dispatchers.IO) { runCatching { NativeAudio.sessions() }.getOrDefault(emptyList()) }; delay(3000) } }
+    LaunchedEffect(Unit) { while (true) { awaitWindowShown(); apps = withContext(Dispatchers.IO) { runCatching { NativeAudio.sessions() }.getOrDefault(emptyList()) }; delay(3000) } }
     val choices = inputChoices(ins, apps)
     val key = DeskLink.inputKey
     val busy = DeskLink.txOn
@@ -307,7 +308,7 @@ private fun GainRow() {
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             var agcDb by remember { mutableFloatStateOf(0f) }
-            LaunchedEffect(DeskLink.agcOn) { while (DeskLink.agcOn) { agcDb = DeskLink.gain.agcDb; delay(300) } }
+            LaunchedEffect(DeskLink.agcOn) { while (DeskLink.agcOn) { awaitWindowShown(); agcDb = DeskLink.gain.agcDb; delay(300) } }
             Text(if (DeskLink.agcOn) tr("自动增益：开（目标约 −18 dBFS，当前 {0} dB，带限幅防爆音）", "%+.1f".format(agcDb)) else tr("自动增益：关（声音忽大忽小 / 太小时可以打开）"), Modifier.weight(1f), fontSize = S12, color = sub())
             Link(if (DeskLink.agcOn) tr("停用") else tr("启用")) { DeskLink.setAgc(!DeskLink.agcOn) }
         }
@@ -370,7 +371,7 @@ private fun TargetsCard() {
             Text(tr("粘贴手机分享的链接"), fontSize = S14, fontWeight = FontWeight.SemiBold)
             var linkText by remember { mutableStateOf("") }
             var clipLink by remember { mutableStateOf<LinkUri.Link?>(null) }
-            LaunchedEffect(Unit) { while (true) { clipLink = clipboardLink(); delay(1500) } }
+            LaunchedEffect(Unit) { while (true) { awaitWindowShown(); clipLink = clipboardLink(); delay(1500) } }
             TextField(value = linkText, onValueChange = { linkText = it.take(600) }, label = tr("micmask://link?…（手机「接收」页的链接 / 二维码内容）"), singleLine = true, modifier = Modifier.fillMaxWidth())
             val parsed = LinkUri.parse(linkText)
             if (linkText.isNotBlank() && parsed == null) Hint(tr("不是 MicMask 链接：应以 micmask://link? 开头，带 h=地址"), errC())
@@ -410,7 +411,7 @@ private fun DevRow(title: String, summary: String, action: String, enabled: Bool
 @Composable
 private fun CodeField(code: String, onChange: (String) -> Unit) {
     var clip by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(Unit) { while (true) { clip = clipboardCode(); delay(1500) } }
+    LaunchedEffect(Unit) { while (true) { awaitWindowShown(); clip = clipboardCode(); delay(1500) } }
     TextField(value = code, onValueChange = { v -> onChange(v.filter(Char::isDigit).take(6)) }, label = tr("配对码（手机「接收」显示的 6 位数字）"), singleLine = true, modifier = Modifier.fillMaxWidth())
     val c = clip
     if (c != null && c != code) Link(tr("粘贴剪贴板里的配对码 {0}", c.chunked(3).joinToString(" "))) { onChange(c) }
@@ -637,7 +638,7 @@ private fun RenameDialog(d: SavedDev) {
 private fun ClosePrompt() {
     Overlay({ Ui.closePrompt = false }) {
         Text(tr("关闭窗口后…"), fontSize = 17.sp, fontWeight = FontWeight.Bold)
-        Hint(tr("最小化到托盘：窗口收起，接收 / 发送 / 自动连接继续在后台工作（占用内存更少）；双击托盘图标再打开。直接退出：停止所有收发。以后可在「设置」里改。"))
+        Hint(tr("最小化到托盘：窗口收起，接收 / 发送 / 自动连接继续在后台工作；单击托盘图标再打开。直接退出：停止所有收发。以后可在「设置」里改。"))
         TextButton(tr("最小化到托盘（推荐）"), modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.textButtonColorsPrimary(), onClick = {
             Settings.set("close_action", "tray"); Ui.closePrompt = false; Ui.hideToTray()
         })
@@ -660,6 +661,8 @@ private fun SettingsPage() {
             var restore by remember { mutableStateOf(Settings.getBool("rx_restore", true)) }
             SwitchPreference(checked = restore, onCheckedChange = { restore = it; Settings.setBool("rx_restore", it) }, title = tr("启动时恢复接收"),
                 summary = tr("上次退出时开着「接收」，下次启动自动打开"))
+            SwitchPreference(checked = Ui.releaseOnTray, onCheckedChange = { Ui.releaseOnTray = it; Settings.setBool("tray_release", it) }, title = tr("缩到托盘时释放窗口"),
+                summary = tr("开：关到托盘时销毁窗口，更省内存，从托盘恢复稍慢；关（默认）：只隐藏窗口，恢复即时，隐藏期间暂停界面刷新"))
             var render by remember { mutableStateOf(if (Settings.get("render_api") == "SOFTWARE") 1 else 0) }
             WindowDropdownPreference(items = listOf(tr("自动（显卡加速，默认）"), tr("软件渲染（更省内存）")), selectedIndex = render, title = tr("界面渲染"),
                 summary = tr("软件渲染约少占 30 MB 内存，界面动画时 CPU 略高；重启 MicMask 后生效。当前：{0}", Ui.renderApi),
@@ -711,13 +714,15 @@ private fun AboutPage() {
     val scope = rememberCoroutineScope()
     var upd by remember { mutableStateOf("") }
     var updUrl by remember { mutableStateOf<String?>(null) }
+    var updRel by remember { mutableStateOf<Updater.Release?>(null) }
+    var updBusy by remember { mutableStateOf(false) }
     var wall by remember { mutableStateOf<DeskBeacon.Wall?>(null) }
     var wallState by remember { mutableStateOf(0) }   // 0 加载中 1 成功 2 失败
     fun check() {
-        upd = tr("正在检查更新…"); updUrl = null
+        upd = tr("正在检查更新…"); updUrl = null; updRel = null
         scope.launch {
             val r = withContext(Dispatchers.IO) { runCatching { Updater.check() } }
-            r.onSuccess { rel -> if (rel == null) upd = tr("已是最新版本（{0}）", BuildInfo.VERSION) else { upd = tr("发现新版本 {0}", rel.version) + (if (rel.pre) tr("（测试版）") else ""); updUrl = rel.installer()?.url ?: rel.page } }
+            r.onSuccess { rel -> if (rel == null) upd = tr("已是最新版本（{0}）", BuildInfo.VERSION) else { upd = tr("发现新版本 {0}", rel.version) + (if (rel.pre) tr("（测试版）") else ""); updUrl = rel.page; updRel = rel.takeIf { it.installer() != null } } }
                 .onFailure { upd = tr("检查更新失败：{0}", it.message ?: "") }
         }
     }
@@ -737,7 +742,20 @@ private fun AboutPage() {
                 Hint(tr("测试版，未在真机上完整验证。开源（GPL-3.0）：github.com/Taocrypt/MicMask"))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(upd.ifEmpty { tr("检查更新（GitHub Release，电脑版标签 win-v…）") }, Modifier.weight(1f), fontSize = S13, color = sub())
-                    Link(if (updUrl != null) tr("下载") else tr("检查")) { updUrl?.let { openUrl(it) } ?: check() }
+                    if (updBusy) Unit
+                    else if (updRel != null) Link(tr("下载并安装")) {
+                        val rel = updRel!!
+                        updBusy = true
+                        scope.launch {
+                            val r = withContext(Dispatchers.IO) {
+                                runCatching { Updater.downloadAndInstall(rel) { got, total -> upd = tr("正在下载 {0}：{1} / {2} MB", rel.version, "%.1f".format(got / 1048576.0), "%.1f".format(total / 1048576.0)) } }
+                            }
+                            r.onSuccess { upd = tr("安装程序已启动，MicMask 将退出") }
+                                .onFailure { upd = tr("自动安装失败：{0}。可点「发布页」手动下载安装", it.message ?: it.javaClass.simpleName); updBusy = false }
+                        }
+                    }
+                    else Link(tr("检查")) { check() }
+                    if (updUrl != null && !updBusy) Link(tr("发布页")) { openUrl(updUrl!!) }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Link(tr("电脑版使用手册")) { openUrl(MANUAL_URL) }

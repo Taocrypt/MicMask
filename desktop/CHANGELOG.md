@@ -5,6 +5,18 @@
 
 ## [未发布]
 
+### 升级修复（alpha.1 → alpha.2 装不上）
+- 根因：MSI 版本只取「0.1.0」，alpha.1、alpha.2 和所有测试构建的 ProductVersion 都是 0.1.0；jpackage 的 ProductCode 由名称 + 版本算出，于是各版 ProductCode 也相同，Windows Installer 认为「同一产品已安装」（错误 1638），新版装不上，打开仍是旧版
+- MSI / EXE 数字版本改为 MAJOR.MINOR.(PATCH×1000 + 阶段基数 + 序号)：dev 1–99、alpha 100+、beta 300+、rc 500+、正式 900（0.1.0-alpha.3 → 0.1.103）；单调递增且大于 alpha.1 / alpha.2 写入的 0.1.0。upgradeUuid 不变（alpha.1 起固定），新版用 MajorUpgrade 自动卸载旧版；设置（%APPDATA%\MicMask）与日志（%LOCALAPPDATA%\MicMask）保留。「应用和功能」里显示数字版本，关于页仍显示 0.1.0-alpha.N
+- 应用内更新：关于页「下载并安装」——下载到 %TEMP%\MicMask-update、按 SHA256SUMS.txt 校验、用 msiexec 启动带界面的安装（写详细日志到日志文件夹），确认安装程序在运行后退出自身；失败写日志并提示，可点「发布页」手动下载
+- CI 升级测试：装 alpha.1 / alpha.2 的 MSI 后装新 MSI、新 EXE、走应用内更新路径，校验只剩一个条目、DisplayVersion 与程序版本是新的、设置保留；并复现旧方案 alpha.1 → alpha.2 的失败（日志 + 截图）
+
+### 单实例 / 启动速度 / 托盘
+- 单实例：%LOCALAPPDATA%\MicMask\instance.lock（文件锁）+ 本机回环端口；再次启动时把参数和激活请求交给已运行的实例（窗口前置，含从托盘恢复），新进程立即退出
+- 冷启动：先显示窗口，首帧之后再在后台装托盘、枚举声卡、开 mDNS、恢复接收、Beacon；日志记录「首帧 X ms」，自测记录首帧与托盘恢复耗时
+- 托盘菜单中文显示成方块：改用 Swing 菜单并显式用 Microsoft YaHei UI（缺失时依次回退微软雅黑 / SimSun / 等线 / 正黑 / Segoe UI），不再用 AWT 原生菜单的逻辑字体；单击托盘图标即可打开窗口；自测检查菜单字体能显示全部菜单文字
+- 关到托盘默认只隐藏窗口（恢复即时），隐藏期间暂停电平表、剪贴板与会话轮询并 GC 一次；设置新增「缩到托盘时释放窗口」（默认关，开 = 销毁窗口更省内存、恢复稍慢）
+
 ## [0.1.0-alpha.2] - 2026-11-28
 
 ### 第三轮（音频底层 / 二维码 / 签名 / 后台 / 手册 / 组网与双向）

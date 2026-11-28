@@ -10,8 +10,33 @@ plugins {
 }
 
 val appVersion = (findProperty("appVersion") as String?)?.removePrefix("win-v")?.removePrefix("v") ?: "0.1.0-dev"
-/** MSI/EXE 只认 MAJOR.MINOR.BUILD（0–255.0–255.0–65535）：取版本号的数字部分 */
-val pkgVersion = Regex("^(\\d+)\\.(\\d+)\\.(\\d+)").find(appVersion)?.value ?: "0.1.0"
+/**
+ * MSI/EXE 的数字版本（Windows Installer 只认 MAJOR.MINOR.BUILD：0–255 / 0–255 / 0–65535，且只比前三段）。
+ * 旧做法只取「0.1.0」：alpha.1、alpha.2、所有 dev 构建都是 0.1.0，jpackage 的 ProductCode 又由名称 + 版本算出，
+ * 于是各版 ProductCode 相同 → Windows Installer 认为「同一产品已安装」（错误 1638），新版根本装不上。
+ * 现在把预发布阶段编进 BUILD，保证每个版本不同且单调递增：
+ *   BUILD = PATCH×1000 + 阶段基数 + 序号；dev 0（序号 1–99 循环）/ alpha 100 / beta 300 / rc 500（序号 0–199）/ 正式 900
+ *   例：0.1.0-alpha.3 → 0.1.103，0.1.0-rc.1 → 0.1.501，0.1.0 → 0.1.900，0.1.1-alpha.1 → 0.1.1101，0.1.0-dev.15 → 0.1.15
+ * 都大于 alpha.1 / alpha.2 实际写入的 0.1.0，所以已装这两版的用户直接装新版即可升级（旧版被 MajorUpgrade 自动卸载）。
+ * 显示版本（关于页、日志、Beacon）仍是 appVersion（如 0.1.0-alpha.3）；「应用和功能」里显示的是这个数字版本。
+ * 需要时可用 -PmsiVersion=x.y.z 强制指定。
+ */
+fun msiVersionOf(v: String): String {
+    val m = Regex("^(\\d+)\\.(\\d+)\\.(\\d+)(?:-([A-Za-z]+)[.-]?(\\d+)?)?").find(v) ?: return "0.1.0"
+    val (maj, min, pat) = m.groupValues.drop(1).take(3).map { it.toInt() }
+    val stage = m.groupValues[4].lowercase()
+    val n = m.groupValues[5].toIntOrNull()
+    require(maj <= 255 && min <= 255 && pat <= 64) { "版本 $v 超出 MSI 版本范围（MAJOR/MINOR ≤ 255，PATCH ≤ 64）" }
+    val build = pat * 1000 + when (stage) {
+        "" -> 900
+        "alpha", "a" -> 100 + (n ?: 0).also { require(it <= 199) { "alpha 序号 ≤ 199" } }
+        "beta", "b" -> 300 + (n ?: 0).also { require(it <= 199) { "beta 序号 ≤ 199" } }
+        "rc" -> 500 + (n ?: 0).also { require(it <= 199) { "rc 序号 ≤ 199" } }
+        else -> if (n == null) 0 else (n - 1).mod(99) + 1   // dev / 其它：1–99 循环（只用于分支测试构建）
+    }
+    return "$maj.$min.$build"
+}
+val pkgVersion = (findProperty("msiVersion") as String?)?.takeIf { it.isNotBlank() } ?: msiVersionOf(appVersion)
 
 // JDK 21：miuix 0.9.x 的 class 文件是 Java 21（版本 65），用 17 运行会在加载主题时 UnsupportedClassVersionError。
 // 打包用的 jlink/jpackage 也取这个工具链的 JDK（CI 里 setup-java 21）。
@@ -55,6 +80,8 @@ val genBuildInfo = tasks.register("genBuildInfo") {
             |""".trimMargin())
     }
 }
+
+tasks.register("printVersions") { doLast { println("appVersion=$appVersion"); println("msiVersion=$pkgVersion") } }
 
 sourceSets.main {
     kotlin.srcDir(linkSharedDir)
@@ -106,7 +133,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Exe)
             packageName = "MicMask"
-            packageVersion = pkgVersion
+            packageVersion = pkgVersion   // MSI/EXE 数字版本，见 msiVersionOf；显示版本是 appVersion
             // MSI 元数据只用 ASCII：JDK 21 的 jpackage 用 en-us（代码页 1252）跑 WiX light，中文会报 LGHT0311 打包失败
             description = "MicMask for Windows - send and receive audio with the MicMask phone app"
             vendor = "Taocrypt"
@@ -136,8 +163,10 @@ compose.desktop {
                 shortcut = true
                 dirChooser = true
                 perUserInstall = false
-                // 固定 upgradeUuid：新版 MSI 覆盖升级旧版，不会装出两份
+                // 固定 upgradeUuid（alpha.1 起一直是这个值，切勿改）：新版 MSI 用 MajorUpgrade 自动卸载旧版，不会装出两份
                 upgradeUuid = "6f1b8f3e-4a52-4c1e-9d77-3b2a7d0c5e11"
+                msiPackageVersion = pkgVersion
+                exePackageVersion = pkgVersion
             }
         }
     }

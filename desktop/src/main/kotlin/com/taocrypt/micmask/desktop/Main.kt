@@ -12,15 +12,18 @@ import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.ApplicationScope
-import androidx.compose.ui.window.Notification
-import androidx.compose.ui.window.Tray
-import androidx.compose.ui.window.TrayState
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.application
-import androidx.compose.ui.window.isTraySupported
-import androidx.compose.ui.window.rememberTrayState
 import androidx.compose.ui.window.rememberWindowState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import javax.swing.SwingUtilities
+import kotlinx.coroutines.flow.first
+import androidx.compose.runtime.snapshotFlow
 import top.yukonga.miuix.kmp.theme.ColorSchemeMode
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.ThemeController
@@ -34,7 +37,23 @@ import top.yukonga.miuix.kmp.theme.ThemeController
 fun main(args: Array<String>) {
     // 界面渲染后端：设置里选「软件渲染」时用 Skia CPU 渲染（CI 实测比 DIRECT3D 少约 25–35 MB 工作集，CPU 略高），重启生效
     if (System.getProperty("skiko.renderApi") == null) Settings.get("render_api").takeIf { it == "SOFTWARE" || it == "OPENGL" }?.let { System.setProperty("skiko.renderApi", it) }
-    if ("--smoke" in args) smokeMain(args) else gui(startInTray = "--tray" in args)
+    // CI 升级测试用：--version-out=文件 写出显示版本后退出；--apply-update=安装包 [--update-args=/qn] 走应用内更新的「启动安装并退出」路径
+    args.firstOrNull { it.startsWith("--version-out=") }?.let { java.io.File(it.substringAfter('=')).writeText(BuildInfo.VERSION); kotlin.system.exitProcess(0) }
+    args.firstOrNull { it.startsWith("--apply-update=") }?.let { applyUpdateCli(java.io.File(it.substringAfter('=')), args.filter { a -> a.startsWith("--update-args=") }.map { a -> a.substringAfter('=') }) }
+    if ("--smoke" in args) { smokeMain(args); return }
+    // 单实例：已有实例时把参数和激活请求交给它（窗口前置，含从托盘恢复），本进程立即退出
+    if (!SingleInstance().acquire(args.toList()) { a -> SwingUtilities.invokeLater { DeskLog.i("系统", "收到另一次启动的激活请求 ${a.joinToString(" ")}".trim()); Ui.show() } }) kotlin.system.exitProcess(0)
+    gui(startInTray = "--tray" in args)
+}
+
+private fun applyUpdateCli(f: java.io.File, extra: List<String>) {
+    DeskLog.start()
+    val code = runCatching { Updater.launchInstaller(f, extra) }
+        .onSuccess { DeskLog.i("更新", "安装程序已启动（命令行），退出") }
+        .onFailure { DeskLog.e("更新", "启动安装失败：${it.message}") }
+        .fold({ 0 }, { 2 })
+    DeskLog.flushNow()
+    Runtime.getRuntime().halt(code)
 }
 
 /** 窗口 / 托盘的界面状态 */
@@ -42,21 +61,25 @@ object Ui {
     var windowShown by mutableStateOf(true)
     var page by mutableIntStateOf(0)
     var closePrompt by mutableStateOf(false)
-    var trayState: TrayState? = null
     @Volatile var trayOk = false
     /** Skia 实际用的渲染后端（DIRECT3D / OPENGL / SOFTWARE…），自测打印 */
     @Volatile var renderApi = "?"
+    /** 每次 show() 加一：窗口据此前置（toFront / 取消最小化），根布局据此重绘一帧（用来测「恢复到首帧」） */
+    var activateTick by mutableIntStateOf(0)
+    /** 缩到托盘时释放窗口（销毁 Compose 窗口与 Skia 上下文，更省内存、恢复稍慢）；默认关 = 只隐藏，恢复即时 */
+    var releaseOnTray by mutableStateOf(Settings.getBool("tray_release", false))
 
-    fun show() { windowShown = true }
+    /** 显示并前置主窗口（托盘点击、托盘菜单、另一次启动的激活请求都走这里；须在 EDT 调用） */
+    fun show() { windowShown = true; AudioIO.watchFast = true; activateTick++ }
 
-    /** 关到托盘：Window 移出组合（真正 dispose），稍后 GC 一次让堆回缩 */
+    /** 关到托盘：默认只隐藏窗口（界面轮询/电平表暂停）；选了「释放窗口」时窗口移出组合（真正 dispose）。稍后 GC 一次让堆回缩 */
     fun hideToTray() {
         windowShown = false
         AudioIO.watchFast = false
         DeskLink.stopPreview()
         if (!Settings.getBool("tray_hinted", false)) {
             Settings.setBool("tray_hinted", true)
-            trayState?.sendNotification(Notification("MicMask", tr("MicMask 在托盘里继续运行，收发不受影响。双击托盘图标打开窗口；右键可退出。")))
+            AppTray.notify("MicMask", tr("MicMask 在托盘里继续运行，收发不受影响。单击托盘图标打开窗口；右键可退出。"))
         }
         Thread({ Thread.sleep(1500); System.gc() }, "mm-gc").apply { isDaemon = true; start() }
     }
@@ -71,6 +94,9 @@ object Ui {
     }
 }
 
+/** 窗口隐藏在托盘时挂起，直到窗口再次显示（界面里的轮询循环每轮先调它：隐藏期间不读电平、不查剪贴板、不枚举会话） */
+suspend fun awaitWindowShown() { if (!Ui.windowShown) snapshotFlow { Ui.windowShown }.first { it } }
+
 object AppExit {
     @Volatile private var quitting = false
     /** 退出：立即隐藏窗口和托盘，后台清理（≤1.5 秒）后直接结束进程 */
@@ -78,12 +104,14 @@ object AppExit {
         if (quitting) return
         quitting = true
         Ui.windowShown = false; Ui.trayOk = false
+        SwingUtilities.invokeLater { AppTray.remove() }
         Thread({
             val t0 = System.currentTimeMillis()
             DeskLog.i("系统", "退出")
             val parts = runCatching { DeskLink.shutdown(1500) }.getOrDefault(emptyMap())
             DeskLog.i("系统", "退出清理 ${System.currentTimeMillis() - t0} ms $parts")
             DeskLog.flushNow()
+            AppTray.remove()
             Runtime.getRuntime().halt(0)
         }, "mm-exit").apply { isDaemon = false; start() }
     }
@@ -105,46 +133,47 @@ fun startBackground() {
 
 private fun gui(startInTray: Boolean) {
     DeskLog.start()
-    Ui.trayOk = runCatching { isTraySupported }.getOrDefault(false)
-    if (startInTray && Ui.trayOk) Ui.windowShown = false
-    startBackground()
+    if (startInTray) Ui.windowShown = false
+    // 冷启动：先把窗口显示出来，首帧之后（或 --tray 启动时立即）再在后台装托盘、枚举声卡、开 mDNS、恢复收发、Beacon
+    Thread({
+        if (!startInTray) StartupTimer.awaitFirstFrame(5000)
+        val t0 = System.currentTimeMillis()
+        val tray = runCatching { AppTray.install() }.getOrDefault(false)
+        Ui.trayOk = tray
+        if (startInTray && !tray) SwingUtilities.invokeLater { Ui.show() }   // 不支持托盘：只能显示窗口
+        runCatching { startBackground() }.onFailure { DeskLog.e("系统", "后台初始化失败：$it") }
+        DeskLog.i("系统", "后台初始化 ${System.currentTimeMillis() - t0} ms（托盘 ${if (tray) "已装" else "不支持"}，字体 ${AppTray.font.family}）")
+    }, "mm-init").apply { isDaemon = true; start() }
     application(exitProcessOnExit = false) { AppContent() }
     AppExit.quit()
 }
 
-/** 托盘 + 主窗口（自测也用这一份） */
+/** 主窗口（托盘由 AppTray 管，不在组合里；自测也用这一份） */
 @Composable
 fun ApplicationScope.AppContent(title: String = "MicMask") {
     val state: WindowState = rememberWindowState(size = DpSize(1100.dp, 720.dp))
-    if (Ui.trayOk) {
-        val ts = rememberTrayState()
-        Ui.trayState = ts
-        val icon = appIcon
-        if (icon != null) Tray(icon = icon, state = ts, tooltip = trayTooltip(), onAction = { Ui.show() }, menu = {
-            Item(tr("显示主窗口"), onClick = { Ui.show() })
-            Separator()
-            Item(if (DeskLink.rxOn) tr("停止接收（接收中）") else tr("开始接收（手机 → 电脑）"), onClick = { DeskLink.toggleReceive() })
-            val q = DeskLink.quickTarget()
-            Item(when {
-                DeskLink.txOn -> tr("停止发送（→ {0}）", DeskLink.txTarget)
-                q != null -> tr("开始发送 → {0}", q.title)
-                else -> tr("开始发送（先在窗口里连一次手机）")
-            }, enabled = DeskLink.txOn || q != null, onClick = { if (DeskLink.txOn) DeskLink.stopSend() else q?.let { DeskLink.connectSaved(it) } })
-            Separator()
-            Item(tr("导出日志…"), onClick = { Thread({ DeskLog.i("系统", DeskLog.exportInteractive()) }, "mm-export").start() })
-            Item(tr("退出 MicMask"), onClick = { AppExit.quit() })
-        })
-    }
-    if (Ui.windowShown) {
-        AudioIO.watchFast = true
-        Window(onCloseRequest = { Ui.onCloseRequest() }, state = state, title = title, icon = appIcon) {
+    if (!Ui.releaseOnTray || Ui.windowShown) {
+        Window(onCloseRequest = { Ui.onCloseRequest() }, state = state, visible = Ui.windowShown, title = title, icon = appIcon) {
             remember { window.minimumSize = java.awt.Dimension(900, 600); Ui.renderApi = runCatching { window.renderApi.toString() }.getOrDefault("?"); 0 }
-            MiuixTheme(controller = remember { ThemeController(ColorSchemeMode.System) }) { Root() }
+            LaunchedEffect(Ui.activateTick) {
+                if (Ui.activateTick > 0 && Ui.windowShown) {
+                    state.isMinimized = false
+                    // Windows 不让后台进程抢前台：临时置顶再取消，保证从托盘 / 另一次启动唤起时窗口在最前
+                    window.toFront(); window.isAlwaysOnTop = true; window.isAlwaysOnTop = false; window.requestFocus()
+                }
+            }
+            MiuixTheme(controller = remember { ThemeController(ColorSchemeMode.System) }) {
+                // 读 activateTick 让每次唤起都重绘一帧（StartupTimer 测首帧 / 恢复耗时）
+                Box(Modifier.fillMaxSize().drawBehind { Ui.activateTick; StartupTimer.frame() }) { Root() }
+            }
         }
+    } else {
+        // 「释放窗口」模式下窗口已销毁：留一个从不显示的空窗口占位，Compose application 才不会因为没有窗口而退出
+        Window(onCloseRequest = {}, visible = false, title = title, state = rememberWindowState(size = DpSize(1.dp, 1.dp))) {}
     }
 }
 
-private fun trayTooltip(): String = "MicMask · " + listOfNotNull(
+internal fun trayTooltip(): String = "MicMask · " + listOfNotNull(
     if (DeskLink.rxOn) (if (DeskLink.rxPeer != null) tr("接收中") else tr("等待手机")) else null,
     when (DeskLink.txPhase) { DeskLink.TxPhase.ON -> tr("发送中 → {0}", DeskLink.txTarget); DeskLink.TxPhase.CONNECTING -> tr("连接中"); else -> null },
 ).ifEmpty { listOf(tr("空闲")) }.joinToString(" · ")
@@ -167,23 +196,36 @@ private fun smokeMain(args: Array<String>) {
     Thread.setDefaultUncaughtExceptionHandler { _, e -> err.compareAndSet(null, e) }
     Thread({ Thread.sleep(90_000); runCatching { java.io.File(f).appendText("FAIL  window  timeout\nWINDOW FAILED\n") }; Runtime.getRuntime().halt(1) }, "smoke-watchdog").apply { isDaemon = true }.start()
     val t0 = System.currentTimeMillis()
-    Ui.trayOk = runCatching { isTraySupported }.getOrDefault(false)
+    Ui.trayOk = runCatching { AppTray.install() }.getOrDefault(false)
+    Ui.releaseOnTray = false
+    val appNs = System.nanoTime()
     // 自测时不碰用户的设置文件里的收发状态：只用内存里的设备与端口
     var scope: ApplicationScope? = null
     var exitMs = -1L
     var exitParts: Map<String, Long> = emptyMap()
     val driver = Thread({
         try {
+            val ff = StartupTimer.waitFrameAfter(appNs, 30_000)
+            out((if (ff >= 0) "PASS" else "FAIL") + "  first-frame  ($ff ms 从 application 启动；JVM 起算 ${StartupTimer.firstFrameMs} ms，含无界面自测)")
             Thread.sleep(3500)
             out(MemProbe.line("window"))
             val r = SmokeTraffic.run(10_000)
             out(MemProbe.line("active-10s") + "  " + r)
-            Ui.hideToTray()
-            Thread.sleep(5000)
-            out(MemProbe.line("tray(window disposed+gc)"))
-            Ui.show()
-            Thread.sleep(2500)
-            out(MemProbe.line("window-again"))
+            // 两种托盘模式：只隐藏（默认）/ 释放窗口。各测托盘状态内存与「托盘恢复 → 首帧」耗时
+            for (rel in listOf(false, true)) {
+                val tag = if (rel) "released" else "hidden"
+                javax.swing.SwingUtilities.invokeAndWait { Ui.releaseOnTray = rel; Ui.hideToTray() }
+                Thread.sleep(5000)
+                out(MemProbe.line("tray($tag+gc)"))
+                val ns = System.nanoTime()
+                javax.swing.SwingUtilities.invokeLater { Ui.show() }
+                val ms = StartupTimer.waitFrameAfter(ns, 15_000)
+                out((if (ms >= 0) "PASS" else "FAIL") + "  tray-restore-$tag  ($ms ms 到首帧)")
+                if (ms < 0) throw IllegalStateException("托盘恢复（$tag）15 秒内没有画出一帧")
+                Thread.sleep(2500)
+                out(MemProbe.line("window-again($tag)"))
+            }
+            javax.swing.SwingUtilities.invokeAndWait { Ui.releaseOnTray = false }
             // 退出：隐藏窗口 → 后台清理（与 AppExit.quit 同一路径，只是不 halt）
             val a = System.currentTimeMillis()
             Ui.windowShown = false
@@ -205,5 +247,6 @@ private fun smokeMain(args: Array<String>) {
     out(if (e == null) "PASS  window  (${System.currentTimeMillis() - t0} ms) tray=${Ui.trayOk}" else "FAIL  window  ${e.javaClass.name}: ${e.message}")
     if (e != null) { code = 1; e.stackTrace.take(10).forEach { out("        at $it") } }
     out(if (e == null && code == 0) "WINDOW OK" else "WINDOW FAILED")
+    AppTray.remove()
     Runtime.getRuntime().halt(code)
 }

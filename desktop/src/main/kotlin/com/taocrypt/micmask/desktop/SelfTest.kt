@@ -82,6 +82,33 @@ object SelfTest {
             require(e == "Settings" && z == "设置" && e2 == "Connected to X") { "翻译不对：$e / $z / $e2" }
             "en=$n 条"
         }
+        check("tray-font") {
+            // 托盘菜单（Swing JPopupMenu，Java2D 用物理字体绘制）的中文要能显示：选中的字体必须能显示全部菜单文字
+            val zh = listOf("显示主窗口", "停止接收（接收中）", "开始接收（手机 → 电脑）", "开始发送（先在窗口里连一次手机）", "导出日志…", "退出 MicMask").joinToString("")
+            val f = AppTray.pickFont(zh)
+            val bad = f.canDisplayUpTo(zh)
+            if (isWin()) require(bad == -1) { "托盘菜单字体 ${f.family} 显示不了「${zh.getOrNull(bad)}」（第 $bad 个字符）" }
+            val dlg = java.awt.Font(java.awt.Font.DIALOG, java.awt.Font.PLAIN, 13).canDisplayUpTo(zh)
+            "字体 ${f.fontName}（family=${f.family}）canDisplayUpTo=$bad；对照：逻辑字体 Dialog canDisplayUpTo=$dlg"
+        }
+        check("single-instance") {
+            val d = java.io.File(System.getProperty("java.io.tmpdir"), "mm-si-test-${System.nanoTime()}").apply { mkdirs() }
+            val got = java.util.concurrent.LinkedBlockingQueue<List<String>>()
+            val first = SingleInstance(d)
+            require(first.acquire(emptyList()) { got.add(it) }) { "第一个实例没拿到锁" }
+            val t0 = System.currentTimeMillis()
+            val second = SingleInstance(d).acquire(listOf("--tray", "--x=中文")) { error("第二个实例不应监听") }
+            val a = got.poll(3, java.util.concurrent.TimeUnit.SECONDS)
+            first.release()
+            val third = SingleInstance(d)
+            val again = third.acquire(emptyList()) { }
+            third.release(); d.deleteRecursively()
+            require(!second) { "已有实例时第二次启动没有被拦下" }
+            require(a == listOf("--tray", "--x=中文")) { "激活请求没送到或参数不对：$a" }
+            require(again) { "第一个实例释放后重新获取失败" }
+            "第二次启动被拦下并转交参数（${System.currentTimeMillis() - t0} ms）；释放后可重新获取"
+        }
+        check("msi-error-text") { require(Updater.msiError(1638).contains("另一版本")); "ok" }
         check("audio-enum") {
             val ins = AudioIO.inputs(); val outs = AudioIO.outputs()
             "out=${outs.size} in=${ins.size} cable=${AudioIO.hasCable()} 录音设备：" + ins.joinToString(" | ") { AudioIO.label(it, ins, true) }

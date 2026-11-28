@@ -207,6 +207,36 @@ jobs:
           if (-not (Select-String -Path $log -Pattern 'SMOKE OK' -SimpleMatch -Quiet)) { throw '无界面自测没通过' }
           if (-not (Select-String -Path $log -Pattern 'WINDOW OK' -SimpleMatch -Quiet)) { throw '窗口自测没通过' }
 
+      # 单实例 + 冷启动：正常启动解包目录里的 MicMask.exe（等首帧日志），再启动一次：第二个进程应把激活请求交给第一个并立即退出
+      - name: Single instance / cold start
+        shell: pwsh
+        run: |
+          $dst = Join-Path $env:RUNNER_TEMP 'mm-msi'
+          $exe = Get-ChildItem $dst -Recurse -Filter MicMask.exe | Select-Object -First 1
+          $logDir = Join-Path $env:LOCALAPPDATA 'MicMask\logs'
+          $since = Get-Date
+          function NewLog { Get-ChildItem $logDir -Filter 'micmask-desktop-*.log' -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -ge $since } | Sort-Object LastWriteTime | Select-Object -Last 1 }
+          function Find($pat) { $l = NewLog; if ($l) { Select-String -Path $l.FullName -Encoding utf8 -Pattern $pat | Where-Object { $_.Line -notmatch '^\s*$' } | Select-Object -Last 1 } }
+          $p1 = Start-Process $exe.FullName -PassThru; $null = $p1.Handle
+          $ff = $null
+          for ($i = 0; $i -lt 120 -and -not $ff; $i++) { Start-Sleep -Milliseconds 500; $ff = Find '首帧' }
+          if (-not $ff) { throw '60 秒内没有首帧日志' }
+          Write-Host "冷启动：$($ff.Line)"
+          for ($i = 0; $i -lt 20 -and -not (Find '后台初始化'); $i++) { Start-Sleep -Milliseconds 500 }
+          $bg = Find '后台初始化'; Write-Host "后台：$($bg.Line)"
+          Start-Sleep -Seconds 2
+          $t0 = Get-Date
+          $p2 = Start-Process $exe.FullName -ArgumentList '--from-ci' -PassThru; $null = $p2.Handle
+          if (-not $p2.WaitForExit(15000)) { $p2.Kill(); $p1.Kill(); throw '第二个实例 15 秒没退出（单实例没生效）' }
+          $ms = [int]((Get-Date) - $t0).TotalMilliseconds
+          Start-Sleep -Seconds 1
+          $act = Find '激活请求'
+          $alive = -not $p1.HasExited
+          Write-Host "第二次启动：退出码 $($p2.ExitCode)，$ms ms 后退出；第一个实例$(if ($alive) { '仍在运行' } else { '已退出' })；$($act.Line)"
+          if ($alive) { $p1.Kill() }
+          if ($p2.ExitCode -ne 0 -or -not $alive -or -not $act -or $act.Line -notmatch 'from-ci') { throw '单实例检查失败' }
+          "cold-start: $($ff.Line)`nbackground: $($bg.Line)`nsecond-instance: exit $($p2.ExitCode) in $ms ms; $($act.Line)" | Set-Content (Join-Path $env:RUNNER_TEMP 'single-instance.txt') -Encoding UTF8
+
       # 内存对比（不影响构建结果）：改解包目录里的 app/MicMask.cfg（jpackage 的 JVM 参数），逐个跑 --smoke --mem-only，
       # 打印各阶段（启动 / 开窗口 / 收发 10 秒 / 关到托盘 / 再开窗口）的工作集、私有字节、堆、Metaspace。
       # runner 没有 GPU（D3D 走 WARP 软件实现），渲染后端的数字只能作相对参考。
@@ -262,6 +292,33 @@ jobs:
           cp "$EXE" "dist/MicMask-$VER-windows-x64-setup.exe"
           ( cd dist && sha256sum * > SHA256SUMS.txt )
           ls -l dist
+
+      # 升级测试：装上一版 Release（alpha.1 / alpha.2）的 MSI → 装这次的 MSI / EXE / 走应用内更新路径，校验只剩一个条目、版本是新的、设置保留；
+      # 另外复现旧版本号方案下 alpha.1 → alpha.2 装不上的情况（截图 + msiexec 日志，只记录）。详见 desktop/packaging/upgrade-test.ps1
+      - name: Upgrade test (previous releases -> this build)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $old = Join-Path $env:RUNNER_TEMP 'old'; New-Item -ItemType Directory -Force $old | Out-Null
+          gh release download win-v0.1.0-alpha.1 -R $env:GITHUB_REPOSITORY -p '*.msi' -O "$old/alpha1.msi"
+          gh release download win-v0.1.0-alpha.2 -R $env:GITHUB_REPOSITORY -p '*.msi' -O "$old/alpha2.msi"
+          gh release download win-v0.1.0-alpha.2 -R $env:GITHUB_REPOSITORY -p '*-setup.exe' -O "$old/alpha2-setup.exe"
+          $ver = '${{ steps.ver.outputs.version }}'
+          $msi = (Resolve-Path "dist/MicMask-$ver-windows-x64.msi").Path
+          $exe = (Resolve-Path "dist/MicMask-$ver-windows-x64-setup.exe").Path
+          $upd = (Get-ChildItem (Join-Path $env:RUNNER_TEMP 'mm-msi') -Recurse -Filter MicMask.exe | Select-Object -First 1).FullName
+          ./desktop/packaging/upgrade-test.ps1 -NewMsi $msi -NewExe $exe -NewVersion $ver -UpdaterExe $upd -OldDir $old -Out (Join-Path $env:RUNNER_TEMP 'upgrade-test')
+
+      - name: Upload upgrade test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upgrade-test
+          path: |
+            ${{ runner.temp }}/upgrade-test/
+            ${{ runner.temp }}/single-instance.txt
+          if-no-files-found: ignore
 
       - name: Upload smoke log
         if: always()
