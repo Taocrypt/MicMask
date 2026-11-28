@@ -60,7 +60,7 @@ jobs:
         env:
           HAS_PFX: ${{ secrets.WINDOWS_CERT_PFX_BASE64 != '' && secrets.WINDOWS_CERT_PASSWORD != '' }}
           HAS_AZ: ${{ secrets.AZURE_TENANT_ID != '' && secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_CLIENT_SECRET != '' && vars.TRUSTED_SIGNING_ENDPOINT != '' && vars.TRUSTED_SIGNING_ACCOUNT != '' && vars.TRUSTED_SIGNING_PROFILE != '' }}
-          HAS_BEACON: ${{ secrets.BEACON_URL != '' && secrets.BEACON_APP_ID != '' && secrets.DESKTOP_BEACON_KEY != '' }}
+          HAS_BEACON: ${{ secrets.BEACON_URL != '' && secrets.BEACON_APP_ID != '' && (secrets.DESKTOP_BEACON_KEY != '' || secrets.BEACON_KEY != '') }}
         run: |
           if [ "$HAS_PFX" = "true" ]; then M=pfx; elif [ "$HAS_AZ" = "true" ]; then M=azure; else M=none; fi
           echo "mode=$M" >> "$GITHUB_OUTPUT"
@@ -69,7 +69,7 @@ jobs:
             azure) echo "代码签名：Azure Trusted Signing";;
             *) echo "::warning::未签名：仓库 secrets 里没有 WINDOWS_CERT_PFX_BASE64 / WINDOWS_CERT_PASSWORD，也没有 Azure Trusted Signing 配置。安装包未签名（Windows SmartScreen 会提示「未知发布者」）。";;
           esac
-          if [ "$HAS_BEACON" = "true" ]; then echo "Beacon：已配置（统计/公告/赞赏墙开启，plat=windows）"; else echo "Beacon：未配置（secrets.BEACON_URL / BEACON_APP_ID / DESKTOP_BEACON_KEY 不全）→ 电脑版统计/公告/赞赏墙整体关闭，不发任何请求"; fi
+          if [ "$HAS_BEACON" = "true" ]; then echo "Beacon：已配置（统计/公告/赞赏墙开启，plat=windows）"; else echo "Beacon：未配置（secrets.BEACON_URL / BEACON_APP_ID / BEACON_KEY（或 DESKTOP_BEACON_KEY）不全）→ 电脑版统计/公告/赞赏墙整体关闭，不发任何请求"; fi
 
       # native 音频库（WASAPI / 按进程抓声音）：MSVC 编译 → desktop/resources/windows/mmaudio.dll，随安装包放进 app 资源目录
       - name: Build native audio library (mmaudio.dll)
@@ -119,11 +119,11 @@ jobs:
       # release 构建：ProGuard 摇树 + jlink 精简 JDK（只带 build.gradle.kts 里 modules(...) 列的模块）+ 只带 x64 Skia
       - name: Package MSI / EXE (release)
         working-directory: desktop
-        # 电脑版 Beacon：与手机同一后台/App（URL、App ID 同手机），客户端 key 单独用 secrets.DESKTOP_BEACON_KEY（用户决定开不开）；任一为空 = 整体关闭
+        # 电脑版 Beacon：与手机同一后台/App（URL、App ID、key 同手机）；DESKTOP_BEACON_KEY 有值时优先用它，否则共用手机的 BEACON_KEY；任一为空 = 整体关闭。统计带 ch=windows / plat=windows
         env:
           BEACON_URL: ${{ secrets.BEACON_URL }}
           BEACON_APP_ID: ${{ secrets.BEACON_APP_ID }}
-          BEACON_KEY: ${{ secrets.DESKTOP_BEACON_KEY }}
+          BEACON_KEY: ${{ secrets.DESKTOP_BEACON_KEY || secrets.BEACON_KEY }}
         run: ./gradlew --no-daemon --stacktrace -PappVersion="${{ steps.ver.outputs.version }}" packageReleaseMsi packageReleaseExe
 
       - name: Packaging logs (on failure)

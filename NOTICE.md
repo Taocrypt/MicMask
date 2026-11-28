@@ -167,6 +167,27 @@ App 侧的「系统权限模式」为本仓库按现有注入服务重新实现�
 | JmDNS `org.jmdns:jmdns`：电脑版局域网发现（mDNS） | Apache-2.0 |
 | JSON-java `org.json:json`：电脑版解析 GitHub Release / Beacon 数据 | Public Domain |
 | Compose Multiplatform（JetBrains）：电脑版界面框架 | Apache-2.0 |
+| ZXing core `com.google.zxing:core:3.5.3`：「传音」二维码生成与解码（手机） | Apache-2.0（Copyright ZXing authors） |
+| zxing-android-embedded `com.journeyapps:zxing-android-embedded:4.3.0`：「传音」扫码界面（手机） | Apache-2.0（Copyright JourneyApps） |
+| JNA `net.java.dev.jna:jna:5.15.0`（含 jnidispatch.dll）：电脑版调用 Windows 系统接口 / 原生音频库 | Apache-2.0 或 LGPL-2.1+ 双许可，MicMask 按 Apache-2.0 使用 |
+| QR Code generator（Project Nayuki）`io.nayuki:qrcodegen:1.8.0`：电脑版「接收」二维码生成 | MIT（全文见 notices/qrcodegen-MIT.txt） |
+| Tailscale 远程组网插件（`plugins/tailscale`，基于 tailscale.com Go 库）：**不随 APK / 电脑版安装包分发**，单独发布 | 插件代码 GPL-3.0；Tailscale 为 BSD-3-Clause，其余依赖见随插件发布的 `micmask-tailscale-<版本>-<平台>-licenses.txt` |
+
+### 传音二维码与电脑版组件（ZXing、JNA、QR Code generator）
+
+- 手机「传音」扫码配对使用 [ZXing](https://github.com/zxing/zxing)（`com.google.zxing:core`，Copyright ZXing authors）与
+  [zxing-android-embedded](https://github.com/journeyapps/zxing-android-embedded)（Copyright JourneyApps），均为 Apache License 2.0（全文见 `notices/Apache-2.0.txt`）。
+- 电脑版通过 [JNA](https://github.com/java-native-access/jna) 调用 Windows 接口与原生音频库 `mmaudio.dll`；JNA 以 Apache-2.0 或 LGPL-2.1（及以后版本）双许可发布，MicMask 选用 Apache-2.0（全文见 `notices/Apache-2.0.txt`）。
+- 电脑版「接收」二维码由 [Project Nayuki 的 QR Code generator](https://github.com/nayuki/QR-Code-generator) 生成，MIT License，全文见 `notices/qrcodegen-MIT.txt`：
+
+> QR Code generator library — https://www.nayuki.io/page/qr-code-generator-library
+> Copyright (c) Project Nayuki. (MIT License)
+
+### Tailscale 远程组网插件（不随安装包分发）
+
+`plugins/tailscale/` 是可选的远程组网插件（基于 [tailscale.com](https://github.com/tailscale/tailscale) 的 Go 库，BSD-3-Clause，Copyright (c) 2020 Tailscale Inc & contributors）。
+插件**不包含在 APK 与电脑版安装包中**，作为独立文件单独发布；每个平台的插件自带完整第三方许可清单
+`micmask-tailscale-<版本>-<平台>-licenses.txt`（由 CI 生成，随插件一起发布），详见插件目录的 `README.md`（含 tailscale.com 的 BSD-3-Clause 原文）。「Tailscale」是 Tailscale Inc. 的商标，MicMask 与其无关联。
 
 ## 模型与声音
 

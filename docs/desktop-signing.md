@@ -43,6 +43,9 @@
 
 ## 统计后台密钥（顺带说明）
 
-电脑版的统计 / 公告 / 赞赏墙读和手机同一个 Beacon 后台：`BEACON_URL`、`BEACON_APP_ID` 两个 secrets 与手机共用；
-电脑版的客户端 key 单独放在 `DESKTOP_BEACON_KEY`（可以填和手机相同的 client key，也可以在后台给电脑版单独建 App 后填它的 key）。
-三个里缺任何一个，电脑版这部分功能整体关闭，不发任何请求。
+电脑版的统计 / 公告 / 赞赏墙读和手机同一个 Beacon 后台、同一个 App：`BEACON_URL`、`BEACON_APP_ID`、`BEACON_KEY` 三个 secrets 与手机共用，
+配好手机的这三个，电脑版就自动开启（无需另配）。如需给电脑版单独的客户端 key，可另设 `DESKTOP_BEACON_KEY`，有值时优先用它。
+URL、App ID、key 任一为空，电脑版这部分功能整体关闭，不发任何请求。电脑版的统计与请求都带 `ch=windows` / `plat=windows`。
+
+后台设置：Beacon 后台的 App 支持多平台标签——在 admin 里编辑该 App，「平台（可多选）」把 **Windows** 也勾上；
+公告按渠道 `ch` 过滤，只给安卓的公告在条件里设渠道（如 `github`），只给电脑版的设 `windows`，不设 = 两边都显示。

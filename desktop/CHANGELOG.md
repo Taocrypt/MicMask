@@ -5,6 +5,8 @@
 
 ## [未发布]
 
+## [0.1.0-alpha.2] - 2026-11-28
+
 ### 第三轮（音频底层 / 二维码 / 签名 / 后台 / 手册 / 组网与双向）
 
 #### 音频
@@ -76,6 +78,10 @@
 ### 自测
 - `--smoke` 新增：i18n、注册表端点解析、采集积压、接收漂移（模拟手机时钟快 1%）、发送追帧、日志导出与脱敏、编码跟随、Opus 性能、本机地址；窗口阶段改为开真主窗口（含托盘）并测内存：开窗口 → 收发 10 秒 → 关到托盘 → 再开窗口 → 退出清理耗时（上限 1.6 秒）
 - `--smoke --mem-only`：只跑窗口与内存阶段；CI 用它改 MicMask.cfg 对比 JVM 参数与 Skia 渲染后端（DIRECT3D / OPENGL / SOFTWARE）
+### 发版说明
+- 统计 / 公告 / 赞赏墙与手机共用同一 Beacon App 和客户端 key（CI 用 DESKTOP_BEACON_KEY，未设时用 BEACON_KEY），请求带 ch=windows / plat=windows；后台需把该 App 平台勾上 Windows
+- 安装包暂未代码签名：首次安装出现 SmartScreen 时点「更多信息」→「仍要运行」（见使用手册）
+- NOTICE.md 补充 JNA（Apache-2.0 / LGPL-2.1 双许可）、QR Code generator（Nayuki，MIT）、手机端 ZXing，以及 Tailscale 插件不随安装包分发的说明
 
 ## [0.1.0-alpha.1] - 2026-11-28
 
