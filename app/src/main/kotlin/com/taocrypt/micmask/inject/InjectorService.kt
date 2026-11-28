@@ -238,6 +238,10 @@ class InjectorService : Binder {
                     when (data.readInt()) {
                         1 -> { linkRx = data.readInt() == 1 }
                         2 -> { val on = data.readInt() == 1; linkRing.clear(); if (on != linkTap) slog('I', "传音：发送取点 ${if (on) "开" else "关"}"); linkTap = on }
+                        // 2.1.1-alpha.13：传音接收时按链路自适应改预缓冲（20–400 ms，只在传音接收模式生效，立刻作用于下一帧）
+                        4 -> { val ms = data.readInt().coerceIn(20, 400); if (linkRx && ms != livePrimeMs) { slog('I', "传音：接收预缓冲 ${livePrimeMs}ms → ${ms}ms（随抖动 / 传输方式自适应）"); livePrimeMs = ms }; reply?.writeInt(1) }
+                        // 2.1.1-alpha.13：发送取点来源：0 = 注入前输出（变声后的声音），1 = 真麦（传音接收注入时用，避免把收到的声音发回去）
+                        5 -> { val m = data.readInt() == 1; if (m != linkTapMic) { linkRing.clear(); slog('I', "传音：发送取点来源 → ${if (m) "真麦（接收注入中，防回环）" else "注入前输出"}") }; linkTapMic = m; reply?.writeInt(1) }
                         3 -> {
                             val max = data.readInt().coerceIn(0, SR)
                             val tmp = ShortArray(minOf(max, linkRing.size()))
@@ -1181,6 +1185,7 @@ class InjectorService : Binder {
     @Volatile private var linkRx = false
     /** 传音发送取点：tapBuf（目标 App 实际听到的声音）复制一份给 App 拉走发出去；最多攒 0.5 s，App 被冻结时丢最旧的 */
     @Volatile private var linkTap = false
+    @Volatile private var linkTapMic = false
     private val linkRing = ShortRing(SR / 2)
     /** 目标开麦（其他应用录音数 0 → ≥1）的时刻，看门狗线程置、liveLoop 取走处理；0 = 无（2.1.1：按住说话开头的旧积压裁剪） */
     private val tgtOpenNs = java.util.concurrent.atomic.AtomicLong(0L)
@@ -2054,7 +2059,7 @@ class InjectorService : Binder {
                         val o = i * FRAME_BYTES
                         outBytes[o] = lo; outBytes[o + 1] = hi; outBytes[o + 2] = lo; outBytes[o + 3] = hi
                     }
-                    if (linkTap) linkRing.write(tapBuf, 0, hop)
+                    if (linkTap) linkRing.write(if (linkTapMic) mic else tapBuf, 0, hop)
                     val tw0 = System.nanoTime()
                     if (!writeOutLive(outBytes)) break
                     wrMax = maxOf(wrMax, System.nanoTime() - tw0)

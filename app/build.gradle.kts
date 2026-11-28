@@ -14,8 +14,8 @@ android {
         applicationId = "com.taocrypt.micmask"
         minSdk = 26
         targetSdk = 34
-        versionCode = 162
-        versionName = "2.1.1-alpha.12"
+        versionCode = 163
+        versionName = "2.1.1-alpha.13"
         // Beacon 后台（公告 / 推荐位 / 匿名统计 / 反馈）：CI 从 Secrets 注入，源码与本地构建为空 → SDK 关闭
         fun env(k: String) = (System.getenv(k) ?: "").replace("\\", "").replace("\"", "")
         buildConfigField("String", "BEACON_URL", "\"${env("BEACON_URL")}\"")
@@ -144,6 +144,11 @@ dependencies {
     // 声纹聚焦（Alkove Focus，可选功能默认关，Apache-2.0）：钉 0.5.0。AAR 带 arm64-v8a / x86_64 两个 .so，abiFilters 只留 arm64-v8a。
     // 模型（.alk）不打包，运行时按 AlkoveStore 里钉的 revision 下载；升级 SDK 时同步更新 AlkoveStore.MODELS。许可见 NOTICE.md
     implementation("ai.alkove:alkove:0.5.0")
+
+    // 传音二维码配对（Apache-2.0）：zxing core 生成 / 解码二维码；zxing-android-embedded 提供扫码界面（Camera1 预览，体积小，不引入 CameraX）。
+    // embedded 4.3.0 默认依赖 core 3.4.1，这里显式钉 3.5.3（同一 API，修复若干解码问题）。许可见 NOTICE.md
+    implementation("com.google.zxing:core:3.5.3")
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0") { isTransitive = false }
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

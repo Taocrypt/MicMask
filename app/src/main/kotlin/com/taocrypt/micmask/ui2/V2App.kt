@@ -1668,6 +1668,7 @@ private fun LazyListScope.settingsPage(vm: MainViewModel, st: UiState, open: (St
     item {
         Card(Modifier.fillMaxWidth().padding(PagePad)) {
             ArrowPreference(title = tr("外观"), summary = tr("深浅色、莫奈取色、液态玻璃"), onClick = { open("theme") })
+            LinkDeviceNamePref()
             ArrowPreference(title = tr("日志"), summary = tr("查看、筛选、导出日志"), onClick = { open("logs") })
             ArrowPreference(title = tr("音频还原"), summary = tr("应用没声音时点这里还原"), onClick = { vm.repairAudio() })
             ArrowPreference(title = tr("使用教程"), summary = tr("安装、模式、AI 变声与常见问题"), onClick = { open("manual") })

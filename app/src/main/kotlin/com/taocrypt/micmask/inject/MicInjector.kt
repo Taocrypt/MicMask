@@ -661,6 +661,16 @@ object MicInjector {
         call(InjectorService.TX_LINK, { it.writeInt(2); it.writeInt(if (on) 1 else 0) }) { r -> r.dataAvail() >= 4 && r.readInt() == InjectorService.LINK_MAGIC }
     }.getOrDefault(false)
 
+    /** 传音接收：按链路自适应改 shell 侧预缓冲（ms）；返回 shell 是否支持 */
+    fun linkPrime(ms: Int): Boolean = runCatching {
+        call(InjectorService.TX_LINK, { it.writeInt(4); it.writeInt(ms) }) { r -> r.dataAvail() >= 8 && r.readInt() == InjectorService.LINK_MAGIC && r.readInt() == 1 }
+    }.getOrDefault(false)
+
+    /** 传音发送取点来源：true = shell 录到的真麦（接收注入时用，防回环），false = 注入前输出；返回 shell 是否支持 */
+    fun linkTapMic(on: Boolean): Boolean = runCatching {
+        call(InjectorService.TX_LINK, { it.writeInt(5); it.writeInt(if (on) 1 else 0) }) { r -> r.dataAvail() >= 8 && r.readInt() == InjectorService.LINK_MAGIC && r.readInt() == 1 }
+    }.getOrDefault(false)
+
     /** 传音：拉取取点 PCM（48k 单声道）；不支持/未连接返回 null，暂无数据返回空数组 */
     fun linkPull(max: Int): ShortArray? = runCatching {
         call(InjectorService.TX_LINK, { it.writeInt(3); it.writeInt(max) }) { r ->

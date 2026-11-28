@@ -167,9 +167,236 @@ fun testTcpOnly() {
     cli.close(); srv.stop()
 }
 
+fun testNetHelpers() {
+    check("地址解析 IPv4", MmNet.parseHostPort(" 192.168.1.5 ", 47310) == ("192.168.1.5" to 47310))
+    check("地址解析 IPv4:端口", MmNet.parseHostPort("10.144.144.2:5000", 47310) == ("10.144.144.2" to 5000))
+    check("地址解析 [v6]:端口", MmNet.parseHostPort("[fd7a:115c:a1e0::1]:47311", 47310) == ("fd7a:115c:a1e0::1" to 47311))
+    check("地址解析 裸 v6", MmNet.parseHostPort("fd7a:115c:a1e0::1", 47310) == ("fd7a:115c:a1e0::1" to 47310))
+    check("地址解析 主机名", MmNet.parseHostPort("pc.local", 47310) == ("pc.local" to 47310))
+    check("地址解析 非法端口", MmNet.parseHostPort("1.2.3.4:99999", 47310) == null && MmNet.parseHostPort("1.2.3.4:x", 47310) == null && MmNet.parseHostPort("  ", 47310) == null)
+    check("网卡类型 Tailscale", MmNet.kindOf("tun0", "100.101.2.3") == ("vpn" to "Tailscale") && MmNet.kindOf("tailscale0", "100.64.0.1").second == "Tailscale")
+    check("网卡类型 ZeroTier", MmNet.kindOf("ztabcdef12", "172.23.1.2") == ("vpn" to "ZeroTier"))
+    check("网卡类型 EasyTier", MmNet.kindOf("tun0", "10.144.144.3") == ("vpn" to "EasyTier") && MmNet.kindOf("et_abc", "10.0.0.2").second == "EasyTier")
+    check("网卡类型 普通", MmNet.kindOf("wlan0", "192.168.1.9").first == "wifi" && MmNet.kindOf("eth0", "192.168.1.9") == ("ethernet" to "") && MmNet.kindOf("tun1", "10.8.0.2") == ("vpn" to "") && MmNet.kindOf("rmnet_data0", "10.1.2.3").first == "cellular")
+    check("CGNAT 判定", MmNet.isCgnat("100.64.0.1") && MmNet.isCgnat("100.127.255.1") && !MmNet.isCgnat("100.128.0.1") && !MmNet.isCgnat("10.0.0.1"))
+    check("跨网段判定", !MmNet.looksRemote("192.168.3.4") && MmNet.looksRemote("10.144.144.2") && MmNet.looksRemote("100.100.1.1") && !MmNet.looksRemote("127.0.0.1"))
+    val la = MmNet.localAddrs()
+    check("本机地址枚举不抛异常", la.none { it.ip.startsWith("127.") || it.ip.startsWith("fe80") || it.ip.startsWith("169.254.") })
+    println("    本机地址：" + la.joinToString { "${it.ip}(${it.iface}/${it.kind}${if (it.vpn.isNotEmpty()) "/" + it.vpn else ""})" })
+    // MTU：PCM 一帧 UDP 数据报 ≤ 1200
+    val ke = MmCrypto.random(16); val k = MmKeys.derive(ke, MmCrypto.random(16), MmCrypto.random(16), true)
+    val d = MmWire.udpAudio(k.txAudio, 1, 1, MmAudio(0, 0, MmLink.CODEC_PCM16, 0, MmLink.FRAME, ByteArray(MmLink.FRAME * 2)))
+    check("UDP 数据报 ≤ ${MmLink.MAX_UDP_DATAGRAM}（PCM ${d.size}）", d.size <= MmLink.MAX_UDP_DATAGRAM && d.size + 48 <= 1280)
+}
+
+private fun failOf(block: () -> Unit): Throwable? = runCatching(block).exceptionOrNull()
+private val cfgC = MmLinkConfig(MmCrypto.random(16), "手机", "android", MmLink.CAP_SEND)
+
+fun testConnectFailures() {
+    // 拒绝：绑定后关掉的端口
+    val free = java.net.ServerSocket(0).let { val p = it.localPort; it.close(); p }
+    val r = failOf { MmLinkClient.connect("127.0.0.1", free, cfgC, "123456", false, object : MmSessionListener {}) }
+    check("连接失败：拒绝", r is MmConnectFail && r.kind == MmNet.F_REFUSED && r.stage == 0, "$r")
+    // 主机名解析失败
+    val u = failOf { MmLinkClient.connect("no-such-host.invalid", 47310, cfgC, "123456", false, object : MmSessionListener {}, timeoutMs = 1000) }
+    check("连接失败：无法到达（解析失败）", u is MmConnectFail && u.kind == MmNet.F_UNREACHABLE, "$u")
+    // 连上不回握手
+    val silent = java.net.ServerSocket(0); val held = ArrayList<java.net.Socket>()
+    Thread { runCatching { while (true) held.add(silent.accept()) } }.apply { isDaemon = true }.start()
+    val t0 = System.currentTimeMillis()
+    val h = failOf { MmLinkClient.connect("127.0.0.1", silent.localPort, cfgC, "123456", false, object : MmSessionListener {}, handshakeTimeoutMs = 600) }
+    check("连接失败：握手超时", h is MmConnectFail && h.kind == MmNet.F_HS_TIMEOUT && h.stage == 1 && System.currentTimeMillis() - t0 < 3000, "$h")
+    // 连上即断
+    val closer = java.net.ServerSocket(0)
+    Thread { runCatching { while (true) closer.accept().close() } }.apply { isDaemon = true }.start()
+    val c = failOf { MmLinkClient.connect("127.0.0.1", closer.localPort, cfgC, "123456", false, object : MmSessionListener {}) }
+    check("连接失败：握手中断开", c is MmConnectFail && c.kind == MmNet.F_CLOSED, "$c")
+    // 对方不是 MicMask（回了别的协议）
+    val other = java.net.ServerSocket(0)
+    Thread { runCatching { while (true) { val x = other.accept(); x.getOutputStream().write(MmWire.frame(MmLink.T_HELLO, "HTTP/1.1 400 Bad Request\r\n".toByteArray())); x.getOutputStream().flush() } } }.apply { isDaemon = true }.start()
+    val o = failOf { MmLinkClient.connect("127.0.0.1", other.localPort, cfgC, "123456", false, object : MmSessionListener {}) }
+    check("连接失败：不是 MicMask", o is MmLinkException && o.code == MmLink.E_PROTOCOL, "$o")
+    // 版本不符：服务端只支持 v2–v3
+    val vs = java.net.ServerSocket(0)
+    Thread { runCatching { while (true) { val x = vs.accept(); val inp = java.io.DataInputStream(x.getInputStream()); MmWire.readFrame(inp)
+        x.getOutputStream().write(MmWire.frame(MmLink.T_HELLO, MmHello(2, 3, ByteArray(16), "新版", "windows", ByteArray(16), 5).encode())); x.getOutputStream().flush() } } }.apply { isDaemon = true }.start()
+    val v = failOf { MmLinkClient.connect("127.0.0.1", vs.localPort, cfgC, "123456", false, object : MmSessionListener {}) }
+    check("连接失败：版本不符", v is MmLinkException && v.code == MmLink.E_VERSION, "$v")
+    listOf(silent, closer, other, vs).forEach { runCatching { it.close() } }; held.forEach { runCatching { it.close() } }
+}
+
+/** UDP 被拦：1.5 s 后确认走 TCP、音频照常；放行后自动切到 UDP；再拦截时 UDP_DEAD_MS 内切回 TCP；保活期间不误判 */
+fun testUdpFallback() {
+    val code = "135790"
+    val got = java.util.concurrent.atomic.AtomicInteger()
+    var srvSes: MmSession? = null
+    val srv = MmLinkServer(0, MmLinkConfig(MmCrypto.random(16), "电脑", "windows", MmLink.CAP_RECV), { code }, { object : MmSessionListener { override fun onPcm(s: MmSession, pcm: ShortArray) { got.incrementAndGet() } } }, { srvSes = it }, {})
+    srv.start(); srv.testDropUdp = true
+    val id = MmCrypto.random(16)
+    val logs = java.util.Collections.synchronizedList(ArrayList<String>())
+    val cli = MmLinkClient.connect("127.0.0.1", srv.boundPort, MmLinkConfig(id, "手机", "android", MmLink.CAP_SEND, MmLink.CODEC_PCM16), code, false, object : MmSessionListener {}, { logs.add(it) })
+    fun waitFor(ms: Long, f: () -> Boolean): Boolean { val t = System.currentTimeMillis(); while (!f() && System.currentTimeMillis() - t < ms) Thread.sleep(20); return f() }
+    waitFor(2000) { cli.peerCaps != null }
+    repeat(10) { cli.sendPcm(ShortArray(MmLink.FRAME)) }
+    Thread.sleep(1700)
+    check("UDP 被拦：音频走 TCP 照常到达", !cli.udpTx && got.get() >= 10, "udp=${cli.udpTx} got=${got.get()}")
+    check("UDP 被拦：1.5 s 后日志说明回退", logs.any { it.contains("音频走 TCP") }, logs.toString())
+    check("对端设备 ID 可识别", srvSes?.peerId == MmNet.hex(id))
+    srv.testDropUdp = false
+    check("UDP 放行后自动切到 UDP", waitFor(3500) { cli.udpTx })
+    check("服务端同步：收到 UDP_OK", waitFor(1000) { srvSes?.udpTx == true })
+    Thread.sleep(MmLink.UDP_DEAD_MS + 800)
+    check("UDP 保活期间不误判断开", cli.udpTx)
+    srv.testDropUdp = true
+    check("UDP 中途中断 → ${MmLink.UDP_DEAD_MS} ms 内切回 TCP", waitFor(MmLink.UDP_DEAD_MS + 1500) { !cli.udpTx })
+    val before = got.get(); repeat(10) { cli.sendPcm(ShortArray(MmLink.FRAME)) }
+    check("切回 TCP 后音频照常", waitFor(1000) { got.get() >= before + 10 }, "${got.get() - before}")
+    cli.close(); srv.stop()
+}
+
+private fun waitUntil(ms: Long, f: () -> Boolean): Boolean { val t = System.currentTimeMillis(); while (!f() && System.currentTimeMillis() - t < ms) Thread.sleep(20); return f() }
+
+/** 编码「接收方偏好优先」：纯逻辑 + 回环会话 */
+fun testCodecFollow() {
+    val snd = MmCaps(MmLink.CAP_SEND or MmLink.CAP_OPUS or MmLink.CAP_PCM or MmLink.CAP_PREF_RX, MmLink.CODEC_OPUS, 48000)
+    val rxPcmNew = MmCaps(MmLink.CAP_RECV or MmLink.CAP_OPUS or MmLink.CAP_PCM or MmLink.CAP_PREF_RX, MmLink.CODEC_PCM16, 48000)
+    val rxPcmOld = MmCaps(MmLink.CAP_RECV or MmLink.CAP_OPUS or MmLink.CAP_PCM, MmLink.CODEC_PCM16, 48000)
+    val rxOpusNew = MmCaps(MmLink.CAP_RECV or MmLink.CAP_OPUS or MmLink.CAP_PCM or MmLink.CAP_PREF_RX, MmLink.CODEC_OPUS, 48000)
+    val rxNoOpus = MmCaps(MmLink.CAP_RECV or MmLink.CAP_PCM or MmLink.CAP_PREF_RX, MmLink.CODEC_OPUS, 0)
+    check("编码跟随：新版接收方偏好 PCM → PCM", MmCaps.pickCodec(snd, rxPcmNew) == MmLink.CODEC_PCM16)
+    check("编码跟随：固定本端（不跟随）→ Opus", MmCaps.pickCodec(snd, rxPcmNew, followReceiver = false) == MmLink.CODEC_OPUS)
+    check("编码跟随：旧版接收方（无 PREF_RX）→ 按发送方 Opus", MmCaps.pickCodec(snd, rxPcmOld) == MmLink.CODEC_OPUS)
+    check("编码跟随：发送方偏好 PCM、接收方偏好 Opus → Opus", MmCaps.pickCodec(snd.copy(preferCodec = MmLink.CODEC_PCM16), rxOpusNew) == MmLink.CODEC_OPUS)
+    check("编码跟随：接收方不支持 Opus → PCM", MmCaps.pickCodec(snd, rxNoOpus) == MmLink.CODEC_PCM16)
+    check("编码跟随：caps 带 PREF_RX 位且往返不变", MmLinkConfig(ByteArray(16), "a", "b", MmLink.CAP_RECV).caps.let { c -> c.prefRx && BIn(c.encode()).let { it.u8(); MmCaps.decode(it) } == c })
+    // 回环：电脑接收端偏好 PCM，手机发送端偏好 Opus → 跟随后发 PCM；固定模式发 Opus；setTxCodec 可改
+    val code = "135790"
+    val srv = MmLinkServer(0, MmLinkConfig(MmCrypto.random(16), "电脑", "windows", MmLink.CAP_RECV, MmLink.CODEC_PCM16), { code }, { object : MmSessionListener {} }, {})
+    srv.start()
+    val c1 = MmLinkClient.connect("127.0.0.1", srv.boundPort, MmLinkConfig(MmCrypto.random(16), "手机", "android", MmLink.CAP_SEND, MmLink.CODEC_OPUS), code, true, object : MmSessionListener {})
+    check("编码跟随（回环）：发送端跟随接收方 → PCM", waitUntil(2000) { c1.txCodec == MmLink.CODEC_PCM16 }, "tx=${c1.txCodec}")
+    check("编码跟随（回环）：setTxCodec(Opus) 免反射", c1.setTxCodec(MmLink.CODEC_OPUS) == MmLink.CODEC_OPUS && c1.txCodec == MmLink.CODEC_OPUS)
+    c1.close()
+    val c2 = MmLinkClient.connect("127.0.0.1", srv.boundPort, MmLinkConfig(MmCrypto.random(16), "手机", "android", MmLink.CAP_SEND, MmLink.CODEC_OPUS, followPeerCodec = false), code, true, object : MmSessionListener {})
+    check("编码跟随（回环）：固定编码 → Opus", waitUntil(2000) { c2.txCodec == MmLink.CODEC_OPUS }, "tx=${c2.txCodec}")
+    c2.close(); srv.stop()
+}
+
+/** 同一条会话双向：客户端发送中改意图为「发 + 收」，服务端（电脑）在同一条会话上回发 */
+fun testBidirectionalSingleSession() {
+    val code = "864209"
+    var srvSes: MmSession? = null
+    val srvGot = java.util.concurrent.atomic.AtomicInteger(); val cliGot = java.util.concurrent.atomic.AtomicInteger()
+    val srv = MmLinkServer(0, MmLinkConfig(MmCrypto.random(16), "电脑", "windows", MmLink.CAP_RECV or MmLink.CAP_SEND, MmLink.CODEC_OPUS),
+        { code }, { object : MmSessionListener { override fun onPcm(s: MmSession, pcm: ShortArray) { srvGot.incrementAndGet() } } }, { srvSes = it }, {})
+    srv.start()
+    val cli = MmLinkClient.connect("127.0.0.1", srv.boundPort, MmLinkConfig(MmCrypto.random(16), "手机", "android", MmLink.CAP_SEND, MmLink.CODEC_OPUS), code, false,
+        object : MmSessionListener { override fun onPcm(s: MmSession, pcm: ShortArray) { cliGot.incrementAndGet() } })
+    waitUntil(2000) { srvSes?.peerCaps != null && cli.peerCaps != null }
+    repeat(10) { srvSes!!.sendPcm(ShortArray(MmLink.FRAME)) }
+    Thread.sleep(300)
+    check("双向：客户端只声明发送时，服务端不发", cliGot.get() == 0 && srvSes?.peerWantsAudio == false)
+    cli.updateIntent(MmLink.CAP_SEND or MmLink.CAP_RECV)
+    check("双向：服务端收到新 CAPS（想收）", waitUntil(2000) { srvSes?.peerWantsAudio == true })
+    repeat(20) { srvSes!!.sendPcm(ShortArray(MmLink.FRAME)); cli.sendPcm(ShortArray(MmLink.FRAME)); Thread.sleep(2) }
+    check("双向：同一条会话两个方向都到", waitUntil(1500) { cliGot.get() >= 18 && srvGot.get() >= 18 }, "cli=${cliGot.get()} srv=${srvGot.get()}")
+    cli.close(); srv.stop()
+}
+
+fun testPairUri() {
+    val u = MmPairUri(listOf("192.168.1.8", "10.126.126.5", "fd7a:115c:a1e0::1"), 47310, "012345", "00112233445566778899aabbccddeeff", "MicMask-小米 15")
+    val t = u.encode()
+    check("二维码：编码以 micmask://link? 开头", t.startsWith("micmask://link?h="), t)
+    check("二维码：往返一致（含 IPv6、中文名）", MmPairUri.parse(t) == u, "${MmPairUri.parse(t)}")
+    check("二维码：缺配对码 → null", MmPairUri.parse("micmask://link?h=1.2.3.4&p=47310&c=12") == null)
+    check("二维码：别的二维码 → null", MmPairUri.parse("https://example.com/?h=1.2.3.4&c=123456") == null)
+    check("二维码：没写端口用默认、坏 ID 置空", MmPairUri.parse("micmask://link?h=1.2.3.4&c=123456&id=zz")?.let { it.port == MmLink.DEFAULT_PORT && it.id == "" } == true)
+    check("连接顺序：同网段 > 局域网 > 隧道 > IPv6",
+        MmNet.orderHosts(listOf("fd7a::1", "100.100.1.2", "192.168.9.9", "192.168.1.8"), listOf("192.168.1.20")) == listOf("192.168.1.8", "192.168.9.9", "100.100.1.2", "fd7a::1"),
+        MmNet.orderHosts(listOf("fd7a::1", "100.100.1.2", "192.168.9.9", "192.168.1.8"), listOf("192.168.1.20")).toString())
+}
+
+fun testHeartbeatAndTarget() {
+    check("心跳：RTT 100 ms → 5 s", MmSession.heartbeatFor(100, false) == 5000L)
+    check("心跳：RTT 913 ms → 7.3 s", MmSession.heartbeatFor(913, false) == 7304L)
+    check("心跳：音频走 TCP → 至少 10 s", MmSession.heartbeatFor(100, true) == 10_000L)
+    check("心跳：上限 20 s", MmSession.heartbeatFor(8073, true) == 20_000L)
+    val bt = MmBufTarget()
+    check("缓冲目标：UDP 抖动 10 → 55 ms", bt.base(10f, false, 5) == 55, "${bt.base(10f, false, 5)}")
+    check("缓冲目标：TCP 抖动 10 RTT 90 → 120 ms", bt.base(10f, true, 90) == 120, "${bt.base(10f, true, 90)}")
+    check("缓冲目标：TCP RTT 300 → 封顶 200 ms", bt.base(20f, true, 300) == 200)
+    var t = 0L
+    val a = bt.update(10f, true, 90, 0, t)
+    t += 1000; val b = bt.update(10f, true, 90, 2, t)
+    check("缓冲目标：断流后立即升高（+30）", a == 120 && b == 150, "$a → $b")
+    t += 1000; val c = bt.update(10f, false, 5, 2, t)
+    t += 5000; val d = bt.update(10f, false, 5, 2, t)
+    check("缓冲目标：降低是缓慢的（5 s 最多 10 ms）", c == 150 && d == 140, "$c → $d")
+}
+
+private fun tone(n: Int, amp: Int, phase0: Int = 0) = ShortArray(n) { (amp * Math.sin(2 * Math.PI * 220 * (phase0 + it) / 48000.0)).toInt().toShort() }
+
+fun testDriftCtl() {
+    val d = MmDriftCtl(targetMs = 80)
+    var t = 0L
+    for (i in 0..200) { d.report(160, t); t += 10 }
+    check("漂移：持续高于目标 → 计划丢帧", d.dropMs > 0, "drop=${d.dropMs}")
+    val loud = tone(480, 8000); val quiet = ShortArray(480)
+    val r1 = d.decide(loud)
+    val r2 = d.decide(quiet)
+    check("漂移：有声帧先不丢，低能量帧上丢", r1 == MmDriftCtl.KEEP && r2 == MmDriftCtl.DROP)
+    val d2 = MmDriftCtl(targetMs = 80, maxWaitFrames = 20)
+    t = 0; for (i in 0..200) { d2.report(160, t); t += 10 }
+    var acts = 0; repeat(25) { if (d2.decide(loud) == MmDriftCtl.DROP) acts++ }
+    check("漂移：一直有声时等 maxWait 帧后强制执行", acts == 1 && d2.forced == 1L, "acts=$acts forced=${d2.forced}")
+    val d3 = MmDriftCtl(targetMs = 80)
+    t = 0; for (i in 0..200) { d3.report(30 + (i % 3) * 5, t); t += 10 }
+    check("漂移：持续偏低 → 低能量处插帧", d3.insertMs > 0 && d3.decide(quiet) == MmDriftCtl.INSERT)
+    val d4 = MmDriftCtl(targetMs = 80)
+    t = 0; for (i in 0..200) { d4.report(if (i % 50 == 0) 300 else 85, t); t += 10 }
+    check("漂移：偶发尖峰（谷底正常）不丢", d4.dropMs == 0 && d4.insertMs == 0)
+    check("漂移：lowWaterMs = 1 s 谷底", d4.lowWaterMs == 85, "${d4.lowWaterMs}")
+}
+
+/** 模拟两端时钟漂移：发送比播放快 / 慢 1 %，60 s 后缓冲仍贴近目标、几乎不断流；断流处无硬跳变 */
+fun testPlayoutDrift() {
+    for (ppm in intArrayOf(10_000, -10_000)) {
+        val p = MmPlayout(targetMs = 80)
+        var wAcc = 0.0; var phase = 0
+        val out = ShortArray(480)
+        var maxMs = 0
+        for (tick in 0 until 6000) {      // 6000 × 10 ms = 60 s
+            wAcc += 480.0 * (1 + ppm / 1e6)
+            while (wAcc >= 480) {
+                // 语音样：1 s 有声 + 0.5 s 静音 交替
+                val voiced = (phase / 48000.0) % 1.5 < 1.0
+                p.write(if (voiced) tone(480, 6000, phase) else ShortArray(480)); phase += 480; wAcc -= 480
+            }
+            p.read(out, 480)
+            if (tick > 3000) maxMs = maxOf(maxMs, p.sizeMs())
+        }
+        val tag = if (ppm > 0) "发送快 1%" else "发送慢 1%"
+        check("播放缓冲 $tag：60 s 后水位 ${p.sizeMs()} ms 接近目标 80（后 30 s 最高 $maxMs）", p.sizeMs() in 40..140 && maxMs < 170, "trim=${p.trimmedMs} ins=${p.insertedMs}")
+        check("播放缓冲 $tag：断流 ≤ 1 次（${p.underruns}）", p.underruns <= 1, "trim=${p.trimmedMs} ins=${p.insertedMs} forced=${p.drift.forced}")
+        if (ppm > 0) check("播放缓冲 $tag：裁剪发生在低能量段（强制 ${p.drift.forced} 次）", p.trimmedMs > 300 && p.drift.forced == 0L, "trim=${p.trimmedMs}")
+        else check("播放缓冲 $tag：靠低能量处补帧（补 ${p.insertedMs} ms）", p.insertedMs > 300, "ins=${p.insertedMs}")
+    }
+    // 断流：最后一段有声音频之后不硬切到 0
+    val p = MmPlayout(targetMs = 30)
+    p.write(tone(48 * 40, 10000))
+    val out = ShortArray(480)
+    repeat(3) { p.read(out, 480) }
+    val k = p.read(out, 480)   // 只剩 10 ms → 正好读完；下一次断流
+    val o2 = ShortArray(480); val k2 = p.read(o2, 480)
+    val jump = kotlin.math.abs(o2[0].toInt() - out[479].toInt())
+    check("断流：PLC 接缝无硬跳变（跳变 $jump）", k2 == 0 && p.underruns == 1L && jump < 2500 && kotlin.math.abs(o2[479].toInt()) < 50, "k=$k k2=$k2 jump=$jump")
+}
+
 fun main() {
     testSpake2Vector(); testSpake2WrongCode(); testHkdf(); testGcmAndWire(); testOpus(); testReorder()
     testLoopback(MmLink.CODEC_PCM16); testLoopback(MmLink.CODEC_OPUS); testTcpOnly()
+    testNetHelpers(); testConnectFailures(); testUdpFallback()
+    testCodecFollow(); testBidirectionalSingleSession(); testPairUri(); testHeartbeatAndTarget(); testDriftCtl(); testPlayoutDrift()
     println("\n通过 $passes，失败 $fails")
     if (fails > 0) kotlin.system.exitProcess(1)
 }

@@ -69,6 +69,8 @@ class MainActivity : ComponentActivity() {
         vmRef?.refreshInjectState()
         vmRef?.refreshFloatingState()
         vmRef?.refreshLiveFloat()
+        // 传音「自动连接」：回到前台时恢复接收 / 连上已配对的接收端（开关在传音页「高级」里，默认开）
+        com.taocrypt.micmask.link.LinkHub.onForeground()
     }
 }
 
