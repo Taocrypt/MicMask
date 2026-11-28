@@ -474,12 +474,14 @@ object DeskLink {
         val parts = listOf<Pair<String, () -> Unit>>(
             "send" to { txGen++; stopSendInternal(); txSession?.close() },
             "recv" to { stopReceiveSync() },
-            "mdns" to { Discovery.stop(timeoutMs) },
+            // JmDNS 关闭要发告别包、等内部任务，CI 实测单个实例 >1.5 秒；只给 300 ms，没关完就随进程结束（对方记录按 TTL 过期）
+            "mdns" to { Discovery.stop(300) },
             "preview" to { stopPreview() },
             "beacon" to { DeskBeacon.flush() },
         )
         val ts = parts.map { (n, f) -> Thread({ val a = System.currentTimeMillis(); runCatching(f); res[n] = System.currentTimeMillis() - a }, "exit-$n").apply { isDaemon = true; start() } }
         for (t in ts) { val w = t0 + timeoutMs - System.currentTimeMillis(); if (w > 0) t.join(w) }
+        // mdns 自己只等 300 ms；它的线程返回即算完成（JmDNS 的关闭线程留给进程结束）
         return parts.associate { (n, _) -> n to (res[n] ?: -1L) }
     }
 }

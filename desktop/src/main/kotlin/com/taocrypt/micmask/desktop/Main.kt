@@ -32,6 +32,8 @@ import top.yukonga.miuix.kmp.theme.ThemeController
  */
 
 fun main(args: Array<String>) {
+    // 界面渲染后端：设置里选「软件渲染」时用 Skia CPU 渲染（CI 实测比 DIRECT3D 少约 25–35 MB 工作集，CPU 略高），重启生效
+    if (System.getProperty("skiko.renderApi") == null) Settings.get("render_api").takeIf { it == "SOFTWARE" || it == "OPENGL" }?.let { System.setProperty("skiko.renderApi", it) }
     if ("--smoke" in args) smokeMain(args) else gui(startInTray = "--tray" in args)
 }
 

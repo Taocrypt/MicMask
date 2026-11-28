@@ -117,7 +117,7 @@ jobs:
             'F-new+C1only'           = @{ drop = $false; add = @('-XX:TieredStopAtLevel=1') }
             'G-new+noJ2D-D3D'        = @{ drop = $false; add = @('-Dsun.java2d.d3d=false') }
           }
-          $summary = @()
+          $summary = New-Object System.Collections.Generic.List[string]
           foreach ($k in $variants.Keys) {
             $v = $variants[$k]
             $lines = New-Object System.Collections.Generic.List[string]
@@ -132,7 +132,7 @@ jobs:
             $null = $p.Handle
             if (-not $p.WaitForExit(150000)) { $p.Kill(); Write-Host "$k 超时" }
             Write-Host "===== $k (exit $($p.ExitCode))"
-            if (Test-Path $log) { Get-Content $log -Encoding UTF8 | Where-Object { $_ -match '^(MEM|PASS|FAIL|WINDOW)' } | ForEach-Object { Write-Host $_; if ($_ -match '^MEM  (\S+)\s+ws=([\d.]+) MB  private=([\d.]+) MB') { $summary += "{0,-22} {1,-30} ws={2,7} MB  private={3,7} MB" -f $k, $Matches[1], $Matches[2], $Matches[3] } } }
+            if (Test-Path $log) { Get-Content $log -Encoding UTF8 | Where-Object { $_ -match '^(MEM|PASS|FAIL|WINDOW)' } | ForEach-Object { Write-Host $_; if ($_ -match '^MEM  (\S+)\s+ws=([\d.]+) MB  private=([\d.]+) MB') { $summary.Add(("{0,-22} {1,-30} ws={2,7} MB  private={3,7} MB" -f $k, $Matches[1], $Matches[2], $Matches[3])) } } }
           }
           Set-Content $cfg.FullName $orig -Encoding UTF8
           Write-Host '===== 汇总'

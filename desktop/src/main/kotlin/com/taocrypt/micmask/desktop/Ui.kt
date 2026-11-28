@@ -484,6 +484,10 @@ private fun SettingsPage() {
             var restore by remember { mutableStateOf(Settings.getBool("rx_restore", true)) }
             SwitchPreference(checked = restore, onCheckedChange = { restore = it; Settings.setBool("rx_restore", it) }, title = tr("启动时恢复接收"),
                 summary = tr("上次退出时开着「接收」，下次启动自动打开"))
+            var render by remember { mutableStateOf(if (Settings.get("render_api") == "SOFTWARE") 1 else 0) }
+            WindowDropdownPreference(items = listOf(tr("自动（显卡加速，默认）"), tr("软件渲染（更省内存）")), selectedIndex = render, title = tr("界面渲染"),
+                summary = tr("软件渲染约少占 30 MB 内存，界面动画时 CPU 略高；重启 MicMask 后生效。当前：{0}", Ui.renderApi),
+                onSelectedIndexChange = { render = it; Settings.set("render_api", if (it == 1) "SOFTWARE" else "") })
             var upd by remember { mutableStateOf(Settings.getBool("upd_auto", true)) }
             SwitchPreference(checked = upd, onCheckedChange = { upd = it; Settings.setBool("upd_auto", it) }, title = tr("启动时检查更新"), summary = tr("只查 GitHub Release 的电脑版标签，不自动下载"))
         }
