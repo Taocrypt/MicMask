@@ -64,3 +64,11 @@
 -dontwarn org.graalvm.**
 -dontwarn com.oracle.svm.**
 -dontnote **
+
+# JNA：反射 + native 回调，整包保留；我们的接口（NativeAudio.Lib）由 JNA 动态代理实现，方法名必须保留
+-keep class com.sun.jna.** { *; }
+-keepclassmembers class * extends com.sun.jna.** { public *; }
+-dontwarn com.sun.jna.**
+
+# QR Code generator（Nayuki）：纯 Java，摇树即可
+-dontwarn io.nayuki.qrcodegen.**

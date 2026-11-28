@@ -100,7 +100,7 @@ fun startBackground() {
     DeskLink.startDiscovery()
     DeskLink.startAuto()
     if (Settings.getBool("rx_restore", true) && Settings.getBool("rx_on", false)) DeskLink.startReceive()
-    DeskBeacon.track("app_open")
+    DeskBeacon.start()
 }
 
 private fun gui(startInTray: Boolean) {

@@ -5,7 +5,40 @@
 
 ## [未发布]
 
-第二轮修改（用户反馈 + 追加需求）。
+### 第三轮（音频底层 / 二维码 / 签名 / 后台 / 手册 / 组网与双向）
+
+#### 音频
+- 新增 native 音频库 mmaudio.dll（C++，desktop/native/，CI 在 windows-latest 用 MSVC 编译，静态 CRT，JNA 调用）：WASAPI 共享模式事件驱动采集/播放（采集设备缓冲 20 ms、播放 30 ms + 20 ms 环形缓冲，MMCSS「Pro Audio」线程）；打不开时自动回退 javax.sound（DirectSound），日志记原因；设置里可关掉「低延迟音频引擎」
+- 按应用抓声音（Windows 10 2004 / build 19041+，AUDIOCLIENT_PROCESS_LOOPBACK）：输入通道新增「应用：xxx」（列出正在用声音的程序，如 w-okada、RVC、OBS，3 秒刷新，正在出声的排前面）与「电脑播放的所有声音（除 MicMask）」；可选「只抓这个程序（含子进程）」或「抓除它以外的所有声音」。RVC 的输出可以直接发到手机，不用占 VB-CABLE；目标没出声时补静音，不会误判断开
+- 「电平跳、莫名声音小」：多声道下混改为只平均有信号的声道（不低于最响声道 −20 dB）。旧做法把所有声道相加再除以声道数：Voicemeeter VAIO（8 声道，通常只有前 2 声道有声）会被平均成 1/4（−12 dB），单边有声的立体声少 6 dB；WASAPI 路径浮点 → 16 位按 ×32767 限幅换算
+- 发送卡加输入增益（−12 ~ +24 dB）与可选自动增益（AGC：目标约 −18 dBFS RMS，只在有声帧上调整，升 5 dB/秒、降 50 dB/秒，范围 −12 ~ +18 dB），带 −1 dBFS 限幅防爆音；电平表显示增益后的电平；日志每 10 秒记录增益前 / 后电平、AGC 当前值、限幅次数、音频引擎
+
+#### 组网（EasyTier 全程 TCP 的日志）与双向
+- 接收缓冲按传输方式与抖动自适应：UDP 30–150 ms、TCP 60–250 ms；目标同时覆盖「最近 10 秒最大到达间隔」（TCP 队头阻塞时音频成批到达）；断流补偿 UDP 最多 +60 ms、TCP 最多 +100 ms；日志记录传输方式、最大到达间隔、心跳超时
+- 心跳超时 max(5 s, 8×最近 30 s 最大 RTT)（音频走 TCP 时至少 10 s，上限 20 s）、TCP 发送队列限长、UDP 探测在收到探测的同一个 socket 上回包并且不再要求 UDP 来源 = TCP 来源（EasyTier 代理 TCP 时 UDP 被全部丢弃、全程 TCP 的原因）：都在共享协议源码里（手机端同步修改），电脑端同步后直接使用
+- 双向：同一台手机既连着电脑「接收」又要「发送」时，优先复用这一条会话（updateIntent 重发 CAPS），不再另开连接互相抢；电脑先连手机发送、手机在这条会话上回传声音时，电脑「接收」开着就播放；旧版手机没声明想收时仍另开连接（兼容）。界面显示「双向：同一条连接」，停止发送不影响接收
+- 编码「跟随手机」改用共享协议的 followPeerCodec，去掉电脑端反射改字段；固定 Opus / PCM 用 followPeerCodec=false（复用会话时用 setTxCodec）
+
+#### 二维码 / 链接
+- 电脑「接收」显示二维码（micmask://link?h=地址列表&p=端口&c=配对码&id=设备ID&n=名称，与手机一致），可复制链接；地址含所有 IPv4 网卡（局域网在前、组网虚拟网卡在后）
+- 「发送」支持粘贴 micmask:// 链接导入（剪贴板里有链接时一键导入）：并行探测链接里的每个地址，连最先通的；链接不带配对码时弹框输入
+
+#### 统计 / 公告 / 赞赏墙（Beacon）
+- 与手机同一后台、同一公告源。平台维度：渠道 ch=windows（后台目前没有平台字段），事件带 plat=windows；公告支持 platforms / plat 字段过滤（写了且不含 windows 的不显示）；公告频率 / 不再提示 / 强制阅读 / 阻断与手机一致，横幅公告显示在传音页顶部
+- 后台地址 / App ID 用 secrets.BEACON_URL、BEACON_APP_ID，客户端 key 用 secrets.DESKTOP_BEACON_KEY；任一未配置时整体关闭，不发任何请求（自测验证）
+- 启用时首次启动询问是否同意匿名统计；设置里可关
+- 赞赏墙读同一后台：有名字才显示，空表显示「还没有赞助者」，加载失败显示「暂时无法加载」，不显示任何占位名字
+- 更新检查仍只看 win-v* 标签
+
+#### 代码签名
+- desktop.yml：配置了 secrets.WINDOWS_CERT_PFX_BASE64 / WINDOWS_CERT_PASSWORD 时用 signtool（SHA-256 + RFC 3161 时间戳）签 mmaudio.dll、MSI、安装 EXE；或配置 Azure Trusted Signing（Artifact Signing）时用官方 action 签；都没有时跳过并在日志注明「未签名」。说明见 docs/desktop-signing.md
+
+#### 其它
+- 电脑版手册 docs/desktop-manual.md，「关于」页链接；desktop/README.md
+- 自测新增：native 加载与回退、按应用抓声音、下混、增益 / AGC / 限幅、TCP 缓冲目标、链接与二维码、Beacon（未启用 0 请求 + 模拟后台）、双向复用
+- 新依赖：JNA 5.15.0（Apache-2.0）、Nayuki QR Code generator 1.8.0（MIT）
+
+### 第二轮修改（用户反馈 + 追加需求）
 
 ### 界面
 - 改为桌面布局：左侧导航（传音 / 设置 / 关于 / 日志），传音页宽屏两栏（左发送、右接收；窗口窄于约 950 px 时上下排）；窗口默认 1100×720、最小 900×600、可调整大小；字号与间距按桌面密度；保留 miuix 风格与名称图标

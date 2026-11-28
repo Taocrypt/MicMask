@@ -52,6 +52,64 @@ jobs:
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v4
 
+      # 签名方式（不打印任何密钥）：pfx = secrets 里有 WINDOWS_CERT_PFX_BASE64 + WINDOWS_CERT_PASSWORD；
+      # azure = Azure Trusted Signing（secrets AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET + 仓库变量
+      # TRUSTED_SIGNING_ENDPOINT / TRUSTED_SIGNING_ACCOUNT / TRUSTED_SIGNING_PROFILE）；都没有 = none（产物未签名）。说明见 docs/desktop-signing.md
+      - name: Signing config
+        id: sign
+        env:
+          HAS_PFX: ${{ secrets.WINDOWS_CERT_PFX_BASE64 != '' && secrets.WINDOWS_CERT_PASSWORD != '' }}
+          HAS_AZ: ${{ secrets.AZURE_TENANT_ID != '' && secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_CLIENT_SECRET != '' && vars.TRUSTED_SIGNING_ENDPOINT != '' && vars.TRUSTED_SIGNING_ACCOUNT != '' && vars.TRUSTED_SIGNING_PROFILE != '' }}
+          HAS_BEACON: ${{ secrets.BEACON_URL != '' && secrets.BEACON_APP_ID != '' && secrets.DESKTOP_BEACON_KEY != '' }}
+        run: |
+          if [ "$HAS_PFX" = "true" ]; then M=pfx; elif [ "$HAS_AZ" = "true" ]; then M=azure; else M=none; fi
+          echo "mode=$M" >> "$GITHUB_OUTPUT"
+          case $M in
+            pfx) echo "代码签名：PFX 证书（signtool + 时间戳）";;
+            azure) echo "代码签名：Azure Trusted Signing";;
+            *) echo "::warning::未签名：仓库 secrets 里没有 WINDOWS_CERT_PFX_BASE64 / WINDOWS_CERT_PASSWORD，也没有 Azure Trusted Signing 配置。安装包未签名（Windows SmartScreen 会提示「未知发布者」）。";;
+          esac
+          if [ "$HAS_BEACON" = "true" ]; then echo "Beacon：已配置（统计/公告/赞赏墙开启，plat=windows）"; else echo "Beacon：未配置（secrets.BEACON_URL / BEACON_APP_ID / DESKTOP_BEACON_KEY 不全）→ 电脑版统计/公告/赞赏墙整体关闭，不发任何请求"; fi
+
+      # native 音频库（WASAPI / 按进程抓声音）：MSVC 编译 → desktop/resources/windows/mmaudio.dll，随安装包放进 app 资源目录
+      - name: Build native audio library (mmaudio.dll)
+        shell: cmd
+        run: call desktop\native\build.cmd
+
+      - name: Check mmaudio.dll exports
+        shell: pwsh
+        run: |
+          $dll = 'desktop/resources/windows/mmaudio.dll'
+          if (-not (Test-Path $dll)) { throw 'mmaudio.dll 没有生成' }
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC" -Recurse -Filter dumpbin.exe | Where-Object { $_.FullName -match 'Hostx64\\x64' } | Select-Object -First 1
+          if ($dumpbin) { & $dumpbin.FullName /nologo /exports $dll | Select-String 'mm_' | Out-Host; & $dumpbin.FullName /nologo /dependents $dll | Select-String '\.dll' | Out-Host }
+          Write-Host ("mmaudio.dll {0:N0} 字节" -f (Get-Item $dll).Length)
+
+      - name: Sign mmaudio.dll (PFX)
+        if: steps.sign.outputs.mode == 'pfx'
+        shell: pwsh
+        env:
+          CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: ./desktop/packaging/sign.ps1 desktop/resources/windows/mmaudio.dll
+
+      - name: Sign mmaudio.dll (Azure Trusted Signing)
+        if: steps.sign.outputs.mode == 'azure'
+        uses: Azure/artifact-signing-action@v1.2.0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ vars.TRUSTED_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.TRUSTED_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.TRUSTED_SIGNING_PROFILE }}
+          files-folder: desktop/resources/windows
+          files-folder-filter: dll
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
       - name: Fetch VB-CABLE (official, unmodified)
         run: |
           mkdir -p desktop/resources/windows/vbcable
@@ -61,12 +119,65 @@ jobs:
       # release 构建：ProGuard 摇树 + jlink 精简 JDK（只带 build.gradle.kts 里 modules(...) 列的模块）+ 只带 x64 Skia
       - name: Package MSI / EXE (release)
         working-directory: desktop
+        # 电脑版 Beacon：与手机同一后台/App（URL、App ID 同手机），客户端 key 单独用 secrets.DESKTOP_BEACON_KEY（用户决定开不开）；任一为空 = 整体关闭
+        env:
+          BEACON_URL: ${{ secrets.BEACON_URL }}
+          BEACON_APP_ID: ${{ secrets.BEACON_APP_ID }}
+          BEACON_KEY: ${{ secrets.DESKTOP_BEACON_KEY }}
         run: ./gradlew --no-daemon --stacktrace -PappVersion="${{ steps.ver.outputs.version }}" packageReleaseMsi packageReleaseExe
 
       - name: Packaging logs (on failure)
         if: failure()
         run: |
           for f in $(find desktop/build/compose/logs -type f 2>/dev/null); do echo "===== $f"; tail -n 60 "$f"; done
+
+      - name: Sign MSI / EXE (PFX)
+        if: steps.sign.outputs.mode == 'pfx'
+        shell: pwsh
+        env:
+          CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          $f = @(Get-ChildItem desktop/build/compose/binaries/main-release/msi/*.msi) + @(Get-ChildItem desktop/build/compose/binaries/main-release/exe/*.exe)
+          ./desktop/packaging/sign.ps1 @($f | ForEach-Object { $_.FullName })
+
+      - name: Sign MSI (Azure Trusted Signing)
+        if: steps.sign.outputs.mode == 'azure'
+        uses: Azure/artifact-signing-action@v1.2.0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ vars.TRUSTED_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.TRUSTED_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.TRUSTED_SIGNING_PROFILE }}
+          files-folder: desktop/build/compose/binaries/main-release/msi
+          files-folder-filter: msi
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Sign EXE (Azure Trusted Signing)
+        if: steps.sign.outputs.mode == 'azure'
+        uses: Azure/artifact-signing-action@v1.2.0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ vars.TRUSTED_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.TRUSTED_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.TRUSTED_SIGNING_PROFILE }}
+          files-folder: desktop/build/compose/binaries/main-release/exe
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Signature status
+        shell: pwsh
+        run: |
+          $f = @(Get-ChildItem desktop/build/compose/binaries/main-release/msi/*.msi) + @(Get-ChildItem desktop/build/compose/binaries/main-release/exe/*.exe) + @(Get-Item desktop/resources/windows/mmaudio.dll)
+          foreach ($x in $f) { $s = Get-AuthenticodeSignature $x.FullName; Write-Host ("{0}: {1}{2}" -f $x.Name, $(if ($s.Status -eq 'NotSigned') { '未签名' } else { $s.Status }), $(if ($s.SignerCertificate) { ' · ' + $s.SignerCertificate.Subject } else { '' })) }
 
       # 冒烟：把 MSI 管理员解包（等同安装后的文件），运行 MicMask.exe --smoke：
       # 离屏渲染整页 Compose/miuix、Skia DLL、加解密/TLS、Opus 本机回环、mDNS、声卡枚举，再真开窗口 3 秒自动关。
@@ -85,6 +196,8 @@ jobs:
           $null = $app.Handle  # 先拿句柄，否则进程退出后 ExitCode 读不到
           if (-not $app.WaitForExit(180000)) { $app.Kill(); throw '自测超时（180 秒）' }
           if (Test-Path $log) { Get-Content $log -Encoding UTF8 } else { Write-Host '没有自测日志' }
+          $mm = Get-ChildItem $dst -Recurse -Filter mmaudio.dll | Select-Object -First 1
+          if (-not $mm) { throw '安装包里没有 mmaudio.dll' }
           $vb = Get-ChildItem $dst -Recurse -Filter VBCABLE_Driver_Pack46.zip | Select-Object -First 1
           if (-not $vb) { throw '安装包里没有 VB-CABLE 包' }
           $rt = (Get-ChildItem (Join-Path $exe.DirectoryName 'runtime') -Recurse -File | Measure-Object Length -Sum).Sum

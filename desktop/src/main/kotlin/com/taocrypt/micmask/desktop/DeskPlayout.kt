@@ -13,6 +13,10 @@ import com.taocrypt.micmask.link.MmLink
  *  - 漂移裁剪：看 2 秒窗口里的「最低水位」，比目标高出 15 ms 以上就丢掉多出来的一半（每次 ≤ 20 ms），在丢点做 2 ms 交叉淡化，听不出跳变；
  *    用最低水位而不是平均值，所以抖动尖峰不会触发裁剪；
  *  - 断流时最后 2 ms 淡出，恢复时淡入，避免爆音；硬上限 400 ms 防止异常堆积。
+ *
+ * 第三轮（EasyTier 全程 TCP、RTT 70–150 ms、断流累计到 66 的日志）：
+ *  - TCP 传输时音频是「一阵一阵」到的（队头阻塞），抖动均值很小但偶尔一次 100+ ms 的空档 → 目标水位还要覆盖「最近 10 秒最大到达间隔」；
+ *  - 按传输方式分档：UDP 下限 30 / 上限 150 ms，TCP 下限 60 / 上限 250 ms；断流补偿 UDP 最多 +60、TCP 最多 +100 ms。
  * 所有方法线程安全（网络线程写、播放线程读）。
  */
 class DeskPlayout(private val sr: Int = MmLink.SR) {
@@ -24,6 +28,12 @@ class DeskPlayout(private val sr: Int = MmLink.SR) {
     private val fade = 2 * ms
 
     @Volatile var jitterMs = 0f
+    /** 音频经 TCP 到达（UDP 不通 / 隧道只走 TCP）：水位下限、上限更高 */
+    @Volatile var tcp = false
+    // 最近 10 秒每秒最大到达间隔（毫秒）
+    private val gapMax = IntArray(10)
+    private var gapSec = 0L
+    private var lastWriteNs = 0L
     var underruns = 0L; private set
     var trimmedMs = 0L; private set
     private var boostMs = 0
@@ -33,12 +43,30 @@ class DeskPlayout(private val sr: Int = MmLink.SR) {
     private var needFadeIn = false
     private var clock = 0L   // 读过的样本数（不依赖墙钟，自测可快进）
 
-    fun targetMs(): Int = ((2 * jitterMs + 20).toInt().coerceIn(30, 120) + boostMs)
+    fun targetMs(): Int {
+        val (lo, hi) = if (tcp) 60 to 250 else 30 to 150
+        val gap = synchronized(this) { gapMax.max() } - 10
+        return maxOf((2 * jitterMs + 20).toInt(), gap).coerceIn(lo, hi) + boostMs
+    }
+    /** 最近 10 秒最大到达间隔（日志用） */
+    @Synchronized fun peakGapMs() = gapMax.max()
+
+    private fun noteArrival() {
+        val now = System.nanoTime()
+        if (lastWriteNs != 0L) {
+            val g = ((now - lastWriteNs) / 1_000_000).toInt().coerceIn(0, 1000)
+            val sec = now / 1_000_000_000L
+            if (sec != gapSec) { val steps = (sec - gapSec).coerceIn(1, 10).toInt(); repeat(steps) { i -> gapMax[((gapSec + 1 + i) % 10).toInt()] = 0 }; gapSec = sec }
+            val b = (sec % 10).toInt(); if (g > gapMax[b]) gapMax[b] = g
+        }
+        lastWriteNs = now
+    }
     @Synchronized fun size() = n
     @Synchronized fun sizeMs() = n / ms
-    @Synchronized fun clear() { r = 0; n = 0; primed = false; winMin = Int.MAX_VALUE; winStart = clock }
+    @Synchronized fun clear() { r = 0; n = 0; primed = false; winMin = Int.MAX_VALUE; winStart = clock; gapMax.fill(0); lastWriteNs = 0L }
 
     @Synchronized fun write(s: ShortArray, off: Int = 0, len: Int = s.size) {
+        noteArrival()
         for (i in 0 until len) { buf[(r + n) % cap] = s[off + i]; if (n < cap) n++ else r = (r + 1) % cap }
         val hard = 400 * ms
         if (n > hard) { val drop = n - targetMs() * ms; r = (r + drop) % cap; n -= drop; trimmedMs += drop / ms; needFadeIn = true }
@@ -58,7 +86,7 @@ class DeskPlayout(private val sr: Int = MmLink.SR) {
             if (primed) {
                 // 断流：已拿到的尾部淡出，余下补静音；水位目标加 10 ms
                 val f = minOf(fade, k); for (i in 0 until f) { val j = k - f + i; dst[j] = (dst[j] * (f - i) / f).toShort() }
-                primed = false; underruns++; boostMs = (boostMs + 10).coerceAtMost(60); lastUnderrunAt = clock
+                primed = false; underruns++; boostMs = (boostMs + 10).coerceAtMost(if (tcp) 100 else 60); lastUnderrunAt = clock
             }
             for (i in k until len) dst[i] = 0
         }

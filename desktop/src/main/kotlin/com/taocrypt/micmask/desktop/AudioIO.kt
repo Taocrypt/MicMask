@@ -14,9 +14,9 @@ import kotlin.math.log10
 import kotlin.math.sqrt
 
 /*
- * 电脑版音频 IO（javax.sound：Windows 下走 DirectSound，不需要 native 库）。
- * 已知局限（推断）：DirectSound 比 WASAPI 多几十毫秒延迟；不能按进程抓声音（进程回环要 WASAPI，列为下一步）。
- * 统一格式：48 kHz、16 位、小端；设备只给双声道时自动上/下混。
+ * 电脑版音频 IO：优先 native WASAPI 共享模式（mmaudio.dll，见 NativeAudio），打不开时自动回退 javax.sound（DirectSound）。
+ * 按进程抓声音（某个应用的声音）只有 native 能做（Windows 10 2004+）。
+ * 统一格式：48 kHz、16 位单声道；多声道设备下混时只平均「有信号」的声道（见 [downmix]），不会把单声道信号平均掉 6 dB。
  */
 object AudioIO {
     const val SR = MmLink.SR
@@ -159,12 +159,42 @@ object AudioIO {
         @Volatile private var run = true
         @Volatile var error: String? = null; private set
         @Volatile var lost = false; private set
+        /** 实际用的音频引擎（界面/日志显示）：WASAPI（native）或 DirectSound（javax.sound） */
+        @Volatile var backend = ""; private set
         private val t = Thread({ loop() }, "mm-play").apply { isDaemon = true; priority = Thread.MAX_PRIORITY }
         fun start() = apply { t.start() }
         /** 不 drain：停止要立刻返回（关闭窗口卡顿的原因之一是 drain/close 阻塞），关线在播放线程里做 */
         fun stop() { run = false }
 
         private fun loop() {
+            if (NativeAudio.available) {
+                val ns = runCatching { NativeAudio.Stream.device(false, dev?.name ?: "", 20) }
+                    .onFailure { DeskLog.log('W', "音频", "WASAPI 播放打不开（${it.message}），回退 DirectSound：${dev?.name?.ifEmpty { null } ?: "系统默认"}") }.getOrNull()
+                if (ns != null) { nativeLoop(ns); return }
+            }
+            javaLoop()
+        }
+
+        /** WASAPI：环形缓冲 20 ms，写满就等（音频引擎按设备时钟取，自然限速） */
+        private fun nativeLoop(ns: NativeAudio.Stream) {
+            backend = "WASAPI"
+            DeskLog.log('I', "音频", "播放（WASAPI）：${dev?.name?.ifEmpty { null } ?: "系统默认"} · ${ns.info()}")
+            try {
+                val s = ShortArray(FRAME)
+                while (run) {
+                    buf.read(s, s.size)
+                    var off = 0
+                    while (off < s.size && run) {
+                        val k = ns.write(if (off == 0) s else s.copyOfRange(off, s.size), s.size - off, 200)
+                        if (k < 0 || !ns.alive) { error = ns.info().substringAfter("error: ", tr("播放设备已断开")); lost = true; return }
+                        off += k
+                    }
+                }
+            } catch (e: Throwable) { error = e.message; lost = true } finally { ns.close() }
+        }
+
+        private fun javaLoop() {
+            backend = "DirectSound"
             val (line, ch) = try { open(dev, SourceDataLine::class.java) } catch (e: Throwable) { error = e.message; lost = true; return }
             try {
                 line.open(if (ch == 1) MONO else STEREO, SR / 20 * 2 * ch)
@@ -185,23 +215,70 @@ object AudioIO {
     // ---------------------------------------------------------------- 采集
 
     /** 发送音源：所选录音设备、合成正弦（自测）、或转发收到的手机声音 */
-    interface Source { val level: Level; val error: String?; val lost: Boolean; val dropped: Long; fun stop() }
+    interface Source {
+        /** 增益后（= 发出去）的电平，界面电平表用 */
+        val level: Level
+        /** 增益前（设备原始）电平，日志对比用 */
+        val levelIn: Level
+        val error: String?; val lost: Boolean; val dropped: Long
+        val backend: String
+        fun stop()
+    }
 
     /**
      * 采集线程：每 10 ms 回调一帧 480 样本（双声道设备取平均），帧缓冲复用、不每帧分配。
      * 积压上限：设备缓冲里攒了超过 [capMs] 的数据（程序卡顿、设备时钟比网络快）就丢掉旧数据只留最近 [keepMs]，保证发出去的是「现在」的声音。
      */
-    class Capturer(private val dev: Dev?, private val capMs: Int = 60, private val keepMs: Int = 20, private val onFrame: (ShortArray) -> Unit) : Source {
+    class Capturer(private val dev: Dev?, private val capMs: Int = 60, private val keepMs: Int = 20, private val gain: Gain? = null, private val onFrame: (ShortArray) -> Unit) : Source {
         @Volatile private var run = true
         @Volatile override var error: String? = null; private set
         @Volatile override var lost = false; private set
         @Volatile override var dropped = 0L; private set   // 因积压丢掉的样本数
+        @Volatile override var backend = ""; private set
         override val level = Level()
+        override val levelIn = Level()
         private val t = Thread({ loop() }, "mm-cap").apply { isDaemon = true; priority = Thread.MAX_PRIORITY }
         fun start() = apply { t.start() }
         override fun stop() { run = false }
 
+        private fun emit(s: ShortArray) {
+            levelIn.observe(s)
+            gain?.process(s)
+            level.observe(s)
+            onFrame(s)
+        }
+
         private fun loop() {
+            if (NativeAudio.available) {
+                val ns = runCatching { NativeAudio.Stream.device(true, dev?.name ?: "", 200) }
+                    .onFailure { DeskLog.log('W', "音频", "WASAPI 录音打不开（${it.message}），回退 DirectSound：${dev?.name?.ifEmpty { null } ?: "系统默认"}") }.getOrNull()
+                if (ns != null) { backend = "WASAPI"; DeskLog.log('I', "音频", "录音（WASAPI）：${dev?.name?.ifEmpty { null } ?: "系统默认"} · ${ns.info()}"); nativeLoop(ns, capMs, keepMs, true); return }
+            }
+            javaLoop()
+        }
+
+        /** native 流（设备或进程回环）通用读循环：积压控制 + 10 ms 一帧 */
+        internal fun nativeLoop(ns: NativeAudio.Stream, capMs: Int, keepMs: Int, idleIsLost: Boolean) {
+            try {
+                val s = ShortArray(FRAME)
+                var idle = 0
+                while (run) {
+                    val av = ns.available()
+                    if (av > capMs * SR / 1000) { val k = ns.skip(av - keepMs * SR / 1000); dropped += k }
+                    val n = ns.read(s, FRAME, 200)
+                    if (n < 0 || !ns.alive) { error = ns.info().substringAfter("error: ", tr("录音设备已断开")); lost = true; break }
+                    if (n < FRAME) {
+                        if (idleIsLost && ++idle > 15) { error = tr("录音设备已断开"); lost = true; break }   // 约 3 秒读不到
+                        continue
+                    }
+                    idle = 0
+                    emit(s)
+                }
+            } catch (e: Throwable) { error = e.message; lost = true } finally { ns.close() }
+        }
+
+        private fun javaLoop() {
+            backend = "DirectSound"
             val (line, ch) = try { open(dev, TargetDataLine::class.java) } catch (e: Throwable) { error = e.message; lost = true; return }
             try {
                 val fb = FRAME * 2 * ch
@@ -223,16 +300,57 @@ object AudioIO {
                         Thread.sleep(10); continue
                     }
                     idle = 0
-                    for (i in 0 until FRAME) {
-                        var acc = 0
-                        for (c in 0 until ch) { val o = (i * ch + c) * 2; acc += ((b[o].toInt() and 0xff) or (b[o + 1].toInt() shl 8)).toShort().toInt() }
-                        s[i] = (acc / ch).toShort()
-                    }
-                    level.observe(s)
-                    onFrame(s)
+                    downmix(b, ch, s, FRAME)
+                    emit(s)
                 }
                 runCatching { line.stop(); line.flush() }
             } catch (e: Throwable) { error = e.message; lost = true } finally { runCatching { line.close() } }
+        }
+    }
+
+    /**
+     * 按进程抓声音（某个应用的声音，Windows 10 2004+，只走 native）。[exclude]=true 时抓「除这个程序以外」的所有声音。
+     * 目标没出声时 native 会补静音，所以不会因为读不到数据判定断开；目标进程退出时流失效 → lost。
+     */
+    class AppCapturer(private val pid: Int, private val exclude: Boolean, private val label: String, private val gain: Gain? = null, private val onFrame: (ShortArray) -> Unit) : Source {
+        private val inner = Capturer(null, 60, 20, gain, onFrame)
+        override val level get() = inner.level
+        override val levelIn get() = inner.levelIn
+        @Volatile private var err: String? = null
+        @Volatile private var lostF = false
+        override val error get() = err ?: inner.error
+        override val lost get() = lostF || inner.lost
+        override val dropped get() = inner.dropped
+        override val backend = "WASAPI process loopback"
+        fun start() = apply {
+            Thread({
+                val ns = runCatching { NativeAudio.Stream.process(pid, exclude, 200) }.getOrElse {
+                    err = tr("抓不到「{0}」的声音：{1}", label, it.message ?: ""); lostF = true
+                    DeskLog.log('W', "音频", "按应用抓声音失败（pid $pid ${if (exclude) "排除" else "包含"}进程树）：${it.message}")
+                    return@Thread
+                }
+                DeskLog.log('I', "音频", "按应用抓声音：$label（pid $pid，${if (exclude) "排除" else "只抓"}该进程树）· ${ns.info()}")
+                inner.nativeLoop(ns, 60, 20, false)
+            }, "mm-appcap").apply { isDaemon = true; priority = Thread.MAX_PRIORITY }.start()
+        }
+        override fun stop() { inner.stop() }
+    }
+
+    /**
+     * 16 位小端多声道 → 单声道：只平均「有信号」的声道（能量不低于最响声道 −20 dB）。
+     * 旧做法是所有声道直接除以声道数：Voicemeeter（8 声道 VAIO）等虚拟线只有前两个声道有声时会被平均成 1/4（−12 dB），
+     * 单边有声的立体声也会少 6 dB —— 这就是「莫名声音小」的原因之一（推断，看代码）。纯函数，自测覆盖。
+     */
+    fun downmix(b: ByteArray, ch: Int, out: ShortArray, frames: Int) {
+        if (ch == 1) { for (i in 0 until frames) out[i] = ((b[2 * i].toInt() and 0xff) or (b[2 * i + 1].toInt() shl 8)).toShort(); return }
+        val e = DoubleArray(ch)
+        for (i in 0 until frames) for (c in 0 until ch) { val o = (i * ch + c) * 2; val v = ((b[o].toInt() and 0xff) or (b[o + 1].toInt() shl 8)).toShort().toDouble(); e[c] += v * v }
+        val mx = e.max()
+        val use = (0 until ch).filter { mx <= 0 || e[it] >= mx * 0.01 }
+        for (i in 0 until frames) {
+            var acc = 0
+            for (c in use) { val o = (i * ch + c) * 2; acc += ((b[o].toInt() and 0xff) or (b[o + 1].toInt() shl 8)).toShort().toInt() }
+            out[i] = (acc / use.size).toShort()
         }
     }
 
@@ -244,9 +362,11 @@ object AudioIO {
     }
 
     /** 合成音源（自测 / 内存测量用）：440 Hz 正弦，10 ms 节拍 */
-    class SineSource(private val onFrame: (ShortArray) -> Unit) : Source {
+    class SineSource(private val gain: Gain? = null, private val amp: Int = 6000, private val onFrame: (ShortArray) -> Unit) : Source {
         @Volatile private var run = true
         override val level = Level()
+        override val levelIn = Level()
+        override val backend = "sine"
         override val error: String? = null
         override val lost = false
         override val dropped = 0L
@@ -254,8 +374,8 @@ object AudioIO {
             Thread({
                 val s = ShortArray(FRAME); var ph = 0.0; var next = System.nanoTime()
                 while (run) {
-                    for (i in s.indices) { s[i] = (6000 * Math.sin(ph)).toInt().toShort(); ph += 2 * Math.PI * 440 / SR }
-                    level.observe(s); onFrame(s)
+                    for (i in s.indices) { s[i] = (amp * Math.sin(ph)).toInt().toShort(); ph += 2 * Math.PI * 440 / SR }
+                    levelIn.observe(s); gain?.process(s); level.observe(s); onFrame(s)
                     next += 10_000_000L
                     val w = next - System.nanoTime(); if (w > 0) Thread.sleep(w / 1_000_000, (w % 1_000_000).toInt())
                 }

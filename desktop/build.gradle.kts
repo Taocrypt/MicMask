@@ -33,7 +33,9 @@ val buildInfoDir = layout.buildDirectory.dir("generated/buildInfo/kotlin")
 val genBuildInfo = tasks.register("genBuildInfo") {
     val out = buildInfoDir
     val v = appVersion
-    val env = { k: String -> (System.getenv(k) ?: "").replace("\"", "") }
+    // 也可以用 -PbeaconUrl= / -PbeaconAppId= / -PbeaconKey= 传（本地构建测试用），环境变量优先
+    val prop = { k: String -> (findProperty(k) as String?) ?: "" }
+    val env = { k: String -> (System.getenv(k)?.takeIf { it.isNotBlank() } ?: prop(mapOf("BEACON_URL" to "beaconUrl", "BEACON_APP_ID" to "beaconAppId", "BEACON_KEY" to "beaconKey")[k] ?: "")).replace("\"", "").replace("$", "").trim() }
     val bUrl = env("BEACON_URL"); val bApp = env("BEACON_APP_ID"); val bKey = env("BEACON_KEY")
     inputs.property("v", v); inputs.property("b", "$bUrl|$bApp|${bKey.length}")
     outputs.dir(out)
@@ -72,6 +74,10 @@ dependencies {
     implementation("org.jmdns:jmdns:3.6.5")
     // JSON（GitHub Release / Beacon 解析；Public Domain）
     implementation("org.json:json:20260814")
+    // JNA：调 native 音频库 mmaudio.dll（WASAPI / 按进程抓声音；Apache-2.0 / LGPL-2.1 双许可，取 Apache-2.0）
+    implementation("net.java.dev.jna:jna:5.15.0")
+    // 二维码生成（Nayuki QR Code generator，MIT，单文件无依赖）
+    implementation("io.nayuki:qrcodegen:1.8.0")
 }
 
 compose.desktop {

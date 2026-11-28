@@ -46,6 +46,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import top.yukonga.miuix.kmp.basic.Slider
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
@@ -71,6 +75,10 @@ private object Dlg {
     var codePeer by mutableStateOf<PeerDevice?>(null)
     var codeSaved by mutableStateOf<SavedDev?>(null)
     var rename by mutableStateOf<SavedDev?>(null)
+    var linkCode by mutableStateOf<LinkUri.Link?>(null)
+    /** 本次启动待弹的公告（拉到配置后快照一次） */
+    var noticeQueue by mutableStateOf<List<DeskBeacon.Notice>>(emptyList())
+    var noticesQueued = false
 }
 
 @Composable private fun sub() = MiuixTheme.colorScheme.onSurfaceVariantSummary
@@ -92,7 +100,9 @@ fun Root() {
         }
         if (Dlg.codePeer != null || Dlg.codeSaved != null) CodeDialog()
         Dlg.rename?.let { RenameDialog(it) }
+        Dlg.linkCode?.let { LinkCodeDialog(it) }
         if (Ui.closePrompt) ClosePrompt()
+        BeaconOverlays()
     }
 }
 
@@ -204,6 +214,7 @@ private fun LevelBar(src: () -> AudioIO.Level?, silentHint: String) {
 fun LinkPage() {
     LaunchedEffect(Unit) { AudioIO.refresh() }
     Page(tr("传音"), tr("电脑和手机 MicMask 互传声音：左边把电脑的声音发到手机，右边把手机的声音收进电脑")) {
+        NoticeBanners()
         if (DeskLink.devNotice.isNotEmpty()) Notice(DeskLink.devNotice) { DeskLink.devNotice = "" }
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             if (maxWidth >= 760.dp) Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -215,22 +226,30 @@ fun LinkPage() {
 }
 
 /** 输入通道列表：手机麦克风、系统默认、电脑麦克风、耳机麦克风 + 所有录音设备（全名 + 类型 + 默认标记） */
-private fun inputChoices(ins: List<AudioIO.Dev>): List<Pair<String, String>> {
+private fun inputChoices(ins: List<AudioIO.Dev>, apps: List<NativeAudio.AppSession>): List<Pair<String, String>> {
     val r = ArrayList<Pair<String, String>>()
     r += "phone" to tr("手机麦克风（来自配对手机，= 接收到的声音）")
     r += "default" to AudioIO.label(null, ins, true)
     r += "pcmic" to (DeskLink.resolveInput("pcmic", ins)?.let { tr("电脑麦克风 · {0}", it.name) } ?: tr("电脑麦克风（未检测到）"))
     r += "headset" to (DeskLink.resolveInput("headset", ins)?.let { tr("耳机麦克风 · {0}", it.name) } ?: tr("耳机麦克风（未检测到）"))
     for (d in ins.filter { it.mixer != null }) r += ("dev:" + d.name) to AudioIO.label(d, ins, true)
+    if (NativeAudio.processLoopbackSupported) {
+        r += "sysmix" to tr("电脑播放的所有声音（除 MicMask，不用 VB-CABLE）")
+        for (a in apps.distinctBy { it.exe.lowercase() }) r += ("app:" + a.exe) to tr("应用：{0}", a.title) + (if (a.active) tr("（正在出声）") else "")
+    }
     val k = DeskLink.inputKey
     if (k.startsWith("dev:") && r.none { it.first == k }) r += k to tr("{0}（已拔出）", k.removePrefix("dev:"))
+    if (k.startsWith("app:") && r.none { it.first == k }) r += k to tr("应用：{0}（现在没在出声）", NativeAudio.friendly(k.removePrefix("app:")))
     return r
 }
 
 @Composable
 private fun SendCard() {
     val ins = AudioIO.inList
-    val choices = inputChoices(ins)
+    var apps by remember { mutableStateOf(emptyList<NativeAudio.AppSession>()) }
+    // 正在用声音的程序：3 秒刷新一次（只在页面开着时）
+    LaunchedEffect(Unit) { while (true) { apps = withContext(Dispatchers.IO) { runCatching { NativeAudio.sessions() }.getOrDefault(emptyList()) }; delay(3000) } }
+    val choices = inputChoices(ins, apps)
     val key = DeskLink.inputKey
     val busy = DeskLink.txOn
     // 没在发送时也开着所选设备看电平（窗口关掉 / 切页时停）
@@ -247,8 +266,16 @@ private fun SendCard() {
                 Hint(tr("「手机麦克风」= 用右边「接收」收到的手机声音：它会播放到右边所选输出（默认 CABLE Input，系统里多出麦克风「CABLE Output」），这就是「手机当电脑麦克风」。在下面选另一台手机并开始发送，还可以把它再转发出去。"))
                 if (!DeskLink.rxOn) TextButton(tr("开启接收（手机 → 电脑）"), onClick = { DeskLink.startReceive() }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.textButtonColorsPrimary())
             }
+            if (key.startsWith("app:") || key == "sysmix") {
+                Hint(tr("按应用抓声音（Windows 10 2004 及以上）：直接把这个程序播放的声音发给手机，不占用 VB-CABLE。RVC / w-okada 里把输出设备选成任意扬声器即可；这个程序要先开始出声才会出现在列表里。"))
+                if (key.startsWith("app:")) WindowDropdownPreference(items = listOf(tr("只抓这个程序（含它启动的子进程）"), tr("抓除这个程序以外的所有声音")), selectedIndex = if (DeskLink.appExclude) 1 else 0,
+                    title = tr("抓取范围"), enabled = !busy, onSelectedIndexChange = { DeskLink.changeAppExclude(it == 1) })
+            }
+            if (!NativeAudio.available) Hint(tr("音频引擎：DirectSound（兼容模式）。{0}", NativeAudio.loadError.ifEmpty { tr("设置里关掉了 WASAPI") }))
             LevelBar({ DeskLink.meter() }, if (key == "phone") tr("没有收到手机的声音：确认手机已连上右边的「接收」并在说话") else tr("所选音源几乎没有信号：可能选到了静音/没在用的设备，或没有程序往这条虚拟线播放。换一个输入通道试试"))
             DeskLink.previewError()?.let { if (!busy) Hint(tr("打不开这个录音设备：{0}", it), errC()) }
+            if (DeskLink.srcError.isNotEmpty()) Hint(DeskLink.srcError, errC())
+            if (key != "phone") GainRow()
         }
         WindowDropdownPreference(items = listOf(tr("跟随手机（默认，手机选什么就用什么）"), tr("Opus（省流量、抗丢包）"), tr("PCM（无压缩，USB / 热点直连）")),
             selectedIndex = DeskLink.codecMode, title = tr("编码"), enabled = !busy, onSelectedIndexChange = { DeskLink.setCodec(it) })
@@ -261,9 +288,41 @@ private fun SendCard() {
                 }
                 else -> Hint(if (DeskLink.txStatus.isNotEmpty() && DeskLink.txError.isEmpty()) DeskLink.txStatus else tr("在下面「手机」里点一台手机即可连接发送；手机要在「传音」页打开「接收」（需要 Shizuku / ROOT / 系统权限模式才能注入 QQ / 微信 / 游戏）"))
             }
+            if (DeskLink.duplex) Hint(tr("双向：和这台手机用同一条连接同时收发"), pri())
             if (DeskLink.txError.isNotEmpty()) Text(DeskLink.txError, fontSize = S13, color = errC())
             if (busy) TextButton(if (DeskLink.txPhase == DeskLink.TxPhase.CONNECTING) tr("取消连接") else tr("停止发送"), onClick = { DeskLink.stopSend() }, modifier = Modifier.fillMaxWidth())
         }
+    }
+}
+
+/** 输入增益 −12 ~ +24 dB + 自动增益（AGC）。电平表显示的是增益后的电平 */
+@Composable
+private fun GainRow() {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(tr("输入增益"), fontSize = S12, color = sub())
+            Slider(value = DeskLink.gainDb, onValueChange = { DeskLink.changeGainDb(it) }, valueRange = Gain.MIN_DB..Gain.MAX_DB, modifier = Modifier.weight(1f).padding(horizontal = 10.dp))
+            Text("%+.1f dB".format(DeskLink.gainDb), fontSize = S12, color = sub(), fontFamily = FontFamily.Monospace)
+            Link(tr("归零"), enabled = DeskLink.gainDb != 0f) { DeskLink.changeGainDb(0f) }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            var agcDb by remember { mutableFloatStateOf(0f) }
+            LaunchedEffect(DeskLink.agcOn) { while (DeskLink.agcOn) { agcDb = DeskLink.gain.agcDb; delay(300) } }
+            Text(if (DeskLink.agcOn) tr("自动增益：开（目标约 −18 dBFS，当前 {0} dB，带限幅防爆音）", "%+.1f".format(agcDb)) else tr("自动增益：关（声音忽大忽小 / 太小时可以打开）"), Modifier.weight(1f), fontSize = S12, color = sub())
+            Link(if (DeskLink.agcOn) tr("停用") else tr("启用")) { DeskLink.setAgc(!DeskLink.agcOn) }
+        }
+        DeskLink.srcBackend().takeIf { it.isNotEmpty() && it != "sine" }?.let { Hint(tr("音频引擎：{0}", it)) }
+    }
+}
+
+/** 二维码（黑白方块，四周留 4 格白边） */
+@Composable
+private fun QrImage(text: String, size: androidx.compose.ui.unit.Dp) {
+    val m = remember(text) { runCatching { LinkUri.qr(text) }.getOrNull() } ?: return
+    Canvas(Modifier.size(size).clip(RoundedCornerShape(8.dp)).background(Color.White)) {
+        val n = m.size + 8
+        val c = this.size.width / n
+        for (y in m.indices) for (x in m.indices) if (m[y][x]) drawRect(Color.Black, Offset((x + 4) * c, (y + 4) * c), Size(c + 0.5f, c + 0.5f))
     }
 }
 
@@ -308,6 +367,22 @@ private fun TargetsCard() {
         SwitchPreference(checked = DeskLink.autoConnect, onCheckedChange = { DeskLink.setAuto(it) }, title = tr("自动连接"),
             summary = tr("已保存的手机被发现或上次地址可达时自动连接发送，断线后自动重连（间隔 2 秒起逐步加长到 1 分钟）；手动点「停止发送」后不再自动连，直到你再手动连一次"))
         Column(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(tr("粘贴手机分享的链接"), fontSize = S14, fontWeight = FontWeight.SemiBold)
+            var linkText by remember { mutableStateOf("") }
+            var clipLink by remember { mutableStateOf<LinkUri.Link?>(null) }
+            LaunchedEffect(Unit) { while (true) { clipLink = clipboardLink(); delay(1500) } }
+            TextField(value = linkText, onValueChange = { linkText = it.take(600) }, label = tr("micmask://link?…（手机「接收」页的链接 / 二维码内容）"), singleLine = true, modifier = Modifier.fillMaxWidth())
+            val parsed = LinkUri.parse(linkText)
+            if (linkText.isNotBlank() && parsed == null) Hint(tr("不是 MicMask 链接：应以 micmask://link? 开头，带 h=地址"), errC())
+            if (parsed != null) Hint(tr("「{0}」· {1} · 端口 {2}{3}", parsed.name.ifEmpty { tr("手机") }, parsed.hosts.joinToString(), parsed.port, if (parsed.code.length == 6) tr(" · 含配对码") else tr(" · 不含配对码，连接时再输入")))
+            TextButton(tr("导入并连接"), enabled = parsed != null && !busy, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.textButtonColorsPrimary(), onClick = {
+                val l = parsed ?: return@TextButton
+                if (!DeskLink.connectLink(l)) Dlg.linkCode = l
+                linkText = ""
+            })
+            val cl = clipLink
+            if (cl != null && linkText.isBlank() && !busy) Link(tr("剪贴板里有「{0}」的链接，点这里导入", cl.name.ifEmpty { cl.hosts.first() })) { if (!DeskLink.connectLink(cl)) Dlg.linkCode = cl }
+            Spacer(Modifier.height(4.dp))
             Text(tr("手动连接（IP）"), fontSize = S14, fontWeight = FontWeight.SemiBold)
             TextField(value = host, onValueChange = { host = it.trim().take(64) }, label = tr("手机 IP（可带端口，如 192.168.1.5:47310；USB：adb reverse 后填 127.0.0.1）"), singleLine = true, modifier = Modifier.fillMaxWidth())
             CodeField(code) { code = it }
@@ -346,6 +421,11 @@ private fun clipboardCode(): String? = runCatching {
     Regex("(?<!\\d)(\\d{3})\\s?(\\d{3})(?!\\d)").find(s.take(200))?.let { it.groupValues[1] + it.groupValues[2] }
 }.getOrNull()
 
+private fun clipboardLink(): LinkUri.Link? = runCatching {
+    val s = java.awt.Toolkit.getDefaultToolkit().systemClipboard.getData(java.awt.datatransfer.DataFlavor.stringFlavor) as? String ?: return null
+    LinkUri.parse(s.take(2000))
+}.getOrNull()
+
 fun copyText(s: String) { runCatching { java.awt.Toolkit.getDefaultToolkit().systemClipboard.setContents(java.awt.datatransfer.StringSelection(s), null) } }
 
 @Composable
@@ -370,6 +450,19 @@ private fun ReceiveCard() {
                 Link(tr("换一个"), enabled = DeskLink.rxPeer == null) { DeskLink.regenCode() }
             }
             if (DeskLink.rxPeer != null) Hint(tr("手机连着时不能换配对码"))
+            if (DeskLink.rxOn) {
+                val link = remember(DeskLink.code, DeskLink.deviceName, DeskLink.rxOn) { LinkUri.build(LinkUri.forReceiver()) }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    QrImage(link, 150.dp)
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(tr("手机扫码连接"), fontSize = S14, fontWeight = FontWeight.SemiBold)
+                        Hint(tr("手机 MicMask「传音 › 发送」点扫码，扫这个二维码即可连上（含本机所有地址和配对码，不用手输）。二维码含配对码，别发给不认识的人。"))
+                        var copiedL by remember { mutableStateOf(false) }
+                        LaunchedEffect(copiedL) { if (copiedL) { delay(1500); copiedL = false } }
+                        Link(if (copiedL) tr("已复制") else tr("复制链接")) { copyText(link); copiedL = true }
+                    }
+                }
+            }
             Text(tr("本机「{0}」· 监听 0.0.0.0:{1}（所有网卡，TCP/UDP）· 加密传输", DeskLink.deviceName, MmLink.DEFAULT_PORT), fontSize = S12, color = sub())
             val addrs = remember(DeskLink.rxOn) { Discovery.addrs() }
             if (addrs.isEmpty()) Hint(tr("没有可用的网络：请连上 Wi-Fi / 网线"), errC())
@@ -377,7 +470,7 @@ private fun ReceiveCard() {
                 Column { addrs.forEach { a -> Text("${a.ip.hostAddress}  ·  ${a.ifName}" + (if (a.vpn) tr("（虚拟网卡 / 组网）") else ""), fontSize = S12, color = sub(), fontFamily = FontFamily.Monospace) } }
             }
             if (DeskLink.rxOn) LevelBar({ if (DeskLink.rxPeer != null) DeskLink.rxLevel else null }, tr("连上了但没有声音：手机那边可能静音或没在说话"))
-            if (DeskLink.rxPeer != null) Hint(tr("来自 {0}", DeskLink.rxPeer ?: "") + "\n" + DeskLink.rxStats)
+            if (DeskLink.rxPeer != null) Hint(tr("来自 {0}", DeskLink.rxPeer ?: "") + (if (DeskLink.duplex) tr("（双向：同一条连接）") else "") + "\n" + DeskLink.rxStats)
             Hint(tr("首次接收时 Windows 防火墙会询问是否允许 MicMask 访问网络，请勾选「专用网络」并允许。"))
         }
     }
@@ -438,6 +531,89 @@ private fun CodeDialog() {
             })
         }
         if (DeskLink.txOn) Hint(tr("正在发送，先停止"))
+    }
+}
+
+@Composable
+private fun LinkCodeDialog(l: LinkUri.Link) {
+    var code by remember { mutableStateOf("") }
+    Overlay({ Dlg.linkCode = null }) {
+        Text(tr("连接「{0}」", l.name.ifEmpty { l.hosts.first() }), fontSize = 17.sp, fontWeight = FontWeight.Bold)
+        Hint(tr("链接里没有配对码：输入手机「传音 › 接收」上显示的 6 位配对码。"))
+        CodeField(code) { code = it }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            TextButton(tr("取消"), onClick = { Dlg.linkCode = null }, modifier = Modifier.weight(1f))
+            TextButton(tr("连接"), enabled = code.length == 6 && !DeskLink.txOn, modifier = Modifier.weight(1f), colors = ButtonDefaults.textButtonColorsPrimary(), onClick = {
+                DeskLink.connectLink(l, code); Dlg.linkCode = null
+            })
+        }
+    }
+}
+
+// ---------------------------------------------------------------- 公告 / 同意（Beacon 未启用时全部不显示）
+
+@Composable
+private fun BeaconOverlays() {
+    if (!DeskBeacon.enabled) return
+    val rev = DeskBeacon.configRev
+    LaunchedEffect(rev) {
+        if (rev > 0 && !Dlg.noticesQueued) { Dlg.noticesQueued = true; Dlg.noticeQueue = DeskBeacon.pending().filter { it.force != "block" && (it.style == "dialog" || it.force == "ack") } }
+    }
+    val block = remember(rev) { DeskBeacon.blocking() }
+    when {
+        block != null -> NoticeDialog(block, blocking = true)
+        DeskBeacon.consentNeeded -> ConsentDialog()
+        Dlg.noticeQueue.isNotEmpty() -> NoticeDialog(Dlg.noticeQueue.first(), blocking = false)
+    }
+}
+
+@Composable
+private fun ConsentDialog() {
+    var stats by remember { mutableStateOf(true) }
+    Overlay({}) {
+        Text(tr("帮助改进 MicMask"), fontSize = 17.sp, fontWeight = FontWeight.Bold)
+        Hint(tr("电脑版和手机版用同一个后台：读取公告、赞赏墙。勾选后还会上报匿名使用统计：随机安装 ID、版本、Windows 版本、功能使用次数（开始接收/发送、用的输入类型）和崩溃类名。不含声音、设备名、IP、配对码或任何个人信息。随时可在「设置」里关闭。"))
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { stats = !stats }.padding(vertical = 4.dp)) {
+            top.yukonga.miuix.kmp.basic.Checkbox(state = androidx.compose.ui.state.ToggleableState(stats), onClick = { stats = !stats })
+            Text(tr("同意匿名使用统计"), Modifier.padding(start = 8.dp), fontSize = S14)
+        }
+        TextButton(tr("确定"), modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.textButtonColorsPrimary(), onClick = { DeskBeacon.acceptConsent(stats) })
+    }
+}
+
+@Composable
+private fun NoticeDialog(n: DeskBeacon.Notice, blocking: Boolean) {
+    LaunchedEffect(n.id) { if (!blocking) DeskBeacon.markShown(n) }
+    var left by remember(n.id) { mutableStateOf(if (n.force == "ack") n.ackSeconds.coerceIn(0, 60) else 0) }
+    LaunchedEffect(n.id) { while (left > 0) { delay(1000); left-- } }
+    fun done() { Dlg.noticeQueue = Dlg.noticeQueue.filter { it.id != n.id } }
+    Overlay({ if (!blocking && n.force != "ack") done() }) {
+        Text(n.title, fontSize = 17.sp, fontWeight = FontWeight.Bold, color = if (n.kind == "risk" || blocking) errC() else MiuixTheme.colorScheme.onSurface)
+        SelectionContainer { Text(n.body, fontSize = S13, color = sub()) }
+        n.buttons.filter { it.url != null }.forEach { b -> Link(b.text.ifEmpty { tr("打开") }) { DeskBeacon.clicked(n, b.text); openUrl(b.url!!) } }
+        if (blocking) Hint(tr("维护期间暂停使用，结束后会自动恢复。"), errC())
+        else Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (n.force == "none" && n.frequency != "once") TextButton(tr("不再提示"), modifier = Modifier.weight(1f), onClick = { DeskBeacon.markMuted(n); done() })
+            TextButton(if (n.force == "ack") (if (left > 0) tr("我已阅读（{0}）", left) else tr("我已阅读")) else tr("知道了"), enabled = left == 0, modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.textButtonColorsPrimary(), onClick = { if (n.force == "ack") DeskBeacon.markAcked(n); done() })
+        }
+    }
+}
+
+/** 传音页顶部的横幅公告（style=banner，可关闭，本次启动内不再显示） */
+@Composable
+private fun NoticeBanners() {
+    if (!DeskBeacon.enabled) return
+    val rev = DeskBeacon.configRev
+    var closed by remember { mutableStateOf(setOf<Long>()) }
+    val list = remember(rev) { DeskBeacon.pending().filter { it.style == "banner" && it.force == "none" } }
+    list.filter { it.id !in closed }.take(2).forEach { n ->
+        LaunchedEffect(n.id) { DeskBeacon.markShown(n) }
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(pri().copy(alpha = 0.10f)).padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) { Text(n.title, fontSize = S13, fontWeight = FontWeight.SemiBold); if (n.body.isNotBlank()) Hint(n.body) }
+            n.buttons.firstOrNull { it.url != null }?.let { b -> Link(b.text.ifEmpty { tr("打开") }) { DeskBeacon.clicked(n, b.text); openUrl(b.url!!) } }
+            Link(tr("关闭")) { closed = closed + n.id }
+        }
     }
 }
 
@@ -504,11 +680,14 @@ private fun SettingsPage() {
         }
         Section(tr("传音")) {
             SwitchPreference(checked = DeskLink.autoConnect, onCheckedChange = { DeskLink.setAuto(it) }, title = tr("自动连接"), summary = tr("已保存的手机出现时自动连接发送，断线自动重连"))
+            var nat by remember { mutableStateOf(NativeAudio.enabledSetting) }
+            SwitchPreference(checked = nat, onCheckedChange = { nat = it; NativeAudio.enabledSetting = it }, title = tr("低延迟音频引擎（WASAPI）"),
+                summary = if (NativeAudio.load() == null) tr("不可用：{0}。正在用 DirectSound（兼容模式）", NativeAudio.loadError)
+                    else tr("开：WASAPI 共享模式，延迟更低，并支持按应用抓声音；关：DirectSound（兼容模式）。打不开的设备会自动回退。下次开始收发时生效"))
             if (DeskBeacon.enabled) {
-                var analytics by remember { mutableStateOf(DeskBeacon.analytics) }
-                SwitchPreference(checked = analytics, onCheckedChange = { analytics = it; DeskBeacon.analytics = it }, title = tr("匿名使用统计"),
-                    summary = tr("默认关。开启后只上报随机安装 ID、版本、系统版本和功能使用次数，不含声音和个人信息"))
-            }
+                SwitchPreference(checked = DeskBeacon.analytics, onCheckedChange = { DeskBeacon.enableAnalytics(it) }, title = tr("匿名使用统计"),
+                    summary = tr("只上报随机安装 ID、版本、Windows 版本、功能使用次数和崩溃类名，不含声音、设备名、IP、配对码和个人信息"))
+            } else Column(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp)) { Hint(tr("统计 / 公告 / 赞赏墙：本版本未启用（构建时没有配置后台密钥），不会发出任何统计请求。")) }
         }
         Section(tr("数据与日志")) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -532,8 +711,8 @@ private fun AboutPage() {
     val scope = rememberCoroutineScope()
     var upd by remember { mutableStateOf("") }
     var updUrl by remember { mutableStateOf<String?>(null) }
-    var notices by remember { mutableStateOf<List<DeskBeacon.Notice>?>(null) }
-    var sponsors by remember { mutableStateOf<List<DeskBeacon.Sponsor>?>(null) }
+    var wall by remember { mutableStateOf<DeskBeacon.Wall?>(null) }
+    var wallState by remember { mutableStateOf(0) }   // 0 加载中 1 成功 2 失败
     fun check() {
         upd = tr("正在检查更新…"); updUrl = null
         scope.launch {
@@ -545,10 +724,12 @@ private fun AboutPage() {
     LaunchedEffect(Unit) {
         if (Settings.getBool("upd_auto", true)) check()
         if (DeskBeacon.enabled) {
-            notices = withContext(Dispatchers.IO) { DeskBeacon.notices() }
-            sponsors = withContext(Dispatchers.IO) { DeskBeacon.sponsors() }
+            val r = withContext(Dispatchers.IO) { runCatching { DeskBeacon.sponsors() } }
+            wall = r.getOrNull(); wallState = if (r.isSuccess && wall != null) 1 else 2
         }
     }
+    val rev = DeskBeacon.configRev
+    val notices = remember(rev) { DeskBeacon.notices() }
     Page(tr("关于")) {
         Section(tr("版本")) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -558,37 +739,62 @@ private fun AboutPage() {
                     Text(upd.ifEmpty { tr("检查更新（GitHub Release，电脑版标签 win-v…）") }, Modifier.weight(1f), fontSize = S13, color = sub())
                     Link(if (updUrl != null) tr("下载") else tr("检查")) { updUrl?.let { openUrl(it) } ?: check() }
                 }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Link(tr("电脑版使用手册")) { openUrl(MANUAL_URL) }
+                    Link(tr("问题反馈（GitHub Issues）")) { openUrl("https://github.com/Taocrypt/MicMask/issues") }
+                }
+                Hint(tr("音频引擎：{0}", if (NativeAudio.available) tr("WASAPI（mmaudio v{0}，Windows build {1}）", NativeAudio.version, NativeAudio.winBuild) else tr("DirectSound（{0}）", NativeAudio.loadError.ifEmpty { tr("设置里关掉了 WASAPI") })))
             }
         }
         Section(tr("公告")) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 when {
-                    !DeskBeacon.enabled -> Hint(tr("本版本未启用（电脑版接入后台后开放）。"))
-                    notices == null -> Hint(tr("加载中…"))
-                    notices!!.isEmpty() -> Hint(tr("暂无公告"))
-                    else -> notices!!.forEach { n -> Text(n.title, fontSize = S14, fontWeight = FontWeight.SemiBold); Hint(n.body) }
+                    !DeskBeacon.enabled -> Hint(tr("本版本未启用（构建时没有配置后台密钥）。"))
+                    rev == 0 -> Hint(tr("加载中…"))
+                    DeskBeacon.configFailed -> Hint(tr("公告暂时无法加载，稍后再看"))
+                    notices.isEmpty() -> Hint(tr("暂无公告"))
+                    else -> notices.forEach { n ->
+                        Text(n.title, fontSize = S14, fontWeight = FontWeight.SemiBold, color = if (n.kind == "risk") errC() else MiuixTheme.colorScheme.onSurface)
+                        SelectionContainer { Hint(n.body) }
+                        n.buttons.filter { it.url != null }.forEach { b -> Link(b.text.ifEmpty { tr("打开") }) { DeskBeacon.clicked(n, b.text); openUrl(b.url!!) } }
+                    }
                 }
             }
         }
         Section(tr("赞赏")) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(tr("赞赏墙"), fontSize = S14, fontWeight = FontWeight.SemiBold)
+                val w = wall
                 when {
-                    !DeskBeacon.enabled -> Hint(tr("本版本未启用（电脑版接入后台后开放）。"))
-                    sponsors == null -> Hint(tr("加载中…"))
-                    sponsors!!.isEmpty() -> Hint(tr("暂无"))
-                    else -> Hint(sponsors!!.joinToString("、") { it.name })
+                    !DeskBeacon.enabled -> Hint(tr("本版本未启用（构建时没有配置后台密钥）。"))
+                    wallState == 0 -> Hint(tr("名单加载中…"))
+                    wallState == 2 || w == null -> Hint(tr("名单暂时无法加载，稍后再看"))
+                    else -> {
+                        val cur = w.sponsors.filter { !it.contributor && it.active }
+                        val past = w.sponsors.filter { !it.contributor && !it.active }
+                        val contrib = w.sponsors.filter { it.contributor } + w.contributors
+                        if (cur.isEmpty() && past.isEmpty()) Hint(tr("还没有赞助者，成为第一位吧"))
+                        else {
+                            Hint(tr("{0} 位赞助者，谢谢你们！", w.count.coerceAtLeast(cur.size + past.size)))
+                            if (cur.isNotEmpty()) Text(tr("当前赞助：") + cur.joinToString("、") { it.name + (it.tier?.let { t -> "（$t）" } ?: "") }, fontSize = S13)
+                            if (past.isNotEmpty()) Hint(tr("历史赞助：") + past.take(60).joinToString("、") { it.name } + (if (past.size > 60) tr(" 等 {0} 位", past.size) else ""))
+                        }
+                        if (contrib.isNotEmpty()) Hint(tr("贡献者：") + contrib.take(60).joinToString("、") { it.name })
+                    }
                 }
-                Link(tr("赞赏作者：afdian.com/a/taocrypt")) { openUrl("https://afdian.com/a/taocrypt") }
+                Link(tr("赞赏作者（爱发电）")) { openUrl(DeskBeacon.donateUrl()) }
             }
         }
         Section(tr("第三方组件")) {
             Column(Modifier.padding(16.dp)) {
-                Hint(tr("Compose Multiplatform、miuix（Apache-2.0）、Concentus/Opus（BSD-3-Clause）、JmDNS（Apache-2.0）、JSON-java（Public Domain）、VB-CABLE（VB-Audio Software，捐赠软件，vb-cable.com）。详见安装目录与仓库 NOTICE.md。"))
+                Hint(tr("Compose Multiplatform、miuix（Apache-2.0）、Concentus/Opus（BSD-3-Clause）、JmDNS（Apache-2.0）、JSON-java（Public Domain）、JNA（Apache-2.0）、QR Code generator（Nayuki，MIT）、VB-CABLE（VB-Audio Software，捐赠软件，vb-cable.com）。详见安装目录与仓库 NOTICE.md。"))
             }
         }
     }
 }
+
+/** 电脑版手册（仓库 docs/desktop-manual.md） */
+const val MANUAL_URL = "https://github.com/Taocrypt/MicMask/blob/feat/desktop-windows/docs/desktop-manual.md"
 
 // ================================================================ 日志
 

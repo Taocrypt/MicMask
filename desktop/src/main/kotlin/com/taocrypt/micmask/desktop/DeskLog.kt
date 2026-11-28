@@ -45,6 +45,7 @@ object DeskLog {
         val prev = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { t, e ->
             log('E', "崩溃", "未捕获异常（线程 ${t.name}）：${e.javaClass.name}: ${e.message}\n" + e.stackTraceToString().lines().take(40).joinToString("\n"))
+            runCatching { DeskBeacon.crash(t, e); DeskBeacon.flush() }
             flushNow()
             prev?.uncaughtException(t, e)
         }
