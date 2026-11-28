@@ -49,7 +49,7 @@ jobs:
             VER="${BASE}-dev.${GITHUB_RUN_NUMBER}"
           fi
           if ! [[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then echo "::error::版本号 $VER 不是 MAJOR.MINOR.PATCH 开头"; exit 1; fi
-          TSVER=$(sed -n 's/^\s*tailscale.com v\(.*\)$/\1/p' go.mod | head -n1)
+          TSVER=$(sed -n 's/.*tailscale\.com v\([0-9][0-9.]*\).*/\1/p' go.mod | head -n1)
           echo "version=$VER" >> "$GITHUB_OUTPUT"
           echo "VER=$VER" >> "$GITHUB_ENV"
           echo "TSVER=$TSVER" >> "$GITHUB_ENV"
