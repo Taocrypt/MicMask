@@ -94,6 +94,51 @@ jobs:
           if (-not (Select-String -Path $log -Pattern 'SMOKE OK' -SimpleMatch -Quiet)) { throw '无界面自测没通过' }
           if (-not (Select-String -Path $log -Pattern 'WINDOW OK' -SimpleMatch -Quiet)) { throw '窗口自测没通过' }
 
+      # 内存对比（不影响构建结果）：改解包目录里的 app/MicMask.cfg（jpackage 的 JVM 参数），逐个跑 --smoke --mem-only，
+      # 打印各阶段（启动 / 开窗口 / 收发 10 秒 / 关到托盘 / 再开窗口）的工作集、私有字节、堆、Metaspace。
+      # runner 没有 GPU（D3D 走 WARP 软件实现），渲染后端的数字只能作相对参考。
+      - name: Memory comparison (JVM flags / Skia render API)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $dst = Join-Path $env:RUNNER_TEMP 'mm-msi'
+          $exe = Get-ChildItem $dst -Recurse -Filter MicMask.exe | Select-Object -First 1
+          $cfg = Get-ChildItem $exe.DirectoryName -Recurse -Filter MicMask.cfg | Select-Object -First 1
+          Write-Host "cfg: $($cfg.FullName)"
+          $orig = Get-Content $cfg.FullName -Encoding UTF8
+          $orig | Select-String 'java-options' | ForEach-Object { Write-Host "  $_" }
+          $tuned = '-XX:|^-Xm|^-Xs|^-Dskiko.renderApi|^-Dsun.java2d'
+          $variants = [ordered]@{
+            'A-old(G1,Xmx512m)'      = @{ drop = $true;  add = @('-Xmx512m') }
+            'B-new(default)'         = @{ drop = $false; add = @() }
+            'C-new+SOFTWARE'         = @{ drop = $false; add = @('-Dskiko.renderApi=SOFTWARE') }
+            'D-new+OPENGL'           = @{ drop = $false; add = @('-Dskiko.renderApi=OPENGL') }
+            'E-G1tuned'              = @{ drop = $true;  add = @('-XX:+UseG1GC','-Xms16m','-Xmx256m','-XX:G1PeriodicGCInterval=15000','-XX:MinHeapFreeRatio=10','-XX:MaxHeapFreeRatio=30','-XX:MaxMetaspaceSize=192m','-XX:ReservedCodeCacheSize=64m','-XX:CICompilerCount=2','-XX:-UsePerfData') }
+            'F-new+C1only'           = @{ drop = $false; add = @('-XX:TieredStopAtLevel=1') }
+            'G-new+noJ2D-D3D'        = @{ drop = $false; add = @('-Dsun.java2d.d3d=false') }
+          }
+          $summary = @()
+          foreach ($k in $variants.Keys) {
+            $v = $variants[$k]
+            $lines = New-Object System.Collections.Generic.List[string]
+            foreach ($l in $orig) {
+              if ($l -match '^java-options=(.*)$') { $o = $Matches[1]; if ($v.drop -and $o -match $tuned) { continue } }
+              $lines.Add($l)
+              if ($l -match '^\[JavaOptions\]') { foreach ($a in $v.add) { $lines.Add("java-options=$a") } }
+            }
+            Set-Content $cfg.FullName $lines -Encoding UTF8
+            $log = Join-Path $env:RUNNER_TEMP "mem-$k.txt"
+            $p = Start-Process $exe.FullName -ArgumentList '--smoke', '--mem-only', "--smoke-out=$log" -PassThru
+            $null = $p.Handle
+            if (-not $p.WaitForExit(150000)) { $p.Kill(); Write-Host "$k 超时" }
+            Write-Host "===== $k (exit $($p.ExitCode))"
+            if (Test-Path $log) { Get-Content $log -Encoding UTF8 | Where-Object { $_ -match '^(MEM|PASS|FAIL|WINDOW)' } | ForEach-Object { Write-Host $_; if ($_ -match '^MEM  (\S+)\s+ws=([\d.]+) MB  private=([\d.]+) MB') { $summary += "{0,-22} {1,-30} ws={2,7} MB  private={3,7} MB" -f $k, $Matches[1], $Matches[2], $Matches[3] } } }
+          }
+          Set-Content $cfg.FullName $orig -Encoding UTF8
+          Write-Host '===== 汇总'
+          $summary | ForEach-Object { Write-Host $_ }
+          $summary | Set-Content (Join-Path $env:RUNNER_TEMP 'mem-summary.txt') -Encoding UTF8
+
       - name: Collect
         run: |
           VER="${{ steps.ver.outputs.version }}"
@@ -110,7 +155,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: smoke-test-log
-          path: ${{ runner.temp }}/micmask-smoke.txt
+          path: |
+            ${{ runner.temp }}/micmask-smoke.txt
+            ${{ runner.temp }}/mem-*.txt
           if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4

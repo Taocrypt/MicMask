@@ -74,14 +74,76 @@ object SelfTest {
             "AES-GCM/HMAC/EC/X25519/TLSv1.3 ok, code=${MmCrypto.newPairingCode().length} 位"
         }
         check("json") { org.json.JSONObject("{\"tag_name\":\"win-v1.2.3\",\"assets\":[]}").getString("tag_name") }
-        check("audio-enum") { "out=${AudioIO.outputs().size} in=${AudioIO.inputs().size} cable=${AudioIO.hasCable()}" }
+        check("i18n") {
+            val n = I18n.en.size
+            require(n > 100) { "英文表只有 $n 条" }
+            val old = I18n.lang
+            I18n.set(2); val e = tr("设置"); val e2 = tr("已连接 {0}", "X"); I18n.set(1); val z = tr("设置"); I18n.set(old)
+            require(e == "Settings" && z == "设置" && e2 == "Connected to X") { "翻译不对：$e / $z / $e2" }
+            "en=$n 条"
+        }
+        check("audio-enum") {
+            val ins = AudioIO.inputs(); val outs = AudioIO.outputs()
+            "out=${outs.size} in=${ins.size} cable=${AudioIO.hasCable()} 录音设备：" + ins.joinToString(" | ") { AudioIO.label(it, ins, true) }
+        }
+        check("win-endpoints-parse") {
+            val m = WinEndpoints.parse(REG_SAMPLE)
+            val mic = m["microphone (realtek(r) audio)"]; val bt = m["headset (airpods pro hands-free)"]; val usb = m["microphone (usb audio device)"]
+            require(mic?.kind == AudioIO.Kind.BUILTIN && bt?.kind == AudioIO.Kind.BLUETOOTH && usb?.kind == AudioIO.Kind.USB) { "类型识别不对：$m" }
+            require(usb.isDefault && !mic.isDefault) { "默认设备识别不对：$m" }
+            val real = WinEndpoints.capture()
+            "样例 ok；本机注册表录音端点 ${real.size} 个" + (if (real.isNotEmpty()) "：" + real.values.joinToString { "${it.name}[${it.kind}${if (it.isDefault) ",默认" else ""}]" } else "")
+        }
+        check("capture-backlog") {
+            val fb = 960
+            require(AudioIO.backlogSkip(fb * 5, fb, fb * 6, fb * 2) == 0)
+            val k = AudioIO.backlogSkip(fb * 10, fb, fb * 6, fb * 2)
+            require(k == fb * 8) { "k=$k" }
+            "积压 100 ms → 丢 80 ms 留 20 ms"
+        }
+        check("playout-drift") { playoutDrift() }
+        check("tx-drift") {
+            val d = TxDrift(); val silent = ShortArray(480)
+            var drops = 0
+            for (sec in 0 until 20) {
+                val st = com.taocrypt.micmask.link.MmStats(5, 1f, 0f, if (sec < 5) 40 else 40 + sec * 20, 0)
+                repeat(100) { if (d.drop(silent, st)) drops++ }
+            }
+            require(drops in 20..100) { "drops=$drops" }
+            "手机缓冲持续上涨时 20 秒追 $drops 帧"
+        }
+        check("log-export") {
+            DeskLog.start()
+            DeskLink.addLog("自测：配对码 ${DeskLink.code} 不应出现在日志里")
+            Thread.sleep(800)
+            val f = File(System.getProperty("java.io.tmpdir"), DeskLog.defaultExportName())
+            DeskLog.exportZip(f)
+            val names = ArrayList<String>(); val all = StringBuilder()
+            java.util.zip.ZipInputStream(f.inputStream()).use { z -> while (true) { val e = z.nextEntry ?: break; names += e.name; all.append(z.readBytes().toString(Charsets.UTF_8)) } }
+            require("system-info.txt" in names && names.any { it.startsWith("logs/") }) { "zip 内容 $names" }
+            require(!all.contains(DeskLink.code)) { "导出内容里有配对码" }
+            require(all.contains("不应出现在日志里")) { "日志没写进文件" }
+            "zip ${f.length() / 1024} KB：$names；配对码已脱敏；日志目录 ${DeskLog.dir}"
+        }
+        check("local-addrs") { Discovery.addrs().joinToString { "${it.ip.hostAddress}(${it.ifName}${if (it.vpn) ",虚拟" else ""})" }.ifEmpty { "无" } }
+        check("codec-follow") { codecFollow() }
+        check("opus-bench") {
+            val enc = com.taocrypt.micmask.link.MmOpusEncoder(); val dec = com.taocrypt.micmask.link.MmOpusDecoder()
+            val f = ShortArray(MmLink.FRAME) { (6000 * Math.sin(it / 7.0)).toInt().toShort() }
+            repeat(300) { dec.decode(enc.encode(f)) }
+            val t = System.nanoTime(); repeat(500) { dec.decode(enc.encode(f)) }
+            val us = (System.nanoTime() - t) / 500 / 1000
+            "编码+解码 ${us} µs/帧（10 ms 帧，占单核 ${"%.1f".format(us / 100.0)}%）"
+        }
         check("vbcable-bundled") { "bundled=${VbCable.bundled()} installed=${VbCable.installed()}" }
         check("link-loopback-opus") { loopback() }
         check("mdns") {
             Discovery.start { }
+            Discovery.register("selftest-pc", 47399, "00112233") { }
             Thread.sleep(300)
-            Discovery.stop()
-            "ips=${Discovery.localIps().size}"
+            val t = System.currentTimeMillis()
+            Discovery.stop(1500)
+            "ips=${Discovery.localIps().size} 关闭耗时 ${System.currentTimeMillis() - t} ms"
         }
         check("compose-miuix-render") { render() }
         check("https") {
@@ -122,8 +184,8 @@ object SelfTest {
 
     /** 离屏把整页界面（miuix 主题 + 所有卡片）渲染几帧：ProGuard 删掉/改坏 Compose 或 miuix 的类会在这里炸 */
     private fun render(): String {
-        val scene = ImageComposeScene(560, 860, Density(1.5f)) {
-            MiuixTheme(controller = remember { ThemeController(ColorSchemeMode.Light) }) { App() }
+        val scene = ImageComposeScene(1100, 720, Density(1f)) {
+            MiuixTheme(controller = remember { ThemeController(ColorSchemeMode.Light) }) { Root() }
         }
         try {
             var img = scene.render(0)
@@ -134,6 +196,160 @@ object SelfTest {
             require(nonWhite > 0) { "渲染结果全白" }
             pngOut?.let { p -> img.encodeToData(org.jetbrains.skia.EncodedImageFormat.PNG)?.bytes?.let { File(p).writeBytes(it) } }
             return "${img.width}x${img.height} 非白采样点=$nonWhite"
-        } finally { scene.close(); DeskLink.shutdown() }
+        } finally { scene.close(); DeskLink.stopPreview() }
+    }
+
+    /** 自适应抖动缓冲：手机时钟快 1%（每 100 次读写 101 帧）+ 随机突发，模拟 120 秒：水位要稳定、裁剪要发生、断流少 */
+    private fun playoutDrift(): String {
+        val pb = DeskPlayout(); pb.jitterMs = 10f
+        val f = ShortArray(480) { 1000 }; val o = ShortArray(480)
+        val rnd = java.util.Random(1)
+        var pending = 0; var maxMs = 0
+        for (i in 0 until 12_000) {
+            pending += if (i % 100 == 0) 2 else 1
+            // 网络突发：偶尔攒 3 帧一起到
+            if (rnd.nextInt(20) != 0 || pending > 3) { repeat(pending) { pb.write(f) }; pending = 0 }
+            pb.read(o, 480)
+            if (i > 1000) maxMs = maxOf(maxMs, pb.sizeMs())
+        }
+        require(maxMs < 120) { "水位涨到 $maxMs ms" }
+        require(pb.trimmedMs in 600..2400) { "裁剪 ${pb.trimmedMs} ms（期望约 1200）" }
+        require(pb.underruns <= 3) { "断流 ${pb.underruns}" }
+        return "最高水位 $maxMs ms · 目标 ${pb.targetMs()} ms · 裁剪 ${pb.trimmedMs} ms · 断流 ${pb.underruns}"
+    }
+
+    /** 编码跟随接收方：接收端偏好 PCM 时，电脑「跟随手机」发 PCM；偏好 Opus 时发 Opus（验证反射改 txCodec 在 ProGuard 后仍可用） */
+    private fun codecFollow(): String {
+        val r = StringBuilder()
+        val oldKey = DeskLink.inputKey; val oldCodec = DeskLink.codecMode
+        for (pref in listOf(MmLink.CODEC_PCM16, MmLink.CODEC_OPUS)) {
+            val got = java.util.concurrent.atomic.AtomicInteger(-1)
+            val srv = MmLinkServer(0, MmLinkConfig(MmCrypto.random(16), "selftest-phone", "android", MmLink.CAP_RECV, pref), { "112233" },
+                { object : MmSessionListener { override fun onPcm(s: MmSession, pcm: ShortArray) { got.set(s.rxCodec) } } }, {})
+            srv.start()
+            try {
+                DeskLink.setCodec(0)
+                DeskLink.setInput("test:sine")
+                DeskLink.startSend("127.0.0.1", srv.boundPort, "自测", "112233")
+                val end = System.currentTimeMillis() + 4000
+                while (got.get() < 0 && System.currentTimeMillis() < end) Thread.sleep(50)
+                require(got.get() == pref) { "接收方偏好 $pref，实际收到编码 ${got.get()}；${DeskLink.txError}" }
+                r.append(if (pref == MmLink.CODEC_OPUS) "Opus→Opus " else "PCM→PCM ")
+            } finally {
+                DeskLink.stopSend(); srv.stop()
+                SavedDevices.list.filter { it.name == "selftest-phone" }.forEach { SavedDevices.remove(it.id) }
+                DeskLink.setInput(oldKey); DeskLink.setCodec(oldCodec)
+            }
+        }
+        return r.toString().trim()
+    }
+
+    /** reg query 输出样例（三个录音端点：内置麦、蓝牙耳机、USB 麦克风=默认） */
+    private val REG_SAMPLE = """
+HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture\{0.0.1.00000000}.{aaaa}
+    DeviceState    REG_DWORD    0x1
+    Role:0    REG_BINARY    E8070B00040014000A0000000000E803
+
+HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture\{0.0.1.00000000}.{aaaa}\Properties
+    {a45c254e-df1c-4efd-8020-67d146a850e0},2    REG_SZ    Microphone
+    {b3f8fa53-0004-438e-9003-51a46e139bfc},6    REG_SZ    Realtek(R) Audio
+    {1da5d803-d492-4edd-8c23-e0c0ffee7f0e},0    REG_DWORD    0x4
+    {b3f8fa53-0004-438e-9003-51a46e139bfc},2    REG_SZ    {1}.HDAUDIO\FUNC_01&VEN_10EC
+
+HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture\{0.0.1.00000000}.{bbbb}
+    DeviceState    REG_DWORD    0x1
+
+HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture\{0.0.1.00000000}.{bbbb}\Properties
+    {a45c254e-df1c-4efd-8020-67d146a850e0},2    REG_SZ    Headset
+    {b3f8fa53-0004-438e-9003-51a46e139bfc},6    REG_SZ    AirPods Pro Hands-Free
+    {1da5d803-d492-4edd-8c23-e0c0ffee7f0e},0    REG_DWORD    0x5
+    {b3f8fa53-0004-438e-9003-51a46e139bfc},2    REG_SZ    {2}.\\?\BTHHFENUM#{0000111e}
+
+HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture\{0.0.1.00000000}.{cccc}
+    DeviceState    REG_DWORD    0x1
+    Role:0    REG_BINARY    EA070B00060018000C0000000000E803
+
+HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture\{0.0.1.00000000}.{cccc}\Properties
+    {a45c254e-df1c-4efd-8020-67d146a850e0},2    REG_SZ    Microphone
+    {b3f8fa53-0004-438e-9003-51a46e139bfc},6    REG_SZ    USB Audio Device
+    {1da5d803-d492-4edd-8c23-e0c0ffee7f0e},0    REG_DWORD    0x4
+    {b3f8fa53-0004-438e-9003-51a46e139bfc},2    REG_SZ    {1}.USB\VID_0D8C&PID_0014
+
+HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture\{0.0.1.00000000}.{dddd}
+    DeviceState    REG_DWORD    0x4
+""".trimIndent()
+}
+
+/** 内存测量：工作集 / 私有字节（Windows 用 PowerShell Get-Process，Linux 读 /proc），以及 JVM 堆 / 非堆 / Metaspace / 线程数 */
+object MemProbe {
+    private val isWin = System.getProperty("os.name").lowercase().contains("win")
+
+    fun header(): String {
+        val rt = java.lang.management.ManagementFactory.getRuntimeMXBean()
+        val flags = rt.inputArguments.filter { it.startsWith("-X") || it.startsWith("-Dskiko") || it.startsWith("-Dsun.java2d") }
+        val gcs = java.lang.management.ManagementFactory.getGarbageCollectorMXBeans().joinToString(",") { it.name }
+        return "MEM  flags=[${flags.joinToString(" ")}] gc=[$gcs] skiko.renderApi=${System.getProperty("skiko.renderApi") ?: "默认"} maxHeap=${Runtime.getRuntime().maxMemory() / 1048576} MB"
+    }
+
+    private fun os(): Pair<Double, Double> = runCatching {
+        val pid = ProcessHandle.current().pid()
+        if (isWin) {
+            val p = ProcessBuilder("powershell", "-NoProfile", "-NonInteractive", "-Command", "\$p=Get-Process -Id $pid; '{0} {1}' -f \$p.WorkingSet64,\$p.PrivateMemorySize64").redirectErrorStream(true).start()
+            val t = p.inputStream.bufferedReader().readText().trim().lines().last().split(' ')
+            p.waitFor(20, java.util.concurrent.TimeUnit.SECONDS)
+            t[0].toDouble() / 1048576 to t[1].toDouble() / 1048576
+        } else {
+            val m = java.io.File("/proc/self/status").readLines().associate { it.substringBefore(':') to it.substringAfter(':').trim() }
+            fun kb(k: String) = (m[k]?.substringBefore(' ')?.toDoubleOrNull() ?: -1024.0) / 1024
+            kb("VmRSS") to kb("RssAnon")
+        }
+    }.getOrDefault(-1.0 to -1.0)
+
+    fun line(stage: String): String {
+        val mx = java.lang.management.ManagementFactory.getMemoryMXBean()
+        val h = mx.heapMemoryUsage; val nh = mx.nonHeapMemoryUsage
+        val meta = java.lang.management.ManagementFactory.getMemoryPoolMXBeans().firstOrNull { it.name == "Metaspace" }?.usage?.used ?: -1
+        val th = Thread.activeCount()
+        val (ws, priv) = os()
+        fun mb(b: Long) = "%.1f".format(b / 1048576.0)
+        return "MEM  %-28s ws=%.1f MB  private=%.1f MB  heap=%s/%s MB  nonheap=%s MB  metaspace=%s MB  threads=%d  render=%s".format(
+            stage, ws, priv, mb(h.used), mb(h.committed), mb(nh.committed), mb(meta), th, Ui.renderApi)
+    }
+}
+
+/** 自测里的「收发 10 秒」：模拟手机 → 电脑接收（Opus），同时电脑（合成正弦音源）→ 模拟手机接收；都走本机回环 */
+object SmokeTraffic {
+    fun run(ms: Long): String {
+        val oldKey = DeskLink.inputKey
+        DeskLink.startReceive()
+        val got = java.util.concurrent.atomic.AtomicInteger()
+        val phoneRx = MmLinkServer(47311, MmLinkConfig(MmCrypto.random(16), "selftest-phone-rx", "android", MmLink.CAP_RECV), { "135790" },
+            { object : MmSessionListener { override fun onPcm(s: MmSession, pcm: ShortArray) { got.incrementAndGet() } } }, {})
+        phoneRx.start()
+        var phone: MmSession? = null
+        val run = java.util.concurrent.atomic.AtomicBoolean(true)
+        try {
+            Thread.sleep(300)
+            phone = MmLinkClient.connect("127.0.0.1", MmLink.DEFAULT_PORT, MmLinkConfig(MmCrypto.random(16), "selftest-phone-tx", "android", MmLink.CAP_SEND), DeskLink.code, false, object : MmSessionListener {})
+            val ph = phone
+            Thread({
+                val f = ShortArray(MmLink.FRAME); var p = 0.0; var next = System.nanoTime()
+                while (run.get()) {
+                    for (i in f.indices) { f[i] = (5000 * Math.sin(p)).toInt().toShort(); p += 2 * Math.PI * 300 / MmLink.SR }
+                    ph.sendPcm(f); next += 10_000_000L
+                    val w = next - System.nanoTime(); if (w > 0) Thread.sleep(w / 1_000_000, (w % 1_000_000).toInt())
+                }
+            }, "smoke-phone").apply { isDaemon = true; start() }
+            DeskLink.setInput("test:sine")
+            DeskLink.startSend("127.0.0.1", 47311, "selftest", "135790")
+            Thread.sleep(ms)
+            val rx = DeskLink.rxStats
+            return "电脑接收：$rx ｜ 电脑发送：${DeskLink.txStats} ｜ 模拟手机收到 ${got.get()} 帧"
+        } finally {
+            run.set(false)
+            DeskLink.stopSend(); phone?.close(); phoneRx.stop(); DeskLink.stopReceive()
+            DeskLink.setInput(oldKey)
+            SavedDevices.list.filter { it.name.startsWith("selftest-") }.forEach { SavedDevices.remove(it.id) }
+        }
     }
 }

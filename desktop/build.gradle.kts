@@ -78,7 +78,17 @@ compose.desktop {
     application {
         mainClass = "com.taocrypt.micmask.desktop.MainKt"
         javaHome = javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(21)) }.get().metadata.installationPath.asFile.absolutePath
-        jvmArgs += listOf("-Dfile.encoding=UTF-8", "-Dsun.stdout.encoding=UTF-8", "-Xmx512m")
+        // 内存参数（取舍见 CHANGELOG / 交接报告；CI 的「内存对比」步骤会改 MicMask.cfg 逐项对比）：
+        //   SerialGC：单线程收集器，元数据和 GC 线程开销最小；堆只有几十 MB，年轻代停顿 1–3 ms，远小于 50 ms 的声卡缓冲
+        //   -Xms16m + Min/MaxHeapFreeRatio：堆从小起步，空闲多时 GC 后把已提交的堆还给系统（关到托盘后 System.gc() 一次就回缩）
+        //   -Xmx256m：上限（实测峰值远低于此）；MaxMetaspaceSize 192m 防类元数据失控，ReservedCodeCacheSize 64m / CICompilerCount 2 少占编译器内存
+        //   不用 TieredStopAtLevel=1：只用 C1 时纯 Java 的 Opus（Concentus）慢一截（自测 opus-bench 对比），音频优先
+        //   -XX:-UsePerfData：不建 hsperfdata 共享内存文件
+        jvmArgs += listOf(
+            "-Dfile.encoding=UTF-8", "-Dsun.stdout.encoding=UTF-8",
+            "-XX:+UseSerialGC", "-Xms16m", "-Xmx256m", "-XX:MinHeapFreeRatio=10", "-XX:MaxHeapFreeRatio=30",
+            "-XX:MaxMetaspaceSize=192m", "-XX:ReservedCodeCacheSize=64m", "-XX:CICompilerCount=2", "-XX:-UsePerfData",
+        )
         // release 构建（packageReleaseMsi/Exe）开 ProGuard：只摇树、不混淆（日志/崩溃栈可读，反射安全），规则见 proguard-rules.pro
         buildTypes.release.proguard {
             isEnabled.set(true)

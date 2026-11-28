@@ -16,5 +16,7 @@ object Settings {
     fun getInt(k: String, def: Int) = get(k, def.toString()).toIntOrNull() ?: def
     fun setInt(k: String, v: Int) = set(k, v.toString())
 
+    @Synchronized fun snapshot(): Map<String, String> = p.stringPropertyNames().associateWith { p.getProperty(it) }
+
     @Synchronized private fun save() { runCatching { file.outputStream().use { p.store(it, "MicMask desktop") } } }
 }
